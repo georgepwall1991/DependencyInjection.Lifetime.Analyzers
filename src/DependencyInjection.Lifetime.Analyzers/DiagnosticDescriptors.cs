@@ -1,0 +1,119 @@
+using Microsoft.CodeAnalysis;
+
+namespace DependencyInjection.Lifetime.Analyzers;
+
+/// <summary>
+/// Diagnostic descriptors for all DI lifetime analyzers.
+/// </summary>
+public static class DiagnosticDescriptors
+{
+    private const string Category = "DependencyInjection";
+
+    /// <summary>
+    /// DI005: CreateAsyncScope should be used in async methods instead of CreateScope.
+    /// </summary>
+    public static readonly DiagnosticDescriptor AsyncScopeRequired = new(
+        id: DiagnosticIds.AsyncScopeRequired,
+        title: "Use CreateAsyncScope in async methods",
+        messageFormat: "Use 'CreateAsyncScope' instead of 'CreateScope' in async method '{0}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "In async methods, CreateAsyncScope should be used instead of CreateScope to ensure proper async disposal of the scope.");
+
+    /// <summary>
+    /// DI006: IServiceProvider or IServiceScopeFactory stored in static field or property.
+    /// </summary>
+    public static readonly DiagnosticDescriptor StaticProviderCache = new(
+        id: DiagnosticIds.StaticProviderCache,
+        title: "Avoid caching IServiceProvider in static members",
+        messageFormat: "'{0}' should not be stored in static member '{1}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Storing IServiceProvider or IServiceScopeFactory in static fields can lead to issues with scope management and service resolution. Consider injecting the service provider per-use instead.");
+
+    /// <summary>
+    /// DI003: Singleton service captures scoped or transient dependency (captive dependency).
+    /// </summary>
+    public static readonly DiagnosticDescriptor CaptiveDependency = new(
+        id: DiagnosticIds.CaptiveDependency,
+        title: "Captive dependency detected",
+        messageFormat: "Singleton '{0}' captures {1} dependency '{2}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A singleton service should not depend on scoped or transient services. The captured service will live for the entire application lifetime, which can cause incorrect behavior, memory leaks, or concurrency issues.");
+
+    /// <summary>
+    /// DI001: IServiceScope must be disposed.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ScopeMustBeDisposed = new(
+        id: DiagnosticIds.ScopeMustBeDisposed,
+        title: "Service scope must be disposed",
+        messageFormat: "IServiceScope created by '{0}' is not disposed",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "IServiceScope implements IDisposable and must be disposed to release resources. Use a 'using' statement or call Dispose() explicitly.");
+
+    /// <summary>
+    /// DI002: Scoped service escapes its scope lifetime.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ScopedServiceEscapes = new(
+        id: DiagnosticIds.ScopedServiceEscapes,
+        title: "Scoped service escapes scope",
+        messageFormat: "Service resolved from scope escapes via '{0}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Services resolved from a scope should not escape the scope's lifetime. Returning or storing scoped services in longer-lived locations can cause issues when the scope is disposed.");
+
+    /// <summary>
+    /// DI004: Service used after its scope was disposed.
+    /// </summary>
+    public static readonly DiagnosticDescriptor UseAfterScopeDisposed = new(
+        id: DiagnosticIds.UseAfterScopeDisposed,
+        title: "Service used after scope disposed",
+        messageFormat: "Service '{0}' may be used after its scope is disposed",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Using a service after its scope has been disposed can cause ObjectDisposedException or other errors. Ensure all service usage occurs within the scope's lifetime.");
+
+    /// <summary>
+    /// DI007: Service locator anti-pattern detected.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ServiceLocatorAntiPattern = new(
+        id: DiagnosticIds.ServiceLocatorAntiPattern,
+        title: "Avoid service locator anti-pattern",
+        messageFormat: "Consider injecting '{0}' directly instead of resolving via IServiceProvider",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Resolving services via IServiceProvider hides dependencies and makes code harder to test. Prefer constructor injection. Service locator is acceptable in factories, middleware Invoke methods, and when using IServiceScopeFactory correctly.");
+
+    /// <summary>
+    /// DI008: Transient service implements IDisposable.
+    /// </summary>
+    public static readonly DiagnosticDescriptor DisposableTransient = new(
+        id: DiagnosticIds.DisposableTransient,
+        title: "Transient service implements IDisposable",
+        messageFormat: "Transient service '{0}' implements {1} but the container will not track or dispose it",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Transient services implementing IDisposable or IAsyncDisposable are not tracked by the DI container and will not be disposed. Consider using Scoped or Singleton lifetime, or use a factory registration where the caller is responsible for disposal.");
+
+    /// <summary>
+    /// DI009: Open generic singleton captures scoped or transient dependency.
+    /// </summary>
+    public static readonly DiagnosticDescriptor OpenGenericLifetimeMismatch = new(
+        id: DiagnosticIds.OpenGenericLifetimeMismatch,
+        title: "Open generic captive dependency",
+        messageFormat: "Open generic singleton '{0}' captures {1} dependency '{2}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "An open generic singleton service should not depend on scoped or transient services. The captured service will live for the entire application lifetime.");
+}
