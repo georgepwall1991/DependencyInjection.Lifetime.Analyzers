@@ -280,4 +280,208 @@ public class DI004_UseAfterDisposeAnalyzerTests
     }
 
     #endregion
+
+    #region Edge Case Tests
+
+    [Fact]
+    public async Task CreateAsyncScope_ServiceUsedAfterDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                Task DoWorkAsync();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task ProcessWorkAsync()
+                {
+                    IMyService service;
+                    await using (var scope = _scopeFactory.CreateAsyncScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                    // Using service after async scope disposed!
+                    await service.DoWorkAsync();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithSpan(26, 15, 26, 36)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task PropertyAccess_AfterScopeDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                string Name { get; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public string GetServiceName()
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                    // Accessing property after scope disposed!
+                    return service.Name;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithSpan(26, 16, 26, 28)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task UsingStatementEmptyBody_NoDiagnostic()
+    {
+        // Using statement with empty body should not cause issues
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        // Empty body - do nothing
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetServices_UsedAfterDispose_NotCurrentlyDetected()
+    {
+        // KNOWN LIMITATION: GetServices returns IEnumerable<T> which is iterated via foreach.
+        // The analyzer doesn't track iteration over collections, only direct method/property access.
+        var source = Usings + """
+            using System.Collections.Generic;
+            using System.Linq;
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IEnumerable<IMyService> services;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        services = scope.ServiceProvider.GetServices<IMyService>();
+                    }
+                    // Using services after scope disposed - not currently detected
+                    foreach (var s in services)
+                    {
+                        s.DoWork();
+                    }
+                }
+            }
+            """;
+
+        // Document current behavior - iteration not tracked
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MultipleServicesFromSameScope_AllUsedAfterDisposed_ReportsMultipleDiagnostics()
+    {
+        var source = Usings + """
+            public interface IService1
+            {
+                void DoWork();
+            }
+
+            public interface IService2
+            {
+                void DoOtherWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IService1 svc1;
+                    IService2 svc2;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        svc1 = scope.ServiceProvider.GetRequiredService<IService1>();
+                        svc2 = scope.ServiceProvider.GetRequiredService<IService2>();
+                    }
+                    // Both used after scope disposed!
+                    svc1.DoWork();
+                    svc2.DoOtherWork();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithSpan(33, 9, 33, 22)
+                .WithArguments("svc1"),
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithSpan(34, 9, 34, 27)
+                .WithArguments("svc2"));
+    }
+
+    #endregion
 }
