@@ -160,23 +160,31 @@ public sealed class RegistrationCollector
 
     private static ServiceLifetime? GetLifetimeFromMethodName(string methodName)
     {
-        // Handle common registration patterns (both Add* and TryAdd*)
-        if (methodName.StartsWith("AddSingleton") || methodName.StartsWith("TryAddSingleton"))
+        // Handle common registration patterns (both Add*, TryAdd*, and keyed variants)
+        if (methodName.StartsWith("AddSingleton") || methodName.StartsWith("TryAddSingleton") ||
+            methodName.StartsWith("AddKeyedSingleton") || methodName.StartsWith("TryAddKeyedSingleton"))
         {
             return ServiceLifetime.Singleton;
         }
 
-        if (methodName.StartsWith("AddScoped") || methodName.StartsWith("TryAddScoped"))
+        if (methodName.StartsWith("AddScoped") || methodName.StartsWith("TryAddScoped") ||
+            methodName.StartsWith("AddKeyedScoped") || methodName.StartsWith("TryAddKeyedScoped"))
         {
             return ServiceLifetime.Scoped;
         }
 
-        if (methodName.StartsWith("AddTransient") || methodName.StartsWith("TryAddTransient"))
+        if (methodName.StartsWith("AddTransient") || methodName.StartsWith("TryAddTransient") ||
+            methodName.StartsWith("AddKeyedTransient") || methodName.StartsWith("TryAddKeyedTransient"))
         {
             return ServiceLifetime.Transient;
         }
 
         return null;
+    }
+
+    private static bool IsKeyedMethod(string methodName)
+    {
+        return methodName.Contains("Keyed");
     }
 
     private static bool IsTryAddMethod(string methodName)

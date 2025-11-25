@@ -144,4 +144,30 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "Registering the same service type multiple times with Add* methods means only the last registration will be used. This may be intentional (for overriding) or a mistake.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI010: Constructor has too many dependencies (over-injection).
+    /// </summary>
+    public static readonly DiagnosticDescriptor ConstructorOverInjection = new(
+        id: DiagnosticIds.ConstructorOverInjection,
+        title: "Constructor has too many dependencies",
+        messageFormat: "Constructor of '{0}' has {1} dependencies - consider refactoring to reduce complexity",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "Having more than 4 constructor dependencies may indicate the class has too many responsibilities. Consider extracting functionality into separate services or using aggregate/facade patterns to reduce the number of direct dependencies.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI011: IServiceProvider or IServiceScopeFactory injected directly.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ServiceProviderInjection = new(
+        id: DiagnosticIds.ServiceProviderInjection,
+        title: "Avoid injecting IServiceProvider or IServiceScopeFactory",
+        messageFormat: "'{0}' injects {1} directly - prefer injecting specific dependencies",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Injecting IServiceProvider or IServiceScopeFactory hides dependencies and makes testing harder. Prefer injecting specific services directly. This pattern is acceptable in factories and middleware.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

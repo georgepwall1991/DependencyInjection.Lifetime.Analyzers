@@ -51,6 +51,16 @@ public static class DiagnosticIds
     public const string OpenGenericLifetimeMismatch = "DI009";
 
     /// <summary>
+    /// DI010: Constructor has too many dependencies (over-injection).
+    /// </summary>
+    public const string ConstructorOverInjection = "DI010";
+
+    /// <summary>
+    /// DI011: IServiceProvider or IServiceScopeFactory injected directly.
+    /// </summary>
+    public const string ServiceProviderInjection = "DI011";
+
+    /// <summary>
     /// DI012: TryAdd registration will be ignored because service already registered.
     /// </summary>
     public const string TryAddIgnored = "DI012";

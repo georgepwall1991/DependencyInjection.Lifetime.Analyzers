@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-11-25
+
+### Added
+
+- **DI010**: New analyzer detecting constructor over-injection (5+ dependencies suggests class may violate SRP)
+- **DI011**: New analyzer detecting `IServiceProvider`, `IServiceScopeFactory`, or `IKeyedServiceProvider` injection
+  - Excludes factory classes (name ends with "Factory") and middleware classes (has Invoke/InvokeAsync method)
+- **.NET 8 Keyed Services Support**: All analyzers now support keyed service patterns
+  - `AddKeyedSingleton`, `AddKeyedScoped`, `AddKeyedTransient` registrations
+  - `GetKeyedService`, `GetRequiredKeyedService`, `GetKeyedServices` service resolution
+  - `IKeyedServiceProvider` detection in DI006, DI007, DI011
+
+### Changed
+
+- Enhanced `WellKnownTypes` with `IKeyedServiceProvider` support
+- Updated `RegistrationCollector` to track keyed service registrations
+- Updated `DI006_StaticProviderCacheAnalyzer` to detect `IKeyedServiceProvider` in static fields
+- Updated `DI007_ServiceLocatorAntiPatternAnalyzer` to detect keyed service resolution methods
+- Updated `DI008_DisposableTransientAnalyzer` to detect `AddKeyedTransient` registrations
+
+---
+
 ## [1.1.0] - 2025-11-25
 
 ### Added

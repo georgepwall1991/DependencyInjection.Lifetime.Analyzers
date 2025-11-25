@@ -95,8 +95,9 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        // Check if the method name starts with AddTransient
-        if (!originalMethod.Name.StartsWith("AddTransient"))
+        // Check if the method name is AddTransient or AddKeyedTransient (for .NET 8+ keyed services)
+        var methodName = originalMethod.Name;
+        if (!methodName.StartsWith("AddTransient") && !methodName.StartsWith("AddKeyedTransient"))
         {
             return false;
         }
