@@ -6,7 +6,8 @@
 
 **Your Guardian Against DI Scope Leaks and Lifetime Bugs**
 
-Stop memory leaks and `ObjectDisposedException` from reaching production. Compile-time analysis with zero runtime overhead.
+Stop memory leaks and `ObjectDisposedException` from reaching production. Compile-time analysis with zero runtime
+overhead.
 
 [![NuGet](https://img.shields.io/nuget/v/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
@@ -16,7 +17,7 @@ Stop memory leaks and `ObjectDisposedException` from reaching production. Compil
 
 ## Why Use This?
 
-- **Catch bugs at compile time** - No more discovering captive dependencies in production
+- **Catch bugs at compile time** – No more discovering captive dependencies in production
 - **Zero runtime cost** - All analysis happens during compilation
 - **Actionable fixes** - Most issues come with automated code fixes
 - **Works everywhere** - Visual Studio, Rider, VS Code, and CI builds
@@ -31,28 +32,33 @@ The analyzers will automatically run during compilation and in your IDE.
 
 ## The Rules
 
-| ID | Title | Severity | Code Fix |
-|----|-------|----------|----------|
-| [DI001](#di001-service-scope-not-disposed) | Service scope not disposed | Warning | Yes |
-| [DI002](#di002-scoped-service-escapes-scope) | Scoped service escapes scope | Warning | Yes |
-| [DI003](#di003-captive-dependency) | Captive dependency | Warning | Yes |
-| [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | No |
-| [DI005](#di005-use-createasyncscope-in-async-methods) | Use CreateAsyncScope in async methods | Warning | Yes |
-| [DI006](#di006-static-serviceprovider-cache) | Static ServiceProvider cache | Warning | Yes |
-| [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Warning | No |
-| [DI008](#di008-disposable-transient-service) | Disposable transient service | Warning | Yes |
-| [DI009](#di009-open-generic-captive-dependency) | Open generic captive dependency | Warning | Yes |
-| [DI012](#di012-conditional-registration-misuse) | Conditional registration misuse | Info | No |
+| ID                                                    | Title                                 | Severity | Code Fix |
+|-------------------------------------------------------|---------------------------------------|----------|----------|
+| [DI001](#di001-service-scope-not-disposed)            | Service scope not disposed            | Warning  | Yes      |
+| [DI002](#di002-scoped-service-escapes-scope)          | Scoped service escapes scope          | Warning  | Yes      |
+| [DI003](#di003-captive-dependency)                    | Captive dependency                    | Warning  | Yes      |
+| [DI004](#di004-service-used-after-scope-disposed)     | Service used after scope disposed     | Warning  | No       |
+| [DI005](#di005-use-createasyncscope-in-async-methods) | Use CreateAsyncScope in async methods | Warning  | Yes      |
+| [DI006](#di006-static-serviceprovider-cache)          | Static ServiceProvider cache          | Warning  | Yes      |
+| [DI007](#di007-service-locator-anti-pattern)          | Service locator anti-pattern          | Warning  | No       |
+| [DI008](#di008-disposable-transient-service)          | Disposable transient service          | Warning  | Yes      |
+| [DI009](#di009-open-generic-captive-dependency)       | Open generic captive dependency       | Warning  | Yes      |
+| [DI010](#di010-constructor-over-injection)            | Constructor over-injection            | Info     | No       |
+| [DI011](#di011-serviceprovider-injection)             | ServiceProvider injection             | Warning  | No       |
+| [DI012](#di012-conditional-registration-misuse)       | Conditional registration misuse       | Info     | No       |
 
 ---
 
 ## DI001: Service Scope Not Disposed
 
-`IServiceScope` implements `IDisposable` and must be disposed to release resources. Forgetting to dispose a scope causes memory leaks.
+`IServiceScope` implements `IDisposable` and must be disposed to release resources. Forgetting to dispose a scope causes
+memory leaks.
 
-> **Explain Like I'm Ten:** It's like borrowing a library book and never returning it. Eventually, the library runs out of books and no one can borrow anything.
+> **Explain Like I'm Ten:** It's like borrowing a library book and never returning it. Eventually, the library runs out
+> of books and no one can borrow anything.
 
 **The Problem:**
+
 ```csharp
 public void DoWork()
 {
@@ -63,6 +69,7 @@ public void DoWork()
 ```
 
 **The Solution:**
+
 ```csharp
 public void DoWork()
 {
@@ -78,11 +85,14 @@ public void DoWork()
 
 ## DI002: Scoped Service Escapes Scope
 
-Services resolved from a scope should not outlive that scope. Returning or storing a scoped service causes it to be used after disposal.
+Services resolved from a scope should not outlive that scope. Returning or storing a scoped service causes it to be used
+after disposal.
 
-> **Explain Like I'm Ten:** It's like taking a rental car outside the coverage area. The roadside assistance won't work where you're going, and you'll be stranded.
+> **Explain Like I'm Ten:** It's like taking a rental car outside the coverage area. The roadside assistance won't work
+> where you're going, and you'll be stranded.
 
 **The Problem:**
+
 ```csharp
 public IMyService GetService()
 {
@@ -92,6 +102,7 @@ public IMyService GetService()
 ```
 
 **The Solution:**
+
 ```csharp
 // Option 1: Keep scope and service together
 public (IServiceScope Scope, IMyService Service) GetService()
@@ -115,11 +126,14 @@ public void UseService()
 
 ## DI003: Captive Dependency
 
-A singleton service capturing a scoped or transient dependency keeps that dependency alive forever, defeating its intended lifecycle.
+A singleton service capturing a scoped or transient dependency keeps that dependency alive forever, defeating its
+intended lifecycle.
 
-> **Explain Like I'm Ten:** It's like a hoarder keeping recyclables in their house forever. Those cans should be refreshed each week, but now they're stuck there for life.
+> **Explain Like I'm Ten:** It's like a hoarder keeping recyclables in their house forever. Those cans should be
+> refreshed each week, but now they're stuck there for life.
 
 **The Problem:**
+
 ```csharp
 services.AddScoped<IScopedService, ScopedService>();
 services.AddSingleton<ISingletonService, SingletonService>();
@@ -136,6 +150,7 @@ public class SingletonService : ISingletonService
 ```
 
 **The Solution:**
+
 ```csharp
 // Option 1: Change the singleton to scoped
 services.AddScoped<ISingletonService, SingletonService>();
@@ -167,9 +182,11 @@ public class SingletonService : ISingletonService
 
 Using a service after its scope has been disposed causes `ObjectDisposedException` at runtime.
 
-> **Explain Like I'm Ten:** It's like trying to use your hotel room key after you've checked out. The key worked before, but now the room belongs to someone else.
+> **Explain Like I'm Ten:** It's like trying to use your hotel room key after you've checked out. The key worked before,
+> but now the room belongs to someone else.
 
 **The Problem:**
+
 ```csharp
 IMyService service;
 using (var scope = _factory.CreateScope())
@@ -180,6 +197,7 @@ service.Execute(); // Scope is disposed! This may throw ObjectDisposedException
 ```
 
 **The Solution:**
+
 ```csharp
 using (var scope = _factory.CreateScope())
 {
@@ -196,9 +214,11 @@ using (var scope = _factory.CreateScope())
 
 In async methods, `CreateAsyncScope` ensures services implementing `IAsyncDisposable` are disposed correctly.
 
-> **Explain Like I'm Ten:** It's like using a regular trash can for special recyclables in an eco-building. Async methods need the async recycling bin to handle things properly.
+> **Explain Like I'm Ten:** It's like using a regular trash can for special recyclables in an eco-building. Async
+> methods need the async recycling bin to handle things properly.
 
 **The Problem:**
+
 ```csharp
 public async Task DoWorkAsync()
 {
@@ -209,6 +229,7 @@ public async Task DoWorkAsync()
 ```
 
 **The Solution:**
+
 ```csharp
 public async Task DoWorkAsync()
 {
@@ -224,11 +245,14 @@ public async Task DoWorkAsync()
 
 ## DI006: Static ServiceProvider Cache
 
-Storing `IServiceProvider` or `IServiceScopeFactory` in static fields creates global state that causes scope management issues and memory leaks.
+Storing `IServiceProvider` or `IServiceScopeFactory` in static fields creates global state that causes scope management
+issues and memory leaks.
 
-> **Explain Like I'm Ten:** It's like leaving the master key to your building in the lobby. Anyone can grab it and cause chaos.
+> **Explain Like I'm Ten:** It's like leaving the master key to your building in the lobby. Anyone can grab it and cause
+> chaos.
 
 **The Problem:**
+
 ```csharp
 public class ServiceLocator
 {
@@ -244,6 +268,7 @@ public class ServiceLocator
 ```
 
 **The Solution:**
+
 ```csharp
 public class ServiceLocator
 {
@@ -262,11 +287,14 @@ public class ServiceLocator
 
 ## DI007: Service Locator Anti-Pattern
 
-Resolving services via `IServiceProvider.GetService()` hides dependencies and makes code harder to test. Prefer constructor injection.
+Resolving services via `IServiceProvider.GetService()` hides dependencies and makes code harder to test. Prefer
+constructor injection.
 
-> **Explain Like I'm Ten:** It's like going to the store every time you need milk instead of keeping it in your fridge. Your friends won't know you need milk until they see you leave.
+> **Explain Like I'm Ten:** It's like going to the store every time you need milk instead of keeping it in your fridge.
+> Your friends won't know you need milk until they see you leave.
 
 **The Problem:**
+
 ```csharp
 public class MyService
 {
@@ -286,6 +314,7 @@ public class MyService
 ```
 
 **The Solution:**
+
 ```csharp
 public class MyService
 {
@@ -305,17 +334,21 @@ public class MyService
 
 **Code Fix:** No - Requires manual refactoring
 
-**Note:** Service locator is acceptable in factories, middleware `Invoke` methods, and when using `IServiceScopeFactory` correctly.
+**Note:** Service locator is acceptable in factories, middleware `Invoke` methods, and when using `IServiceScopeFactory`
+correctly.
 
 ---
 
 ## DI008: Disposable Transient Service
 
-Transient services implementing `IDisposable` are not tracked by the DI container. The container won't dispose them, causing memory leaks.
+Transient services implementing `IDisposable` are not tracked by the DI container. The container won't dispose them,
+causing memory leaks.
 
-> **Explain Like I'm Ten:** It's like buying disposable plates but never throwing them away. You keep getting new ones, but the pile in the corner just keeps growing.
+> **Explain Like I'm Ten:** It's like buying disposable plates but never throwing them away. You keep getting new ones,
+> but the pile in the corner just keeps growing.
 
 **The Problem:**
+
 ```csharp
 services.AddTransient<IMyService, DisposableService>();
 
@@ -328,6 +361,7 @@ public class DisposableService : IMyService, IDisposable
 ```
 
 **The Solution:**
+
 ```csharp
 // Option 1: Use Scoped lifetime (container will dispose it)
 services.AddScoped<IMyService, DisposableService>();
@@ -352,11 +386,14 @@ public class Consumer
 
 ## DI009: Open Generic Captive Dependency
 
-Same as DI003, but for open generic registrations. A singleton generic service should not depend on scoped or transient services.
+Same as DI003, but for open generic registrations. A singleton generic service should not depend on scoped or transient
+services.
 
-> **Explain Like I'm Ten:** Same hoarding problem as DI003, but it's a factory that produces hoarders. Every `Repository<T>` you create will hoard the scoped service.
+> **Explain Like I'm Ten:** Same hoarding problem as DI003, but it's a factory that produces hoarders. Every
+`Repository<T>` you create will hoard the scoped service.
 
 **The Problem:**
+
 ```csharp
 services.AddScoped<IScopedService, ScopedService>();
 services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
@@ -368,6 +405,7 @@ public class Repository<T> : IRepository<T>
 ```
 
 **The Solution:**
+
 ```csharp
 // Change the open generic to scoped
 services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
@@ -377,13 +415,130 @@ services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 
 ---
 
+## DI010: Constructor Over-Injection
+
+A class with too many constructor dependencies may be violating the Single Responsibility Principle (SRP) and should be
+refactored.
+
+> **Explain Like I'm Ten:** It's like having a toy that needs 10 batteries. That toy is probably trying to do too many
+> things at once. Better to have simpler toys that need fewer batteries.
+
+**The Problem:**
+
+```csharp
+services.AddScoped<IMyService, MyService>();
+
+public class MyService : IMyService
+{
+    public MyService(
+        IDependency1 dep1,
+        IDependency2 dep2,
+        IDependency3 dep3,
+        IDependency4 dep4,
+        IDependency5 dep5) // 5+ dependencies - may violate SRP
+    {
+        // ...
+    }
+}
+```
+
+**The Solution:**
+
+```csharp
+// Split into smaller, focused services
+public class MyService : IMyService
+{
+    public MyService(
+        ISubServiceA subA,  // Groups dep1 and dep2
+        ISubServiceB subB)  // Groups dep3, dep4, and dep5
+    {
+    }
+}
+
+public class SubServiceA : ISubServiceA
+{
+    public SubServiceA(IDependency1 dep1, IDependency2 dep2) { }
+}
+
+public class SubServiceB : ISubServiceB
+{
+    public SubServiceB(IDependency3 dep3, IDependency4 dep4, IDependency5 dep5) { }
+}
+```
+
+**Code Fix:** No - Requires manual refactoring to split responsibilities
+
+**Note:** Common dependencies like `ILogger<T>`, `IOptions<T>`, `IConfiguration`, and value types are excluded from the
+count.
+
+---
+
+## DI011: ServiceProvider Injection
+
+Injecting `IServiceProvider`, `IServiceScopeFactory`, or `IKeyedServiceProvider` directly enables the service locator
+anti-pattern and hides dependencies.
+
+> **Explain Like I'm Ten:** It's like asking for a magic wand that can summon anything. Your friends don't know what you
+> actually need until you start summoning things, and then they can't help you prepare.
+
+**The Problem:**
+
+```csharp
+services.AddScoped<IMyService, MyService>();
+
+public class MyService : IMyService
+{
+    private readonly IServiceProvider _provider;  // Hidden dependencies!
+
+    public MyService(IServiceProvider provider)
+    {
+        _provider = provider;
+    }
+
+    public void DoWork()
+    {
+        var dep = _provider.GetRequiredService<IDependency>();
+        dep.Execute();
+    }
+}
+```
+
+**The Solution:**
+
+```csharp
+public class MyService : IMyService
+{
+    private readonly IDependency _dependency;  // Explicit dependency
+
+    public MyService(IDependency dependency)
+    {
+        _dependency = dependency;
+    }
+
+    public void DoWork()
+    {
+        _dependency.Execute();
+    }
+}
+```
+
+**Code Fix:** No - Requires manual refactoring
+
+**Exceptions:** This rule excludes:
+- Factory classes (name ends with "Factory")
+- Middleware classes (has `Invoke` or `InvokeAsync` method)
+
+---
+
 ## DI012: Conditional Registration Misuse
 
 Detects issues with conditional registration methods (`TryAdd*`) and duplicate registrations.
 
-> **Explain Like I'm Ten:** It's like signing up for the same newsletter twice with different email addresses. One of them will be ignored, and you might not get the emails you expected.
+> **Explain Like I'm Ten:** It's like signing up for the same newsletter twice with different email addresses. One of
+> them will be ignored, and you might not get the emails you expected.
 
 **The Problem:**
+
 ```csharp
 // DI012: TryAdd after Add - the TryAdd is silently ignored
 services.AddSingleton<IMyService, ServiceA>();
@@ -395,6 +550,7 @@ services.AddSingleton<IMyService, ServiceB>(); // ServiceA registration is lost!
 ```
 
 **The Solution:**
+
 ```csharp
 // Use TryAdd first if you want "register if not exists" behavior
 services.TryAddSingleton<IMyService, ServiceA>();
@@ -444,7 +600,6 @@ dotnet_diagnostic.DI007.severity = suggestion # Downgrade service locator to sug
 - **Compile-time only** - Runtime registrations cannot be analyzed
 - **Single compilation** - Cross-assembly registrations are not tracked
 - **Factory delegates** - Lambda registrations (`sp => ...`) have limited analysis
-- **Keyed services** - .NET 8 keyed services not yet supported
 
 ---
 

@@ -92,7 +92,10 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
                 var methodName = originalMethod.Name;
                 return methodName == "GetService" ||
                        methodName == "GetRequiredService" ||
-                       methodName == "GetServices";
+                       methodName == "GetServices" ||
+                       methodName == "GetKeyedService" ||
+                       methodName == "GetRequiredKeyedService" ||
+                       methodName == "GetKeyedServices";
             }
         }
 
@@ -101,6 +104,16 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         {
             var containingType = method.ContainingType;
             if (containingType?.Name == "IServiceProvider")
+            {
+                return true;
+            }
+        }
+
+        // Check for IKeyedServiceProvider methods
+        if (method.Name is "GetKeyedService" or "GetRequiredKeyedService")
+        {
+            var containingType = method.ContainingType;
+            if (containingType?.Name == "IKeyedServiceProvider")
             {
                 return true;
             }

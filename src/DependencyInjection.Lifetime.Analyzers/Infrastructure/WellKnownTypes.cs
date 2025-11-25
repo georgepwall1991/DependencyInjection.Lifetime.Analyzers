@@ -38,13 +38,19 @@ public sealed class WellKnownTypes
     /// </summary>
     public INamedTypeSymbol? IAsyncDisposable { get; }
 
+    /// <summary>
+    /// Gets the IKeyedServiceProvider type symbol (.NET 8+).
+    /// </summary>
+    public INamedTypeSymbol? IKeyedServiceProvider { get; }
+
     private WellKnownTypes(
         INamedTypeSymbol? serviceProvider,
         INamedTypeSymbol? serviceScopeFactory,
         INamedTypeSymbol? serviceScope,
         INamedTypeSymbol? asyncServiceScope,
         INamedTypeSymbol? disposable,
-        INamedTypeSymbol? asyncDisposable)
+        INamedTypeSymbol? asyncDisposable,
+        INamedTypeSymbol? keyedServiceProvider)
     {
         IServiceProvider = serviceProvider;
         IServiceScopeFactory = serviceScopeFactory;
@@ -52,6 +58,7 @@ public sealed class WellKnownTypes
         AsyncServiceScope = asyncServiceScope;
         IDisposable = disposable;
         IAsyncDisposable = asyncDisposable;
+        IKeyedServiceProvider = keyedServiceProvider;
     }
 
     /// <summary>
@@ -66,6 +73,7 @@ public sealed class WellKnownTypes
         var asyncServiceScope = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.AsyncServiceScope");
         var disposable = compilation.GetTypeByMetadataName("System.IDisposable");
         var asyncDisposable = compilation.GetTypeByMetadataName("System.IAsyncDisposable");
+        var keyedServiceProvider = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider");
 
         // Return null if we don't have the basic types needed for analysis
         if (serviceProvider is null && serviceScopeFactory is null)
@@ -73,7 +81,7 @@ public sealed class WellKnownTypes
             return null;
         }
 
-        return new WellKnownTypes(serviceProvider, serviceScopeFactory, serviceScope, asyncServiceScope, disposable, asyncDisposable);
+        return new WellKnownTypes(serviceProvider, serviceScopeFactory, serviceScope, asyncServiceScope, disposable, asyncDisposable, keyedServiceProvider);
     }
 
     /// <summary>
@@ -114,6 +122,30 @@ public sealed class WellKnownTypes
     public bool IsServiceProviderOrFactory(ITypeSymbol? type)
     {
         return IsServiceProvider(type) || IsServiceScopeFactory(type);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IKeyedServiceProvider.
+    /// </summary>
+    public bool IsKeyedServiceProvider(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IKeyedServiceProvider);
+    }
+
+    /// <summary>
+    /// Checks if the given type is any service provider type (including keyed).
+    /// </summary>
+    public bool IsAnyServiceProvider(ITypeSymbol? type)
+    {
+        return IsServiceProvider(type) || IsKeyedServiceProvider(type);
+    }
+
+    /// <summary>
+    /// Checks if the given type is any service provider, keyed provider, or scope factory type.
+    /// </summary>
+    public bool IsServiceProviderOrFactoryOrKeyed(ITypeSymbol? type)
+    {
+        return IsServiceProvider(type) || IsServiceScopeFactory(type) || IsKeyedServiceProvider(type);
     }
 
     /// <summary>

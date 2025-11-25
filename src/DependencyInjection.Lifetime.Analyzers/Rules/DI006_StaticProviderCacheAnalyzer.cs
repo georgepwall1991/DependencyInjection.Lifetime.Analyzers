@@ -48,7 +48,7 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!wellKnownTypes.IsServiceProviderOrFactory(field.Type))
+        if (!wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(field.Type))
         {
             return;
         }
@@ -72,7 +72,7 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!wellKnownTypes.IsServiceProviderOrFactory(property.Type))
+        if (!wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(property.Type))
         {
             return;
         }
