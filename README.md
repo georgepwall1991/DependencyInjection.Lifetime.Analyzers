@@ -32,7 +32,7 @@ The analyzers will automatically run during compilation and in your IDE.
 | ID | Title | Severity | Code Fix |
 |----|-------|----------|----------|
 | [DI001](#di001) | Service scope must be disposed | Warning | Yes |
-| [DI002](#di002) | Scoped service escapes scope | Warning | No |
+| [DI002](#di002) | Scoped service escapes scope | Warning | Yes |
 | [DI003](#di003) | Captive dependency detected | Warning | Yes |
 | [DI004](#di004) | Service used after scope disposed | Warning | No |
 | [DI005](#di005) | Use CreateAsyncScope in async methods | Warning | Yes |
@@ -40,6 +40,7 @@ The analyzers will automatically run during compilation and in your IDE.
 | [DI007](#di007) | Avoid service locator anti-pattern | Warning | No |
 | [DI008](#di008) | Transient service implements IDisposable | Warning | Yes |
 | [DI009](#di009) | Open generic captive dependency | Warning | Yes |
+| [DI012](#di012) | Conditional registration misuse | Info | No |
 
 ---
 
@@ -87,6 +88,8 @@ public IMyService GetService()
     return scope.ServiceProvider.GetRequiredService<IMyService>(); // Escapes!
 }
 ```
+
+**Code Fix**: Suppress with `#pragma warning disable DI002` or add TODO comment.
 
 ---
 
@@ -265,6 +268,31 @@ public class Repository<T> : IRepository<T>
 ```
 
 **Code Fix**: Change to `AddScoped` or `AddTransient`.
+
+---
+
+### DI012
+
+**Conditional registration misuse**
+
+Detects issues with conditional registration methods (`TryAdd*`) and duplicate registrations:
+
+- **DI012**: `TryAdd*` called after `Add*` for the same service type will be silently ignored
+- **DI012b**: Multiple `Add*` calls for the same service type - later registration overrides earlier
+
+```csharp
+// Bad - TryAddSingleton is ignored because AddSingleton already registered
+services.AddSingleton<IMyService, ServiceA>();
+services.TryAddSingleton<IMyService, ServiceB>(); // DI012: Will be ignored!
+
+// Bad - duplicate registrations, only the last one takes effect
+services.AddSingleton<IMyService, ServiceA>();
+services.AddSingleton<IMyService, ServiceB>(); // DI012b: ServiceB overrides ServiceA
+
+// Good - use TryAdd first, or intentionally override with Add
+services.TryAddSingleton<IMyService, ServiceA>(); // Will register if not already registered
+services.AddSingleton<IMyService, ServiceB>(); // Explicitly overrides
+```
 
 ---
 

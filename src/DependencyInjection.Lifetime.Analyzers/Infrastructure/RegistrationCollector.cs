@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -12,12 +13,16 @@ namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 public sealed class RegistrationCollector
 {
     private readonly ConcurrentDictionary<INamedTypeSymbol, ServiceRegistration> _registrations;
+    private readonly ConcurrentBag<OrderedRegistration> _orderedRegistrations;
     private readonly INamedTypeSymbol? _serviceCollectionType;
+    private int _registrationOrder;
 
     private RegistrationCollector(INamedTypeSymbol? serviceCollectionType)
     {
         _serviceCollectionType = serviceCollectionType;
         _registrations = new ConcurrentDictionary<INamedTypeSymbol, ServiceRegistration>(SymbolEqualityComparer.Default);
+        _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
+        _registrationOrder = 0;
     }
 
     /// <summary>
@@ -36,6 +41,11 @@ public sealed class RegistrationCollector
     /// Gets all collected registrations.
     /// </summary>
     public IEnumerable<ServiceRegistration> Registrations => _registrations.Values;
+
+    /// <summary>
+    /// Gets all ordered registrations for analyzing registration order.
+    /// </summary>
+    public IEnumerable<OrderedRegistration> OrderedRegistrations => _orderedRegistrations;
 
     /// <summary>
     /// Tries to get the registration for a specific service type.
@@ -77,8 +87,11 @@ public sealed class RegistrationCollector
             return;
         }
 
+        var methodName = methodSymbol.Name;
+        var isTryAdd = IsTryAddMethod(methodName);
+
         // Parse the lifetime from method name
-        var lifetime = GetLifetimeFromMethodName(methodSymbol.Name);
+        var lifetime = GetLifetimeFromMethodName(methodName);
         if (lifetime is null)
         {
             return;
@@ -86,19 +99,35 @@ public sealed class RegistrationCollector
 
         // Extract service and implementation types
         var (serviceType, implementationType) = ExtractTypes(methodSymbol, invocation, semanticModel);
-        if (serviceType is null || implementationType is null)
+        if (serviceType is null)
         {
             return;
         }
 
-        var registration = new ServiceRegistration(
+        // Always track ordered registrations (for DI012 analysis)
+        var order = Interlocked.Increment(ref _registrationOrder);
+        var orderedRegistration = new OrderedRegistration(
             serviceType,
-            implementationType,
             lifetime.Value,
-            invocation.GetLocation());
+            invocation.GetLocation(),
+            order,
+            isTryAdd,
+            methodName);
+        _orderedRegistrations.Add(orderedRegistration);
 
-        // Store by service type (later registrations override earlier ones, like DI container behavior)
-        _registrations[serviceType] = registration;
+        // Only store in main registrations dictionary if we have implementation type
+        // and this is not a TryAdd (TryAdd doesn't override existing registrations)
+        if (implementationType is not null && !isTryAdd)
+        {
+            var registration = new ServiceRegistration(
+                serviceType,
+                implementationType,
+                lifetime.Value,
+                invocation.GetLocation());
+
+            // Store by service type (later registrations override earlier ones, like DI container behavior)
+            _registrations[serviceType] = registration;
+        }
     }
 
     private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
@@ -111,9 +140,10 @@ public sealed class RegistrationCollector
             return false;
         }
 
-        // Check if the containing type is ServiceCollectionServiceExtensions
+        // Check if the containing type is ServiceCollectionServiceExtensions or ServiceCollectionDescriptorExtensions
         var containingType = originalMethod.ContainingType;
-        if (containingType?.Name != "ServiceCollectionServiceExtensions")
+        if (containingType?.Name != "ServiceCollectionServiceExtensions" &&
+            containingType?.Name != "ServiceCollectionDescriptorExtensions")
         {
             return false;
         }
@@ -130,23 +160,28 @@ public sealed class RegistrationCollector
 
     private static ServiceLifetime? GetLifetimeFromMethodName(string methodName)
     {
-        // Handle common registration patterns
-        if (methodName.StartsWith("AddSingleton"))
+        // Handle common registration patterns (both Add* and TryAdd*)
+        if (methodName.StartsWith("AddSingleton") || methodName.StartsWith("TryAddSingleton"))
         {
             return ServiceLifetime.Singleton;
         }
 
-        if (methodName.StartsWith("AddScoped"))
+        if (methodName.StartsWith("AddScoped") || methodName.StartsWith("TryAddScoped"))
         {
             return ServiceLifetime.Scoped;
         }
 
-        if (methodName.StartsWith("AddTransient"))
+        if (methodName.StartsWith("AddTransient") || methodName.StartsWith("TryAddTransient"))
         {
             return ServiceLifetime.Transient;
         }
 
         return null;
+    }
+
+    private static bool IsTryAddMethod(string methodName)
+    {
+        return methodName.StartsWith("TryAdd");
     }
 
     private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType) ExtractTypes(

@@ -49,4 +49,14 @@ public static class DiagnosticIds
     /// DI009: Open generic singleton captures scoped or transient dependency.
     /// </summary>
     public const string OpenGenericLifetimeMismatch = "DI009";
+
+    /// <summary>
+    /// DI012: TryAdd registration will be ignored because service already registered.
+    /// </summary>
+    public const string TryAddIgnored = "DI012";
+
+    /// <summary>
+    /// DI012b: Service registered multiple times; later registration overrides earlier.
+    /// </summary>
+    public const string DuplicateRegistration = "DI012b";
 }
