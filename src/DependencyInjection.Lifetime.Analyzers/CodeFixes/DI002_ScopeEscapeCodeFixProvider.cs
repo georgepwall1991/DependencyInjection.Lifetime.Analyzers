@@ -52,9 +52,6 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
             return;
         }
 
-        // Find whether this is a return statement or field assignment escape
-        var escapeTarget = diagnostic.Properties.GetValueOrDefault("EscapeTarget") ?? "unknown";
-
         // Register "Add TODO comment" fix
         context.RegisterCodeFix(
             CodeAction.Create(

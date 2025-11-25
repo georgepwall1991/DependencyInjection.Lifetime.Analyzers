@@ -1,0 +1,1242 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 4803c8a..e57e593 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
++## [1.1.0] - 2025-11-25
++
++### Added
++
++- **DI012**: New analyzer detecting conditional registration misuse
++  - **DI012**: `TryAdd*` called after `Add*` for the same service type (will be silently ignored)
++  - **DI012b**: Multiple `Add*` calls for the same service type (later registration overrides earlier)
++- **DI002 Code Fix**: Added pragma suppression and TODO comment code fixes for scope escape diagnostics
++- Extended `RegistrationCollector` infrastructure to track registration order for DI012 analysis
++
++### Changed
++
++- Updated README with DI012 documentation and corrected DI002 code fix availability
++
++---
++
+ ## [1.0.0] - 2025-11-24
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index 24a566b..b101bde 100644
+--- a/README.md
++++ b/README.md
+@@ -32,7 +32,7 @@ The analyzers will automatically run during compilation and in your IDE.
+ | ID | Title | Severity | Code Fix |
+ |----|-------|----------|----------|
+ | [DI001](#di001) | Service scope must be disposed | Warning | Yes |
+-| [DI002](#di002) | Scoped service escapes scope | Warning | No |
++| [DI002](#di002) | Scoped service escapes scope | Warning | Yes |
+ | [DI003](#di003) | Captive dependency detected | Warning | Yes |
+ | [DI004](#di004) | Service used after scope disposed | Warning | No |
+ | [DI005](#di005) | Use CreateAsyncScope in async methods | Warning | Yes |
+@@ -40,6 +40,7 @@ The analyzers will automatically run during compilation and in your IDE.
+ | [DI007](#di007) | Avoid service locator anti-pattern | Warning | No |
+ | [DI008](#di008) | Transient service implements IDisposable | Warning | Yes |
+ | [DI009](#di009) | Open generic captive dependency | Warning | Yes |
++| [DI012](#di012) | Conditional registration misuse | Info | No |
+ 
+ ---
+ 
+@@ -88,6 +89,8 @@ public IMyService GetService()
+ }
+ ```
+ 
++**Code Fix**: Suppress with `#pragma warning disable DI002` or add TODO comment.
++
+ ---
+ 
+ ### DI003
+@@ -268,6 +271,31 @@ public class Repository<T> : IRepository<T>
+ 
+ ---
+ 
++### DI012
++
++**Conditional registration misuse**
++
++Detects issues with conditional registration methods (`TryAdd*`) and duplicate registrations:
++
++- **DI012**: `TryAdd*` called after `Add*` for the same service type will be silently ignored
++- **DI012b**: Multiple `Add*` calls for the same service type - later registration overrides earlier
++
++```csharp
++// Bad - TryAddSingleton is ignored because AddSingleton already registered
++services.AddSingleton<IMyService, ServiceA>();
++services.TryAddSingleton<IMyService, ServiceB>(); // DI012: Will be ignored!
++
++// Bad - duplicate registrations, only the last one takes effect
++services.AddSingleton<IMyService, ServiceA>();
++services.AddSingleton<IMyService, ServiceB>(); // DI012b: ServiceB overrides ServiceA
++
++// Good - use TryAdd first, or intentionally override with Add
++services.TryAddSingleton<IMyService, ServiceA>(); // Will register if not already registered
++services.AddSingleton<IMyService, ServiceB>(); // Explicitly overrides
++```
++
++---
++
+ ## Configuration
+ 
+ ### Suppressing Diagnostics
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/AnalyzerReleases.Unshipped.md b/src/DependencyInjection.Lifetime.Analyzers/AnalyzerReleases.Unshipped.md
+index f6e7ebc..db827a3 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/AnalyzerReleases.Unshipped.md
++++ b/src/DependencyInjection.Lifetime.Analyzers/AnalyzerReleases.Unshipped.md
+@@ -1,3 +1,5 @@
+ ### New Rules
+ Rule ID | Category | Severity | Notes
+ --------|----------|----------|-------
++DI012 | DependencyInjection | Info | TryAdd registration will be ignored because service already registered
++DI012b | DependencyInjection | Info | Service registered multiple times; later registration overrides earlier
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/CodeFixes/DI002_ScopeEscapeCodeFixProvider.cs b/src/DependencyInjection.Lifetime.Analyzers/CodeFixes/DI002_ScopeEscapeCodeFixProvider.cs
+new file mode 100644
+index 0000000..fa45b13
+--- /dev/null
++++ b/src/DependencyInjection.Lifetime.Analyzers/CodeFixes/DI002_ScopeEscapeCodeFixProvider.cs
+@@ -0,0 +1,185 @@
++using System.Collections.Immutable;
++using System.Composition;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.CodeAnalysis;
++using Microsoft.CodeAnalysis.CodeActions;
++using Microsoft.CodeAnalysis.CodeFixes;
++using Microsoft.CodeAnalysis.CSharp;
++using Microsoft.CodeAnalysis.CSharp.Syntax;
++using Microsoft.CodeAnalysis.Formatting;
++
++namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
++
++/// <summary>
++/// Code fix provider for DI002: Scoped service escapes its scope lifetime.
++/// Offers fixes to prevent the service from outliving its scope.
++/// </summary>
++[ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(DI002_ScopeEscapeCodeFixProvider))]
++[Shared]
++public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
++{
++    private const string AddTodoEquivalenceKey = "DI002_AddTodo";
++    private const string SuppressEquivalenceKey = "DI002_Suppress";
++
++    /// <inheritdoc />
++    public sealed override ImmutableArray<string> FixableDiagnosticIds =>
++        ImmutableArray.Create(DiagnosticIds.ScopedServiceEscapes);
++
++    /// <inheritdoc />
++    public sealed override FixAllProvider GetFixAllProvider() =>
++        WellKnownFixAllProviders.BatchFixer;
++
++    /// <inheritdoc />
++    public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
++    {
++        var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
++        if (root is null)
++        {
++            return;
++        }
++
++        var diagnostic = context.Diagnostics[0];
++        var diagnosticSpan = diagnostic.Location.SourceSpan;
++
++        // Find the invocation (GetService/GetRequiredService call)
++        var node = root.FindNode(diagnosticSpan);
++        var invocation = node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
++
++        if (invocation is null)
++        {
++            return;
++        }
++
++        // Find whether this is a return statement or field assignment escape
++        var escapeTarget = diagnostic.Properties.GetValueOrDefault("EscapeTarget") ?? "unknown";
++
++        // Register "Add TODO comment" fix
++        context.RegisterCodeFix(
++            CodeAction.Create(
++                title: Resources.DI002_FixTitle_AddTodo,
++                createChangedDocument: c => AddTodoCommentAsync(context.Document, invocation, c),
++                equivalenceKey: AddTodoEquivalenceKey),
++            diagnostic);
++
++        // Register "Suppress with pragma" fix
++        context.RegisterCodeFix(
++            CodeAction.Create(
++                title: Resources.DI002_FixTitle_Suppress,
++                createChangedDocument: c => SuppressWithPragmaAsync(context.Document, invocation, c),
++                equivalenceKey: SuppressEquivalenceKey),
++            diagnostic);
++    }
++
++    private static async Task<Document> AddTodoCommentAsync(
++        Document document,
++        InvocationExpressionSyntax invocation,
++        CancellationToken cancellationToken)
++    {
++        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
++        if (root is null)
++        {
++            return document;
++        }
++
++        // Find the containing statement
++        var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
++        if (containingStatement is null)
++        {
++            return document;
++        }
++
++        // Get the leading trivia and indentation
++        var leadingTrivia = containingStatement.GetLeadingTrivia();
++        var indentation = leadingTrivia.LastOrDefault(t => t.IsKind(SyntaxKind.WhitespaceTrivia));
++
++        // Create TODO comment
++        var todoComment = SyntaxFactory.Comment(
++            "// TODO: DI002 - Service resolved from scope will be disposed when scope ends. " +
++            "Consider returning scope with service or restructuring.");
++        var newLine = SyntaxFactory.CarriageReturnLineFeed;
++
++        // Build new trivia list
++        var newTrivia = SyntaxFactory.TriviaList(
++            leadingTrivia.Concat(new[]
++            {
++                todoComment,
++                newLine,
++                indentation
++            }));
++
++        var newStatement = containingStatement.WithLeadingTrivia(newTrivia);
++
++        return document.WithSyntaxRoot(root.ReplaceNode(containingStatement, newStatement));
++    }
++
++    private static async Task<Document> SuppressWithPragmaAsync(
++        Document document,
++        InvocationExpressionSyntax invocation,
++        CancellationToken cancellationToken)
++    {
++        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
++        if (root is null)
++        {
++            return document;
++        }
++
++        // Find the containing statement
++        var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
++        if (containingStatement is null)
++        {
++            return document;
++        }
++
++        // Get the leading trivia and indentation
++        var leadingTrivia = containingStatement.GetLeadingTrivia();
++        var indentation = leadingTrivia.LastOrDefault(t => t.IsKind(SyntaxKind.WhitespaceTrivia));
++
++        // Create pragma disable directive
++        var pragmaDisable = SyntaxFactory.Trivia(
++            SyntaxFactory.PragmaWarningDirectiveTrivia(
++                SyntaxFactory.Token(SyntaxKind.DisableKeyword),
++                SyntaxFactory.SingletonSeparatedList<ExpressionSyntax>(
++                    SyntaxFactory.IdentifierName(DiagnosticIds.ScopedServiceEscapes)),
++                isActive: true));
++
++        var newLine = SyntaxFactory.CarriageReturnLineFeed;
++
++        // Build trivia before the statement
++        var triviaBeforeStatement = SyntaxFactory.TriviaList(
++            leadingTrivia.Concat(new[]
++            {
++                pragmaDisable,
++                newLine,
++                indentation
++            }));
++
++        // Create pragma restore directive for after the statement
++        var pragmaRestore = SyntaxFactory.Trivia(
++            SyntaxFactory.PragmaWarningDirectiveTrivia(
++                SyntaxFactory.Token(SyntaxKind.RestoreKeyword),
++                SyntaxFactory.SingletonSeparatedList<ExpressionSyntax>(
++                    SyntaxFactory.IdentifierName(DiagnosticIds.ScopedServiceEscapes)),
++                isActive: true));
++
++        // Get trailing trivia
++        var trailingTrivia = containingStatement.GetTrailingTrivia();
++
++        // Build trivia after the statement
++        var triviaAfterStatement = SyntaxFactory.TriviaList(
++            new[]
++            {
++                newLine,
++                indentation,
++                pragmaRestore
++            }.Concat(trailingTrivia));
++
++        var newStatement = containingStatement
++            .WithLeadingTrivia(triviaBeforeStatement)
++            .WithTrailingTrivia(triviaAfterStatement)
++            .WithAdditionalAnnotations(Formatter.Annotation);
++
++        return document.WithSyntaxRoot(root.ReplaceNode(containingStatement, newStatement));
++    }
++}
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/DiagnosticDescriptors.cs b/src/DependencyInjection.Lifetime.Analyzers/DiagnosticDescriptors.cs
+index 33f3dfe..056c179 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/DiagnosticDescriptors.cs
++++ b/src/DependencyInjection.Lifetime.Analyzers/DiagnosticDescriptors.cs
+@@ -118,4 +118,30 @@ public static class DiagnosticDescriptors
+         isEnabledByDefault: true,
+         description: "An open generic singleton service should not depend on scoped or transient services. The captured service will live for the entire application lifetime.",
+         customTags: WellKnownDiagnosticTags.CompilationEnd);
++
++    /// <summary>
++    /// DI012: TryAdd registration will be ignored because service already registered.
++    /// </summary>
++    public static readonly DiagnosticDescriptor TryAddIgnored = new(
++        id: DiagnosticIds.TryAddIgnored,
++        title: "TryAdd registration will be ignored",
++        messageFormat: "TryAdd for '{0}' will be ignored because Add already registered this service at {1}",
++        category: Category,
++        defaultSeverity: DiagnosticSeverity.Info,
++        isEnabledByDefault: true,
++        description: "TryAdd* methods only register a service if it hasn't been registered before. Since an Add* call already registered this service type, this TryAdd* call will have no effect.",
++        customTags: WellKnownDiagnosticTags.CompilationEnd);
++
++    /// <summary>
++    /// DI012b: Service registered multiple times; later registration overrides earlier.
++    /// </summary>
++    public static readonly DiagnosticDescriptor DuplicateRegistration = new(
++        id: DiagnosticIds.DuplicateRegistration,
++        title: "Duplicate service registration",
++        messageFormat: "Service '{0}' is registered multiple times; later registration overrides earlier one at {1}",
++        category: Category,
++        defaultSeverity: DiagnosticSeverity.Info,
++        isEnabledByDefault: true,
++        description: "Registering the same service type multiple times with Add* methods means only the last registration will be used. This may be intentional (for overriding) or a mistake.",
++        customTags: WellKnownDiagnosticTags.CompilationEnd);
+ }
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs b/src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs
+index eda4f06..d70e083 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs
++++ b/src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs
+@@ -49,4 +49,14 @@ public static class DiagnosticIds
+     /// DI009: Open generic singleton captures scoped or transient dependency.
+     /// </summary>
+     public const string OpenGenericLifetimeMismatch = "DI009";
++
++    /// <summary>
++    /// DI012: TryAdd registration will be ignored because service already registered.
++    /// </summary>
++    public const string TryAddIgnored = "DI012";
++
++    /// <summary>
++    /// DI012b: Service registered multiple times; later registration overrides earlier.
++    /// </summary>
++    public const string DuplicateRegistration = "DI012b";
+ }
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/OrderedRegistration.cs b/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/OrderedRegistration.cs
+new file mode 100644
+index 0000000..15916ca
+--- /dev/null
++++ b/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/OrderedRegistration.cs
+@@ -0,0 +1,59 @@
++using Microsoft.CodeAnalysis;
++
++namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
++
++/// <summary>
++/// Represents a service registration with ordering information for tracking registration order.
++/// Used by DI012 to detect TryAdd after Add and duplicate registrations.
++/// </summary>
++public sealed class OrderedRegistration
++{
++    /// <summary>
++    /// Gets the service type being registered.
++    /// </summary>
++    public INamedTypeSymbol ServiceType { get; }
++
++    /// <summary>
++    /// Gets the lifetime of the registration.
++    /// </summary>
++    public ServiceLifetime Lifetime { get; }
++
++    /// <summary>
++    /// Gets the location of the registration call in source code.
++    /// </summary>
++    public Location Location { get; }
++
++    /// <summary>
++    /// Gets the order in which this registration was encountered (0-based).
++    /// </summary>
++    public int Order { get; }
++
++    /// <summary>
++    /// Gets whether this is a TryAdd* registration (true) or Add* registration (false).
++    /// </summary>
++    public bool IsTryAdd { get; }
++
++    /// <summary>
++    /// Gets the method name used for registration (e.g., "AddSingleton", "TryAddScoped").
++    /// </summary>
++    public string MethodName { get; }
++
++    /// <summary>
++    /// Creates a new ordered registration.
++    /// </summary>
++    public OrderedRegistration(
++        INamedTypeSymbol serviceType,
++        ServiceLifetime lifetime,
++        Location location,
++        int order,
++        bool isTryAdd,
++        string methodName)
++    {
++        ServiceType = serviceType;
++        Lifetime = lifetime;
++        Location = location;
++        Order = order;
++        IsTryAdd = isTryAdd;
++        MethodName = methodName;
++    }
++}
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/RegistrationCollector.cs b/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/RegistrationCollector.cs
+index 226f607..ca93198 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/RegistrationCollector.cs
++++ b/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/RegistrationCollector.cs
+@@ -1,5 +1,6 @@
+ using System.Collections.Concurrent;
+ using System.Collections.Generic;
++using System.Threading;
+ using Microsoft.CodeAnalysis;
+ using Microsoft.CodeAnalysis.CSharp;
+ using Microsoft.CodeAnalysis.CSharp.Syntax;
+@@ -12,12 +13,16 @@ namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
+ public sealed class RegistrationCollector
+ {
+     private readonly ConcurrentDictionary<INamedTypeSymbol, ServiceRegistration> _registrations;
++    private readonly ConcurrentBag<OrderedRegistration> _orderedRegistrations;
+     private readonly INamedTypeSymbol? _serviceCollectionType;
++    private int _registrationOrder;
+ 
+     private RegistrationCollector(INamedTypeSymbol? serviceCollectionType)
+     {
+         _serviceCollectionType = serviceCollectionType;
+         _registrations = new ConcurrentDictionary<INamedTypeSymbol, ServiceRegistration>(SymbolEqualityComparer.Default);
++        _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
++        _registrationOrder = 0;
+     }
+ 
+     /// <summary>
+@@ -37,6 +42,11 @@ private RegistrationCollector(INamedTypeSymbol? serviceCollectionType)
+     /// </summary>
+     public IEnumerable<ServiceRegistration> Registrations => _registrations.Values;
+ 
++    /// <summary>
++    /// Gets all ordered registrations for analyzing registration order.
++    /// </summary>
++    public IEnumerable<OrderedRegistration> OrderedRegistrations => _orderedRegistrations;
++
+     /// <summary>
+     /// Tries to get the registration for a specific service type.
+     /// </summary>
+@@ -77,8 +87,11 @@ public void AnalyzeInvocation(InvocationExpressionSyntax invocation, SemanticMod
+             return;
+         }
+ 
++        var methodName = methodSymbol.Name;
++        var isTryAdd = IsTryAddMethod(methodName);
++
+         // Parse the lifetime from method name
+-        var lifetime = GetLifetimeFromMethodName(methodSymbol.Name);
++        var lifetime = GetLifetimeFromMethodName(methodName);
+         if (lifetime is null)
+         {
+             return;
+@@ -86,19 +99,35 @@ public void AnalyzeInvocation(InvocationExpressionSyntax invocation, SemanticMod
+ 
+         // Extract service and implementation types
+         var (serviceType, implementationType) = ExtractTypes(methodSymbol, invocation, semanticModel);
+-        if (serviceType is null || implementationType is null)
++        if (serviceType is null)
+         {
+             return;
+         }
+ 
+-        var registration = new ServiceRegistration(
++        // Always track ordered registrations (for DI012 analysis)
++        var order = Interlocked.Increment(ref _registrationOrder);
++        var orderedRegistration = new OrderedRegistration(
+             serviceType,
+-            implementationType,
+             lifetime.Value,
+-            invocation.GetLocation());
+-
+-        // Store by service type (later registrations override earlier ones, like DI container behavior)
+-        _registrations[serviceType] = registration;
++            invocation.GetLocation(),
++            order,
++            isTryAdd,
++            methodName);
++        _orderedRegistrations.Add(orderedRegistration);
++
++        // Only store in main registrations dictionary if we have implementation type
++        // and this is not a TryAdd (TryAdd doesn't override existing registrations)
++        if (implementationType is not null && !isTryAdd)
++        {
++            var registration = new ServiceRegistration(
++                serviceType,
++                implementationType,
++                lifetime.Value,
++                invocation.GetLocation());
++
++            // Store by service type (later registrations override earlier ones, like DI container behavior)
++            _registrations[serviceType] = registration;
++        }
+     }
+ 
+     private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
+@@ -111,9 +140,10 @@ private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
+             return false;
+         }
+ 
+-        // Check if the containing type is ServiceCollectionServiceExtensions
++        // Check if the containing type is ServiceCollectionServiceExtensions or ServiceCollectionDescriptorExtensions
+         var containingType = originalMethod.ContainingType;
+-        if (containingType?.Name != "ServiceCollectionServiceExtensions")
++        if (containingType?.Name != "ServiceCollectionServiceExtensions" &&
++            containingType?.Name != "ServiceCollectionDescriptorExtensions")
+         {
+             return false;
+         }
+@@ -130,18 +160,18 @@ private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
+ 
+     private static ServiceLifetime? GetLifetimeFromMethodName(string methodName)
+     {
+-        // Handle common registration patterns
+-        if (methodName.StartsWith("AddSingleton"))
++        // Handle common registration patterns (both Add* and TryAdd*)
++        if (methodName.StartsWith("AddSingleton") || methodName.StartsWith("TryAddSingleton"))
+         {
+             return ServiceLifetime.Singleton;
+         }
+ 
+-        if (methodName.StartsWith("AddScoped"))
++        if (methodName.StartsWith("AddScoped") || methodName.StartsWith("TryAddScoped"))
+         {
+             return ServiceLifetime.Scoped;
+         }
+ 
+-        if (methodName.StartsWith("AddTransient"))
++        if (methodName.StartsWith("AddTransient") || methodName.StartsWith("TryAddTransient"))
+         {
+             return ServiceLifetime.Transient;
+         }
+@@ -149,6 +179,11 @@ private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
+         return null;
+     }
+ 
++    private static bool IsTryAddMethod(string methodName)
++    {
++        return methodName.StartsWith("TryAdd");
++    }
++
+     private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType) ExtractTypes(
+         IMethodSymbol method,
+         InvocationExpressionSyntax invocation,
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/Resources.Designer.cs b/src/DependencyInjection.Lifetime.Analyzers/Resources.Designer.cs
+index 6915992..37d830d 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/Resources.Designer.cs
++++ b/src/DependencyInjection.Lifetime.Analyzers/Resources.Designer.cs
+@@ -49,6 +49,20 @@ internal static class Resources
+     internal static string DI001_FixTitle_AddAwaitUsing =>
+         ResourceManager.GetString("DI001_FixTitle_AddAwaitUsing", Culture) ?? "Add 'await using' statement";
+ 
++    // DI002: Scope Escape
++
++    /// <summary>
++    /// Looks up a localized string: Add TODO comment
++    /// </summary>
++    internal static string DI002_FixTitle_AddTodo =>
++        ResourceManager.GetString("DI002_FixTitle_AddTodo", Culture) ?? "Add TODO comment";
++
++    /// <summary>
++    /// Looks up a localized string: Suppress with #pragma
++    /// </summary>
++    internal static string DI002_FixTitle_Suppress =>
++        ResourceManager.GetString("DI002_FixTitle_Suppress", Culture) ?? "Suppress with #pragma";
++
+     // DI003: Captive Dependency
+ 
+     /// <summary>
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/Resources.resx b/src/DependencyInjection.Lifetime.Analyzers/Resources.resx
+index a4727d7..42310d8 100644
+--- a/src/DependencyInjection.Lifetime.Analyzers/Resources.resx
++++ b/src/DependencyInjection.Lifetime.Analyzers/Resources.resx
+@@ -63,6 +63,14 @@
+   <data name="DI001_FixTitle_AddUsing" xml:space="preserve">
+     <value>Add 'using' statement</value>
+   </data>
++
++  <!-- DI002: Scope Escape -->
++  <data name="DI002_FixTitle_AddTodo" xml:space="preserve">
++    <value>Add TODO comment</value>
++  </data>
++  <data name="DI002_FixTitle_Suppress" xml:space="preserve">
++    <value>Suppress with #pragma</value>
++  </data>
+   <data name="DI001_FixTitle_AddAwaitUsing" xml:space="preserve">
+     <value>Add 'await using' statement</value>
+   </data>
+diff --git a/src/DependencyInjection.Lifetime.Analyzers/Rules/DI012_ConditionalRegistrationMisuseAnalyzer.cs b/src/DependencyInjection.Lifetime.Analyzers/Rules/DI012_ConditionalRegistrationMisuseAnalyzer.cs
+new file mode 100644
+index 0000000..581a5f3
+--- /dev/null
++++ b/src/DependencyInjection.Lifetime.Analyzers/Rules/DI012_ConditionalRegistrationMisuseAnalyzer.cs
+@@ -0,0 +1,136 @@
++using System.Collections.Generic;
++using System.Collections.Immutable;
++using System.Linq;
++using DependencyInjection.Lifetime.Analyzers.Infrastructure;
++using Microsoft.CodeAnalysis;
++using Microsoft.CodeAnalysis.CSharp;
++using Microsoft.CodeAnalysis.CSharp.Syntax;
++using Microsoft.CodeAnalysis.Diagnostics;
++
++namespace DependencyInjection.Lifetime.Analyzers.Rules;
++
++/// <summary>
++/// Analyzer that detects conditional registration issues:
++/// - TryAdd* after Add* for the same service type (TryAdd will be ignored)
++/// - Multiple Add* calls for the same service type (later registration overrides earlier)
++/// </summary>
++[DiagnosticAnalyzer(LanguageNames.CSharp)]
++public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnalyzer
++{
++    /// <inheritdoc />
++    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
++        ImmutableArray.Create(
++            DiagnosticDescriptors.TryAddIgnored,
++            DiagnosticDescriptors.DuplicateRegistration);
++
++    /// <inheritdoc />
++    public override void Initialize(AnalysisContext context)
++    {
++        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
++        context.EnableConcurrentExecution();
++
++        context.RegisterCompilationStartAction(compilationContext =>
++        {
++            var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
++            if (registrationCollector is null)
++            {
++                return;
++            }
++
++            // First pass: collect all registrations
++            compilationContext.RegisterSyntaxNodeAction(
++                syntaxContext => registrationCollector.AnalyzeInvocation(
++                    (InvocationExpressionSyntax)syntaxContext.Node,
++                    syntaxContext.SemanticModel),
++                SyntaxKind.InvocationExpression);
++
++            // Second pass: analyze registration order at compilation end
++            compilationContext.RegisterCompilationEndAction(
++                endContext => AnalyzeRegistrationOrder(endContext, registrationCollector));
++        });
++    }
++
++    private static void AnalyzeRegistrationOrder(
++        CompilationAnalysisContext context,
++        RegistrationCollector registrationCollector)
++    {
++        // Group registrations by service type
++        var registrationsByServiceType = registrationCollector.OrderedRegistrations
++            .GroupBy(r => r.ServiceType, SymbolEqualityComparer.Default)
++            .Where(g => g.Count() > 1)
++            .ToList();
++
++        foreach (var group in registrationsByServiceType)
++        {
++            var orderedRegistrations = group.OrderBy(r => r.Order).ToList();
++            AnalyzeServiceTypeRegistrations(context, orderedRegistrations);
++        }
++    }
++
++    private static void AnalyzeServiceTypeRegistrations(
++        CompilationAnalysisContext context,
++        List<OrderedRegistration> registrations)
++    {
++        if (registrations.Count < 2)
++        {
++            return;
++        }
++
++        var serviceTypeName = registrations[0].ServiceType.Name;
++
++        // Track the first Add* registration
++        OrderedRegistration? firstAddRegistration = null;
++
++        for (var i = 0; i < registrations.Count; i++)
++        {
++            var current = registrations[i];
++
++            if (!current.IsTryAdd)
++            {
++                // This is an Add* registration
++                if (firstAddRegistration is null)
++                {
++                    firstAddRegistration = current;
++                }
++                else
++                {
++                    // Duplicate Add* registration - later one overrides earlier
++                    var diagnostic = Diagnostic.Create(
++                        DiagnosticDescriptors.DuplicateRegistration,
++                        current.Location,
++                        serviceTypeName,
++                        FormatLocation(firstAddRegistration.Location));
++
++                    context.ReportDiagnostic(diagnostic);
++                }
++            }
++            else
++            {
++                // This is a TryAdd* registration
++                if (firstAddRegistration is not null)
++                {
++                    // TryAdd after Add - TryAdd will be ignored
++                    var diagnostic = Diagnostic.Create(
++                        DiagnosticDescriptors.TryAddIgnored,
++                        current.Location,
++                        serviceTypeName,
++                        FormatLocation(firstAddRegistration.Location));
++
++                    context.ReportDiagnostic(diagnostic);
++                }
++            }
++        }
++    }
++
++    private static string FormatLocation(Location location)
++    {
++        var lineSpan = location.GetLineSpan();
++        if (lineSpan.IsValid)
++        {
++            var lineNumber = lineSpan.StartLinePosition.Line + 1;
++            return $"line {lineNumber}";
++        }
++
++        return "unknown location";
++    }
++}
+diff --git a/tests/DependencyInjection.Lifetime.Analyzers.Tests/CodeFixes/DI002_ScopeEscapeCodeFixTests.cs b/tests/DependencyInjection.Lifetime.Analyzers.Tests/CodeFixes/DI002_ScopeEscapeCodeFixTests.cs
+new file mode 100644
+index 0000000..49522e4
+--- /dev/null
++++ b/tests/DependencyInjection.Lifetime.Analyzers.Tests/CodeFixes/DI002_ScopeEscapeCodeFixTests.cs
+@@ -0,0 +1,134 @@
++using System.Threading.Tasks;
++using DependencyInjection.Lifetime.Analyzers.CodeFixes;
++using DependencyInjection.Lifetime.Analyzers.Rules;
++using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
++using Xunit;
++
++namespace DependencyInjection.Lifetime.Analyzers.Tests.CodeFixes;
++
++/// <summary>
++/// Tests for DI002 code fix: Scope escape fixes.
++/// </summary>
++public class DI002_ScopeEscapeCodeFixTests
++{
++    private const string Usings = """
++        using System;
++        using System.Threading.Tasks;
++        using Microsoft.Extensions.DependencyInjection;
++
++        """;
++
++    #region Suppress with Pragma Fix
++
++    [Fact]
++    public async Task CodeFix_AddsPragmaSuppress_ReturnEscape()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++
++            public class MyClass
++            {
++                private readonly IServiceScopeFactory _scopeFactory;
++
++                public MyClass(IServiceScopeFactory scopeFactory)
++                {
++                    _scopeFactory = scopeFactory;
++                }
++
++                public IMyService GetService()
++                {
++                    using var scope = _scopeFactory.CreateScope();
++                    return scope.ServiceProvider.GetRequiredService<IMyService>();
++                }
++            }
++            """;
++
++        var fixedSource = Usings + """
++            public interface IMyService { }
++
++            public class MyClass
++            {
++                private readonly IServiceScopeFactory _scopeFactory;
++
++                public MyClass(IServiceScopeFactory scopeFactory)
++                {
++                    _scopeFactory = scopeFactory;
++                }
++
++                public IMyService GetService()
++                {
++                    using var scope = _scopeFactory.CreateScope();
++            #pragma warning disable DI002
++                    return scope.ServiceProvider.GetRequiredService<IMyService>();
++            #pragma warning restore DI002
++                }
++            }
++            """;
++
++        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
++            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
++            .WithLocation(18, 16)
++            .WithArguments("return");
++
++        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
++            .VerifyCodeFixAsync(source, expected, fixedSource, "DI002_Suppress");
++    }
++
++    [Fact]
++    public async Task CodeFix_AddsPragmaSuppress_FieldAssignment()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++
++            public class MyClass
++            {
++                private readonly IServiceScopeFactory _scopeFactory;
++                private IMyService _service;
++
++                public MyClass(IServiceScopeFactory scopeFactory)
++                {
++                    _scopeFactory = scopeFactory;
++                }
++
++                public void Initialize()
++                {
++                    using var scope = _scopeFactory.CreateScope();
++                    _service = scope.ServiceProvider.GetRequiredService<IMyService>();
++                }
++            }
++            """;
++
++        var fixedSource = Usings + """
++            public interface IMyService { }
++
++            public class MyClass
++            {
++                private readonly IServiceScopeFactory _scopeFactory;
++                private IMyService _service;
++
++                public MyClass(IServiceScopeFactory scopeFactory)
++                {
++                    _scopeFactory = scopeFactory;
++                }
++
++                public void Initialize()
++                {
++                    using var scope = _scopeFactory.CreateScope();
++            #pragma warning disable DI002
++                    _service = scope.ServiceProvider.GetRequiredService<IMyService>();
++            #pragma warning restore DI002
++                }
++            }
++            """;
++
++        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
++            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
++            .WithLocation(19, 20)
++            .WithArguments("_service");
++
++        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
++            .VerifyCodeFixAsync(source, expected, fixedSource, "DI002_Suppress");
++    }
++
++    #endregion
++}
+diff --git a/tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/CodeFixVerifier.cs b/tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/CodeFixVerifier.cs
+index a7e018f..431f22d 100644
+--- a/tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/CodeFixVerifier.cs
++++ b/tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/CodeFixVerifier.cs
+@@ -94,6 +94,36 @@ public static async Task VerifyCodeFixAsync(
+         await test.RunAsync();
+     }
+ 
++    /// <summary>
++    /// Verifies that a code fix transforms the source code as expected, applying the fix only once.
++    /// Use this for code fixes that add acknowledgment but don't remove the underlying diagnostic.
++    /// </summary>
++    /// <param name="source">The source code with the diagnostic.</param>
++    /// <param name="expected">The expected diagnostic.</param>
++    /// <param name="fixedSource">The expected source after the fix is applied.</param>
++    /// <param name="codeActionEquivalenceKey">The equivalence key of the code action to apply.</param>
++    /// <param name="fixedStateDiagnostics">Expected diagnostics in the fixed state.</param>
++    public static async Task VerifyNonRemovingCodeFixAsync(
++        string source,
++        DiagnosticResult expected,
++        string fixedSource,
++        string codeActionEquivalenceKey,
++        params DiagnosticResult[] fixedStateDiagnostics)
++    {
++        var test = CreateTest(source, fixedSource);
++        test.ExpectedDiagnostics.Add(expected);
++        test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
++        test.FixedState.ExpectedDiagnostics.AddRange(fixedStateDiagnostics);
++        // Skip the FixAll check which applies fixes iteratively
++        test.CodeFixTestBehaviors = CodeFixTestBehaviors.SkipFixAllInDocumentCheck
++                                    | CodeFixTestBehaviors.SkipFixAllInProjectCheck
++                                    | CodeFixTestBehaviors.SkipFixAllInSolutionCheck;
++        // Set iterations to explicit 1 to prevent re-application
++        test.NumberOfFixAllIterations = 0;
++        test.NumberOfIncrementalIterations = 1;
++        await test.RunAsync();
++    }
++
+     /// <summary>
+     /// Verifies that no code fix is offered for the given source.
+     /// </summary>
+diff --git a/tests/DependencyInjection.Lifetime.Analyzers.Tests/Rules/DI012_ConditionalRegistrationMisuseAnalyzerTests.cs b/tests/DependencyInjection.Lifetime.Analyzers.Tests/Rules/DI012_ConditionalRegistrationMisuseAnalyzerTests.cs
+new file mode 100644
+index 0000000..9d4e4bc
+--- /dev/null
++++ b/tests/DependencyInjection.Lifetime.Analyzers.Tests/Rules/DI012_ConditionalRegistrationMisuseAnalyzerTests.cs
+@@ -0,0 +1,316 @@
++using System.Threading.Tasks;
++using DependencyInjection.Lifetime.Analyzers.Rules;
++using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
++using Xunit;
++
++namespace DependencyInjection.Lifetime.Analyzers.Tests.Rules;
++
++public class DI012_ConditionalRegistrationMisuseAnalyzerTests
++{
++    private const string Usings = """
++        using System;
++        using Microsoft.Extensions.DependencyInjection;
++        using Microsoft.Extensions.DependencyInjection.Extensions;
++
++        """;
++
++    #region Should Report Diagnostic - TryAdd After Add
++
++    [Fact]
++    public async Task TryAddSingleton_AfterAddSingleton_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IMyService, MyService>();
++                    services.TryAddSingleton<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
++                .WithLocation(12, 9)
++                .WithArguments("IMyService", "line 11"));
++    }
++
++    [Fact]
++    public async Task TryAddScoped_AfterAddScoped_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddScoped<IMyService, MyService>();
++                    services.TryAddScoped<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
++                .WithLocation(12, 9)
++                .WithArguments("IMyService", "line 11"));
++    }
++
++    [Fact]
++    public async Task TryAddTransient_AfterAddTransient_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddTransient<IMyService, MyService>();
++                    services.TryAddTransient<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
++                .WithLocation(12, 9)
++                .WithArguments("IMyService", "line 11"));
++    }
++
++    [Fact]
++    public async Task TryAddScoped_AfterAddSingleton_SameServiceType_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IMyService, MyService>();
++                    services.TryAddScoped<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
++                .WithLocation(12, 9)
++                .WithArguments("IMyService", "line 11"));
++    }
++
++    #endregion
++
++    #region Should Report Diagnostic - Duplicate Add
++
++    [Fact]
++    public async Task DuplicateAddSingleton_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService1 : IMyService { }
++            public class MyService2 : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IMyService, MyService1>();
++                    services.AddSingleton<IMyService, MyService2>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
++                .WithLocation(13, 9)
++                .WithArguments("IMyService", "line 12"));
++    }
++
++    [Fact]
++    public async Task DuplicateAddScoped_ReportsDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService1 : IMyService { }
++            public class MyService2 : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddScoped<IMyService, MyService1>();
++                    services.AddScoped<IMyService, MyService2>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
++                .WithLocation(13, 9)
++                .WithArguments("IMyService", "line 12"));
++    }
++
++    [Fact]
++    public async Task TripleAddSingleton_ReportsMultipleDiagnostics()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService1 : IMyService { }
++            public class MyService2 : IMyService { }
++            public class MyService3 : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IMyService, MyService1>();
++                    services.AddSingleton<IMyService, MyService2>();
++                    services.AddSingleton<IMyService, MyService3>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
++            source,
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
++                .WithLocation(14, 9)
++                .WithArguments("IMyService", "line 13"),
++            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
++                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
++                .WithLocation(15, 9)
++                .WithArguments("IMyService", "line 13"));
++    }
++
++    #endregion
++
++    #region Should Not Report Diagnostic
++
++    [Fact]
++    public async Task TryAddSingleton_BeforeAddSingleton_NoDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.TryAddSingleton<IMyService, MyService>();
++                    services.AddSingleton<IMyService, MyService>();
++                }
++            }
++            """;
++
++        // TryAdd before Add is valid - TryAdd registers first, then Add would override
++        // but we don't report TryAdd in this case since it wasn't ignored
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
++    }
++
++    [Fact]
++    public async Task SingleAddSingleton_NoDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
++    }
++
++    [Fact]
++    public async Task SingleTryAddSingleton_NoDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.TryAddSingleton<IMyService, MyService>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
++    }
++
++    [Fact]
++    public async Task DifferentServiceTypes_NoDiagnostic()
++    {
++        var source = Usings + """
++            public interface IService1 { }
++            public interface IService2 { }
++            public class Service1 : IService1 { }
++            public class Service2 : IService2 { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.AddSingleton<IService1, Service1>();
++                    services.AddSingleton<IService2, Service2>();
++                }
++            }
++            """;
++
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
++    }
++
++    [Fact]
++    public async Task MultipleTryAdd_NoDiagnostic()
++    {
++        var source = Usings + """
++            public interface IMyService { }
++            public class MyService1 : IMyService { }
++            public class MyService2 : IMyService { }
++
++            public class Startup
++            {
++                public void ConfigureServices(IServiceCollection services)
++                {
++                    services.TryAddSingleton<IMyService, MyService1>();
++                    services.TryAddSingleton<IMyService, MyService2>();
++                }
++            }
++            """;
++
++        // Multiple TryAdd calls are fine - only the first takes effect
++        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
++    }
++
++    #endregion
++}
