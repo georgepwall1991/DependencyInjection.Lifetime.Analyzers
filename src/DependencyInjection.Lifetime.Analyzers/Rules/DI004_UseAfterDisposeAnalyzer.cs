@@ -120,7 +120,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         // Check for usage of service variables after the using block
         foreach (var node in containingMethod.DescendantNodes())
         {
-            if (node.SpanStart <= usingEndPosition)
+            if (node.SpanStart < usingEndPosition)
             {
                 continue;
             }
@@ -224,7 +224,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         // Check for service usage after the containing block ends
         foreach (var node in containingMethod.DescendantNodes())
         {
-            if (node.SpanStart <= blockEndPosition)
+            if (node.SpanStart < blockEndPosition)
             {
                 continue;
             }

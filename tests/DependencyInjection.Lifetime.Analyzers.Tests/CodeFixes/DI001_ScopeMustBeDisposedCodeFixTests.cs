@@ -166,4 +166,167 @@ public class DI001_ScopeMustBeDisposedCodeFixTests
         await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddUsing");
     }
+
+    [Fact]
+    public async Task CodeFix_AddsAwaitUsing_WhenCreateAsyncScopeUsed()
+    {
+        // When CreateAsyncScope is already used, await using should not convert the method
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 21, 15, 53)
+            .WithArguments("CreateAsyncScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddAwaitUsing");
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsAwaitUsing_InAsyncLocalFunction()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    async Task ProcessAsync()
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    async Task ProcessAsync()
+                    {
+                        await using var scope = _scopeFactory.CreateAsyncScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(17, 25, 17, 52)
+            .WithArguments("CreateScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddAwaitUsing");
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsAwaitUsing_InAsyncLambda()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    Func<Task> work = async () =>
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        await Task.Delay(100);
+                    };
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    Func<Task> work = async () =>
+                    {
+                        await using var scope = _scopeFactory.CreateAsyncScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        await Task.Delay(100);
+                    };
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(17, 25, 17, 52)
+            .WithArguments("CreateScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddAwaitUsing");
+    }
 }

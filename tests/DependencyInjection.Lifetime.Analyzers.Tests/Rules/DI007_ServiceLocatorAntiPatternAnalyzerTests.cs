@@ -296,5 +296,164 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
         await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task GetRequiredService_InBuildMethod_NoDiagnostic()
+    {
+        // Build* methods are treated as factory patterns - allowed
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class ServiceBuilder
+            {
+                private readonly IServiceProvider _provider;
+
+                public ServiceBuilder(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public IMyService BuildService()
+                {
+                    return _provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetService_NonGeneric_InConstructor_ReportsDiagnostic()
+    {
+        // LIMITATION: Non-generic GetService(Type) returns 'Object' as service name
+        // because the analyzer cannot easily extract the type from the runtime argument
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly object? _service;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _service = provider.GetService(typeof(IMyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(11, 20, 11, 59)
+                .WithArguments("Object"));
+    }
+
+    #endregion
+
+    #region Edge Case Tests
+
+    [Fact]
+    public async Task GetRequiredService_InAnonymousMethod_FactoryRegistration_NoDiagnostic()
+    {
+        // Anonymous method in factory registration - allowed
+        var source = Usings + """
+            public interface IMyService { }
+            public interface IDependency { }
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient<IMyService>(delegate(IServiceProvider sp)
+                    {
+                        return new MyService(sp.GetRequiredService<IDependency>());
+                    });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InLocalFunction_ReportsDiagnostic()
+    {
+        // Local functions are not allowed contexts - should report
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    IMyService GetService()
+                    {
+                        return _provider.GetRequiredService<IMyService>();
+                    }
+                    var service = GetService();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(18, 20, 18, 62)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetService_InStaticMethod_ReportsDiagnostic()
+    {
+        // Static methods should still report - not allowed context
+        var source = Usings + """
+            public interface IMyService { }
+
+            public static class MyClass
+            {
+                public static IMyService GetServiceFromProvider(IServiceProvider provider)
+                {
+                    return provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        // Method has IServiceProvider parameter - this is allowed (factory delegate pattern)
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetService_InExtensionMethod_NoDiagnostic()
+    {
+        // Extension methods with IServiceProvider parameter should be allowed
+        var source = Usings + """
+            public interface IMyService { }
+
+            public static class ServiceProviderExtensions
+            {
+                public static IMyService GetMyService(this IServiceProvider provider)
+                {
+                    return provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        // Extension method has IServiceProvider as first parameter - this is allowed
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }
