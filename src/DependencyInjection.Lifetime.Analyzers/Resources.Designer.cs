@@ -49,6 +49,20 @@ internal static class Resources
     internal static string DI001_FixTitle_AddAwaitUsing =>
         ResourceManager.GetString("DI001_FixTitle_AddAwaitUsing", Culture) ?? "Add 'await using' statement";
 
+    // DI002: Scope Escape
+
+    /// <summary>
+    /// Looks up a localized string: Add TODO comment
+    /// </summary>
+    internal static string DI002_FixTitle_AddTodo =>
+        ResourceManager.GetString("DI002_FixTitle_AddTodo", Culture) ?? "Add TODO comment";
+
+    /// <summary>
+    /// Looks up a localized string: Suppress with #pragma
+    /// </summary>
+    internal static string DI002_FixTitle_Suppress =>
+        ResourceManager.GetString("DI002_FixTitle_Suppress", Culture) ?? "Suppress with #pragma";
+
     // DI003: Captive Dependency
 
     /// <summary>

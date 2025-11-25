@@ -95,6 +95,36 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     }
 
     /// <summary>
+    /// Verifies that a code fix transforms the source code as expected, applying the fix only once.
+    /// Use this for code fixes that add acknowledgment but don't remove the underlying diagnostic.
+    /// </summary>
+    /// <param name="source">The source code with the diagnostic.</param>
+    /// <param name="expected">The expected diagnostic.</param>
+    /// <param name="fixedSource">The expected source after the fix is applied.</param>
+    /// <param name="codeActionEquivalenceKey">The equivalence key of the code action to apply.</param>
+    /// <param name="fixedStateDiagnostics">Expected diagnostics in the fixed state.</param>
+    public static async Task VerifyNonRemovingCodeFixAsync(
+        string source,
+        DiagnosticResult expected,
+        string fixedSource,
+        string codeActionEquivalenceKey,
+        params DiagnosticResult[] fixedStateDiagnostics)
+    {
+        var test = CreateTest(source, fixedSource);
+        test.ExpectedDiagnostics.Add(expected);
+        test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
+        test.FixedState.ExpectedDiagnostics.AddRange(fixedStateDiagnostics);
+        // Skip the FixAll check which applies fixes iteratively
+        test.CodeFixTestBehaviors = CodeFixTestBehaviors.SkipFixAllInDocumentCheck
+                                    | CodeFixTestBehaviors.SkipFixAllInProjectCheck
+                                    | CodeFixTestBehaviors.SkipFixAllInSolutionCheck;
+        // Set iterations to explicit 1 to prevent re-application
+        test.NumberOfFixAllIterations = 0;
+        test.NumberOfIncrementalIterations = 1;
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies that no code fix is offered for the given source.
     /// </summary>
     /// <param name="source">The source code with the diagnostic.</param>

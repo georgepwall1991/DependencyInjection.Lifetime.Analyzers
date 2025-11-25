@@ -118,4 +118,30 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "An open generic singleton service should not depend on scoped or transient services. The captured service will live for the entire application lifetime.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI012: TryAdd registration will be ignored because service already registered.
+    /// </summary>
+    public static readonly DiagnosticDescriptor TryAddIgnored = new(
+        id: DiagnosticIds.TryAddIgnored,
+        title: "TryAdd registration will be ignored",
+        messageFormat: "TryAdd for '{0}' will be ignored because Add already registered this service at {1}",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "TryAdd* methods only register a service if it hasn't been registered before. Since an Add* call already registered this service type, this TryAdd* call will have no effect.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI012b: Service registered multiple times; later registration overrides earlier.
+    /// </summary>
+    public static readonly DiagnosticDescriptor DuplicateRegistration = new(
+        id: DiagnosticIds.DuplicateRegistration,
+        title: "Duplicate service registration",
+        messageFormat: "Service '{0}' is registered multiple times; later registration overrides earlier one at {1}",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "Registering the same service type multiple times with Add* methods means only the last registration will be used. This may be intentional (for overriding) or a mistake.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }
