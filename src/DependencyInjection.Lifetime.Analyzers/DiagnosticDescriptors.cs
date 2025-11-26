@@ -170,4 +170,29 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "Injecting IServiceProvider or IServiceScopeFactory hides dependencies and makes testing harder. Prefer injecting specific services directly. This pattern is acceptable in factories and middleware.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI013: Implementation type mismatch (implementation does not implement service type).
+    /// </summary>
+    public static readonly DiagnosticDescriptor ImplementationTypeMismatch = new(
+        id: DiagnosticIds.ImplementationTypeMismatch,
+        title: "Implementation type mismatch",
+        messageFormat: "Type '{0}' cannot be used as implementation for service '{1}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "The implementation type provided in a 'typeof' registration must implement or inherit from the service type. This will cause a runtime exception if not corrected.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI014: Root service provider not disposed.
+    /// </summary>
+    public static readonly DiagnosticDescriptor RootProviderNotDisposed = new(
+        id: DiagnosticIds.RootProviderNotDisposed,
+        title: "Root service provider not disposed",
+        messageFormat: "The root IServiceProvider created by 'BuildServiceProvider()' should be disposed",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The root service provider implements IDisposable and should be disposed to ensure that any disposable singletons are properly cleaned up.");
 }

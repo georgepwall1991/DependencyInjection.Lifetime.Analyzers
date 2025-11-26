@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-11-26
+
+### Added
+
+- **DI013**: New analyzer detecting implementation type mismatches in `typeof` registrations (e.g. `AddSingleton(typeof(IService), typeof(BadImpl))`).
+- **DI014**: New analyzer detecting undisposed root `IServiceProvider` instances created by `BuildServiceProvider()`.
+
 ## [1.3.0] - 2025-11-26
 
 ### Added

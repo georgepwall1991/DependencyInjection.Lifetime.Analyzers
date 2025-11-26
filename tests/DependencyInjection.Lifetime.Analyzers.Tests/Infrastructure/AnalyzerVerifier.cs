@@ -17,7 +17,10 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// </summary>
     private static readonly ReferenceAssemblies ReferenceAssembliesWithDi =
         ReferenceAssemblies.Net.Net60
-            .AddPackages([new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0")]);
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0")
+            ]);
 
     /// <summary>
     /// Verifies that the analyzer produces no diagnostics for the given source.

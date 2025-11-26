@@ -69,4 +69,7 @@ public static class DiagnosticIds
     /// DI012b: Service registered multiple times; later registration overrides earlier.
     /// </summary>
     public const string DuplicateRegistration = "DI012b";
+    public const string ConditionalRegistrationMisuse = "DI012";
+    public const string ImplementationTypeMismatch = "DI013";
+    public const string RootProviderNotDisposed = "DI014";
 }
