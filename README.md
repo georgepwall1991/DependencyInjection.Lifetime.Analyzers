@@ -47,7 +47,7 @@ The analyzers will automatically run during compilation and in your IDE.
 | [DI011](#di011-serviceprovider-injection)             | ServiceProvider injection             | Warning  | No       |
 | [DI012](#di012-conditional-registration-misuse)       | Conditional registration misuse       | Info     | No       |
 | [DI013](#di013-implementation-type-mismatch)          | Implementation type mismatch          | Error    | No       |
-| DI014(#di014-root-service-provider-not-disposed)    | Root service provider not disposed    | Warning  | Yes      |
+| [DI014](#di014-root-service-provider-not-disposed)    | Root service provider not disposed    | Warning  | Yes      |
 
 ---
 
