@@ -33,6 +33,9 @@ public static class OpenGenericExamples
 
         // GOOD: Open generic scoped with scoped dependency
         services.AddScoped(typeof(IGoodScopedRepository<>), typeof(GoodScopedRepository<>));
+
+        // GOOD: Open generic that is registered as Scoped and has Scoped dependencies
+        services.AddScoped(typeof(IGoodOpenGenericScoped<>), typeof(GoodOpenGenericScoped<>));
     }
 }
 
@@ -57,6 +60,11 @@ public interface IGoodScopedRepository<T>
     T? Get(int id);
 }
 
+public interface IGoodOpenGenericScoped<T>
+{
+    T? GetData();
+}
+
 /// <summary>
 /// ⚠️ BAD: Open generic singleton with scoped dependency.
 /// When Repository&lt;Customer&gt; is created as a singleton, the IScopedService
@@ -74,13 +82,17 @@ public class BadRepository<T> : IBadRepository<T>
 
     public T? Get(int id)
     {
+#pragma warning disable DI007 // Intentional use of service locator in sample
         _scopedService.DoWork();
+#pragma warning restore DI007
         return default;
     }
 
     public void Save(T entity)
     {
+#pragma warning disable DI007 // Intentional use of service locator in sample
         _scopedService.DoWork();
+#pragma warning restore DI007
     }
 }
 
@@ -100,7 +112,9 @@ public class BadRepositoryWithTransient<T> : IBadRepositoryWithTransient<T>
 
     public T? Get(int id)
     {
+#pragma warning disable DI007 // Intentional use of service locator in sample
         _transientService.Process();
+#pragma warning restore DI007
         return default;
     }
 }
@@ -140,7 +154,30 @@ public class GoodScopedRepository<T> : IGoodScopedRepository<T>
 
     public T? Get(int id)
     {
+#pragma warning disable DI007 // Intentional use of service locator in sample
         _scopedService.DoWork();
+#pragma warning restore DI007
+        return default;
+    }
+}
+
+/// <summary>
+/// ✅ GOOD: Open generic registered as Scoped, safely consuming a Scoped dependency.
+/// </summary>
+public class GoodOpenGenericScoped<T> : IGoodOpenGenericScoped<T>
+{
+    private readonly IScopedService _scopedService;
+
+    public GoodOpenGenericScoped(IScopedService scopedService)
+    {
+        _scopedService = scopedService;
+    }
+
+    public T? GetData()
+    {
+#pragma warning disable DI007 // Intentional use of service locator in sample
+        _scopedService.DoWork();
+#pragma warning restore DI007
         return default;
     }
 }

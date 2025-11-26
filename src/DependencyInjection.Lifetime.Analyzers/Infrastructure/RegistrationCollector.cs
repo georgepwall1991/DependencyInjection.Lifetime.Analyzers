@@ -97,8 +97,8 @@ public sealed class RegistrationCollector
             return;
         }
 
-        // Extract service and implementation types
-        var (serviceType, implementationType) = ExtractTypes(methodSymbol, invocation, semanticModel);
+        // Extract service, implementation types, and factory expression
+        var (serviceType, implementationType, factoryExpression) = ExtractTypes(methodSymbol, invocation, semanticModel);
         if (serviceType is null)
         {
             return;
@@ -115,13 +115,14 @@ public sealed class RegistrationCollector
             methodName);
         _orderedRegistrations.Add(orderedRegistration);
 
-        // Only store in main registrations dictionary if we have implementation type
+        // Store in main registrations dictionary if we have implementation type OR a factory
         // and this is not a TryAdd (TryAdd doesn't override existing registrations)
-        if (implementationType is not null && !isTryAdd)
+        if ((implementationType is not null || factoryExpression is not null) && !isTryAdd)
         {
             var registration = new ServiceRegistration(
                 serviceType,
                 implementationType,
+                factoryExpression,
                 lifetime.Value,
                 invocation.GetLocation());
 
@@ -192,20 +193,42 @@ public sealed class RegistrationCollector
         return methodName.StartsWith("TryAdd");
     }
 
-    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType) ExtractTypes(
+    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression) ExtractTypes(
         IMethodSymbol method,
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel)
     {
+        INamedTypeSymbol? serviceType = null;
+        INamedTypeSymbol? implementationType = null;
+        ExpressionSyntax? factoryExpression = null;
+
+        // Check for factory delegate in arguments
+        foreach (var arg in invocation.ArgumentList.Arguments)
+        {
+            if (arg.Expression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+            {
+                factoryExpression = arg.Expression;
+                break;
+            }
+        }
+
         // Pattern 1: Generic method AddXxx<TService>() or AddXxx<TService, TImplementation>()
         if (method.IsGenericMethod && method.TypeArguments.Length > 0)
         {
-            var serviceType = method.TypeArguments[0] as INamedTypeSymbol;
-            var implementationType = method.TypeArguments.Length > 1
-                ? method.TypeArguments[1] as INamedTypeSymbol
-                : serviceType;
+            serviceType = method.TypeArguments[0] as INamedTypeSymbol;
+            
+            if (method.TypeArguments.Length > 1)
+            {
+                implementationType = method.TypeArguments[1] as INamedTypeSymbol;
+            }
+            else if (factoryExpression is null)
+            {
+                // Only default to serviceType if NO factory is present.
+                // If factory is present, implementation is unknown (null).
+                implementationType = serviceType;
+            }
 
-            return (serviceType, implementationType);
+            return (serviceType, implementationType, factoryExpression);
         }
 
         // Pattern 2: Non-generic with Type parameters AddXxx(typeof(TService)) or AddXxx(typeof(TService), typeof(TImpl))
@@ -227,11 +250,20 @@ public sealed class RegistrationCollector
 
         if (typeofArgs.Count >= 1)
         {
-            var serviceType = typeofArgs[0];
-            var implementationType = typeofArgs.Count > 1 ? typeofArgs[1] : serviceType;
-            return (serviceType, implementationType);
+            serviceType = typeofArgs[0];
+            if (typeofArgs.Count > 1)
+            {
+                implementationType = typeofArgs[1];
+            }
+            else if (factoryExpression is null)
+            {
+                 // Only default to serviceType if NO factory is present
+                implementationType = serviceType;
+            }
+            
+            return (serviceType, implementationType, factoryExpression);
         }
 
-        return (null, null);
+        return (null, null, null);
     }
 }

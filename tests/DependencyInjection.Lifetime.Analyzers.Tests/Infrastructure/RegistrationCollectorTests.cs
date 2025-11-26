@@ -95,6 +95,7 @@ public class RegistrationCollectorTests
         Assert.Single(collector.Registrations);
         var registration = collector.Registrations.First();
         Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
         Assert.Equal("MyService", registration.ImplementationType.Name);
         Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
     }
@@ -251,6 +252,7 @@ public class RegistrationCollectorTests
         Assert.Single(collector.Registrations);
         var registration = collector.Registrations.First();
         Assert.Equal("MyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
         Assert.Equal("MyService", registration.ImplementationType.Name);
     }
 
@@ -280,6 +282,7 @@ public class RegistrationCollectorTests
         Assert.Single(collector.Registrations);
         var registration = collector.Registrations.First();
         Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
         Assert.Equal("MyService", registration.ImplementationType.Name);
     }
 
@@ -663,6 +666,7 @@ public class RegistrationCollectorTests
         // Only one registration in main dictionary (later overrides)
         Assert.Single(collector.Registrations);
         var registration = collector.Registrations.First();
+        Assert.NotNull(registration.ImplementationType);
         Assert.Equal("Service2", registration.ImplementationType.Name);
 
         // But ordered registrations has both

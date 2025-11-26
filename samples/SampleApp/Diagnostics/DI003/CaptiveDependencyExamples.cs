@@ -30,6 +30,14 @@ public static class CaptiveDependencyExamples
 
         // GOOD: Singleton with scope factory
         services.AddSingleton<GoodSingletonWithScopeFactory>();
+
+        // BAD: Singleton factory capturing scoped service (explicitly detected)
+        services.AddSingleton<BadSingletonWithFactoryScopedDependency>(sp => 
+            new BadSingletonWithFactoryScopedDependency(sp.GetRequiredService<IScopedService>()));
+
+        // GOOD: Singleton factory resolving another singleton (no captive dependency)
+        services.AddSingleton<GoodSingletonFactoryWithSingletonDependency>(sp =>
+            new GoodSingletonFactoryWithSingletonDependency(sp.GetRequiredService<ISingletonService>()));
     }
 }
 
@@ -48,6 +56,32 @@ public class BadSingletonWithScopedDependency
     }
 
     public void DoWork() => _scopedService.DoWork();
+}
+
+/// <summary>
+/// ⚠️ BAD: This singleton service captures a scoped dependency via factory.
+/// </summary>
+public class BadSingletonWithFactoryScopedDependency
+{
+    private readonly IScopedService _scopedService;
+
+    public BadSingletonWithFactoryScopedDependency(IScopedService scopedService)
+    {
+        _scopedService = scopedService;
+    }
+}
+
+/// <summary>
+/// ✅ GOOD: Singleton factory that resolves another singleton.
+/// </summary>
+public class GoodSingletonFactoryWithSingletonDependency
+{
+    private readonly ISingletonService _singletonService;
+
+    public GoodSingletonFactoryWithSingletonDependency(ISingletonService singletonService)
+    {
+        _singletonService = singletonService;
+    }
 }
 
 /// <summary>
@@ -95,8 +129,10 @@ public class GoodSingletonWithScopeFactory
 
     public void DoWork()
     {
+#pragma warning disable DI007 // Factory pattern - IServiceScopeFactory is allowed to resolve services
         using var scope = _scopeFactory.CreateScope();
         var scopedService = scope.ServiceProvider.GetRequiredService<IScopedService>();
         scopedService.DoWork();
+#pragma warning restore DI007
     }
 }

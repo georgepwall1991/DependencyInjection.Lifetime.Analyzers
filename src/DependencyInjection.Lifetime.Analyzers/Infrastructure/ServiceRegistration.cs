@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
@@ -13,9 +14,14 @@ public sealed class ServiceRegistration
     public INamedTypeSymbol ServiceType { get; }
 
     /// <summary>
-    /// Gets the implementation type (may be same as ServiceType for self-registrations).
+    /// Gets the implementation type. Null if this is a factory registration.
     /// </summary>
-    public INamedTypeSymbol ImplementationType { get; }
+    public INamedTypeSymbol? ImplementationType { get; }
+
+    /// <summary>
+    /// Gets the factory expression if this is a factory registration.
+    /// </summary>
+    public ExpressionSyntax? FactoryExpression { get; }
 
     /// <summary>
     /// Gets the lifetime of the registration.
@@ -32,12 +38,14 @@ public sealed class ServiceRegistration
     /// </summary>
     public ServiceRegistration(
         INamedTypeSymbol serviceType,
-        INamedTypeSymbol implementationType,
+        INamedTypeSymbol? implementationType,
+        ExpressionSyntax? factoryExpression,
         ServiceLifetime lifetime,
         Location location)
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
+        FactoryExpression = factoryExpression;
         Lifetime = lifetime;
         Location = location;
     }

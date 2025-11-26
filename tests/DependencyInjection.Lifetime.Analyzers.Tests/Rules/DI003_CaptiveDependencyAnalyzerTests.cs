@@ -312,4 +312,39 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     #endregion
+
+    #region Factory Registration Tests
+
+    [Fact]
+    public async Task SingletonCapturingScoped_ViaFactory_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp => new SingletonService(sp.GetRequiredService<IScopedService>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(17, 77, 17, 116)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    #endregion
 }

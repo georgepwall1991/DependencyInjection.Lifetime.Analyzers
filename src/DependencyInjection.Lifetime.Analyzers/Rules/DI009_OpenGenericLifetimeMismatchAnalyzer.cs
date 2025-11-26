@@ -59,6 +59,11 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 continue;
             }
 
+            if (registration.ImplementationType is null)
+            {
+                continue;
+            }
+
             // Check if this is an open generic type
             if (!registration.ImplementationType.IsGenericType ||
                 !registration.ImplementationType.IsUnboundGenericType)

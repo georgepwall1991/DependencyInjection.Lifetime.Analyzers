@@ -50,10 +50,12 @@ public class AsyncScopeExamples
     /// </summary>
     public async Task Good_CreateAsyncScope()
     {
+#pragma warning disable DI007 // Intentional use of IServiceProvider within a valid scope
         await using var scope = _scopeFactory.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<IScopedService>();
         await Task.Delay(100);
         service.DoWork();
+#pragma warning restore DI007
     }
 
     /// <summary>
@@ -61,9 +63,11 @@ public class AsyncScopeExamples
     /// </summary>
     public void Good_CreateScopeInSyncMethod()
     {
+#pragma warning disable DI007 // Intentional use of IServiceProvider within a valid scope
         using var scope = _scopeFactory.CreateScope();
         var service = scope.ServiceProvider.GetRequiredService<IScopedService>();
         service.DoWork();
+#pragma warning restore DI007
     }
 
     /// <summary>

@@ -59,6 +59,10 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         foreach (var registration in registrationCollector.Registrations)
         {
             var implementationType = registration.ImplementationType;
+            if (implementationType is null)
+            {
+                continue;
+            }
 
             // Skip factory classes (name ends with "Factory")
             if (IsFactoryClass(implementationType))

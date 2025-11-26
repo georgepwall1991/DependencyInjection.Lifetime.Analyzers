@@ -147,6 +147,10 @@ public class SingletonService : ISingletonService
         _scoped = scoped;
     }
 }
+
+// Also detected in factory registrations:
+services.AddSingleton<ISingletonService>(sp => 
+    new SingletonService(sp.GetRequiredService<IScopedService>())); // Detected!
 ```
 
 **The Solution:**
@@ -599,7 +603,6 @@ dotnet_diagnostic.DI007.severity = suggestion # Downgrade service locator to sug
 
 - **Compile-time only** - Runtime registrations cannot be analyzed
 - **Single compilation** - Cross-assembly registrations are not tracked
-- **Factory delegates** - Lambda registrations (`sp => ...`) have limited analysis
 
 ---
 
