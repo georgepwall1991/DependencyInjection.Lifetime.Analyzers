@@ -1,0 +1,532 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Linq;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace DependencyInjection.Lifetime.Analyzers.Rules;
+
+/// <summary>
+/// Analyzer that detects registered services with dependencies that are not registered.
+/// </summary>
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
+{
+    /// <inheritdoc />
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
+        ImmutableArray.Create(DiagnosticDescriptors.UnresolvableDependency);
+
+    /// <inheritdoc />
+    public override void Initialize(AnalysisContext context)
+    {
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
+        context.EnableConcurrentExecution();
+
+        context.RegisterCompilationStartAction(compilationContext =>
+        {
+            var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
+            if (registrationCollector is null)
+            {
+                return;
+            }
+
+            var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
+            var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext =>
+                {
+                    registrationCollector.AnalyzeInvocation(
+                        (InvocationExpressionSyntax)syntaxContext.Node,
+                        syntaxContext.SemanticModel);
+
+                    semanticModelsByTree.TryAdd(
+                        syntaxContext.SemanticModel.SyntaxTree,
+                        syntaxContext.SemanticModel);
+                },
+                SyntaxKind.InvocationExpression);
+
+            compilationContext.RegisterCompilationEndAction(
+                endContext => AnalyzeRegistrations(
+                    endContext,
+                    registrationCollector,
+                    wellKnownTypes,
+                    semanticModelsByTree));
+        });
+    }
+
+    private static void AnalyzeRegistrations(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes? wellKnownTypes,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        foreach (var registration in registrationCollector.Registrations)
+        {
+            if (registration.ImplementationType is not null)
+            {
+                AnalyzeConstructorRegistration(context, registrationCollector, registration, wellKnownTypes);
+            }
+
+            if (registration.FactoryExpression is not null)
+            {
+                AnalyzeFactoryRegistration(
+                    context,
+                    registrationCollector,
+                    registration,
+                    wellKnownTypes,
+                    semanticModelsByTree);
+            }
+        }
+    }
+
+    private static void AnalyzeConstructorRegistration(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        ServiceRegistration registration,
+        WellKnownTypes? wellKnownTypes)
+    {
+        if (!IsServiceImplementationCompatible(registration.ServiceType, registration.ImplementationType!))
+        {
+            // DI013 handles incompatible service/implementation pairs separately.
+            return;
+        }
+
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(registration.ImplementationType!);
+
+        foreach (var constructor in constructors)
+        {
+            foreach (var parameter in constructor.Parameters)
+            {
+                if (ShouldSkipDependencyCheck(parameter.Type, parameter, wellKnownTypes))
+                {
+                    continue;
+                }
+
+                var (key, isKeyed) = GetServiceKey(parameter);
+                if (IsDependencyRegistered(parameter.Type, key, isKeyed, registrationCollector))
+                {
+                    continue;
+                }
+
+                var diagnostic = Diagnostic.Create(
+                    DiagnosticDescriptors.UnresolvableDependency,
+                    registration.Location,
+                    registration.ServiceType.Name,
+                    FormatDependencyName(parameter.Type, key, isKeyed));
+
+                context.ReportDiagnostic(diagnostic);
+            }
+        }
+    }
+
+    private static void AnalyzeFactoryRegistration(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        ServiceRegistration registration,
+        WellKnownTypes? wellKnownTypes,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        if (!semanticModelsByTree.TryGetValue(registration.FactoryExpression!.SyntaxTree, out var semanticModel))
+        {
+            return;
+        }
+
+        var invocations = registration.FactoryExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>();
+
+        foreach (var invocation in invocations)
+        {
+            if (!TryGetRequiredResolutionInfo(
+                    invocation,
+                    semanticModel,
+                    out var dependencyType,
+                    out var key,
+                    out var isKeyed))
+            {
+                continue;
+            }
+
+            if (ShouldSkipDependencyCheck(dependencyType, parameter: null, wellKnownTypes))
+            {
+                continue;
+            }
+
+            if (IsDependencyRegistered(dependencyType, key, isKeyed, registrationCollector))
+            {
+                continue;
+            }
+
+            var diagnostic = Diagnostic.Create(
+                DiagnosticDescriptors.UnresolvableDependency,
+                invocation.GetLocation(),
+                registration.ServiceType.Name,
+                FormatDependencyName(dependencyType, key, isKeyed));
+
+            context.ReportDiagnostic(diagnostic);
+        }
+    }
+
+    private static bool TryGetRequiredResolutionInfo(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out ITypeSymbol dependencyType,
+        out object? key,
+        out bool isKeyed)
+    {
+        dependencyType = null!;
+        key = null;
+        isKeyed = false;
+
+        var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+        if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
+        {
+            return false;
+        }
+
+        if (!IsRequiredResolutionMethod(methodSymbol))
+        {
+            return false;
+        }
+
+        if (!TryGetResolvedDependencyType(invocation, methodSymbol, semanticModel, out dependencyType))
+        {
+            return false;
+        }
+
+        isKeyed = IsKeyedRequiredResolutionMethod(methodSymbol);
+        if (!isKeyed)
+        {
+            return true;
+        }
+
+        return TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, out key);
+    }
+
+    private static bool IsRequiredResolutionMethod(IMethodSymbol methodSymbol)
+    {
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        if (sourceMethod.Name is not ("GetRequiredService" or "GetRequiredKeyedService"))
+        {
+            return false;
+        }
+
+        if (sourceMethod.IsExtensionMethod &&
+            sourceMethod.Parameters.Length > 0 &&
+            sourceMethod.Parameters[0].Type.Name is "IServiceProvider" or "IKeyedServiceProvider")
+        {
+            return true;
+        }
+
+        if (sourceMethod.ContainingType?.Name == "IKeyedServiceProvider" &&
+            sourceMethod.Name == "GetRequiredKeyedService")
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsKeyedRequiredResolutionMethod(IMethodSymbol methodSymbol)
+    {
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        return sourceMethod.Name == "GetRequiredKeyedService";
+    }
+
+    private static bool TryGetResolvedDependencyType(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel,
+        out ITypeSymbol dependencyType)
+    {
+        dependencyType = null!;
+
+        if (methodSymbol.IsGenericMethod && methodSymbol.TypeArguments.Length > 0)
+        {
+            dependencyType = methodSymbol.TypeArguments[0];
+            return true;
+        }
+
+        var typeExpression =
+            GetInvocationArgumentExpression(invocation, methodSymbol, "serviceType") ??
+            GetInvocationArgumentExpression(invocation, methodSymbol, "type");
+
+        if (typeExpression is null && invocation.ArgumentList.Arguments.Count > 0)
+        {
+            typeExpression = invocation.ArgumentList.Arguments[0].Expression;
+        }
+
+        if (typeExpression is not TypeOfExpressionSyntax typeOfExpression)
+        {
+            return false;
+        }
+
+        var typeInfo = semanticModel.GetTypeInfo(typeOfExpression.Type);
+        if (typeInfo.Type is null)
+        {
+            return false;
+        }
+
+        dependencyType = typeInfo.Type;
+        return true;
+    }
+
+    private static ExpressionSyntax? GetInvocationArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        string parameterName)
+    {
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.Text == parameterName)
+            {
+                return argument.Expression;
+            }
+        }
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        var isReducedExtension = methodSymbol.ReducedFrom is not null;
+
+        for (var i = 0; i < sourceMethod.Parameters.Length; i++)
+        {
+            if (sourceMethod.Parameters[i].Name != parameterName)
+            {
+                continue;
+            }
+
+            var argumentIndex = isReducedExtension ? i - 1 : i;
+            if (argumentIndex >= 0 && argumentIndex < invocation.ArgumentList.Arguments.Count)
+            {
+                return invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryExtractKeyFromResolution(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel,
+        out object? key)
+    {
+        key = null;
+
+        var keyExpression =
+            GetInvocationArgumentExpression(invocation, methodSymbol, "serviceKey") ??
+            GetInvocationArgumentExpression(invocation, methodSymbol, "key");
+
+        if (keyExpression is null && invocation.ArgumentList.Arguments.Count >= 2)
+        {
+            keyExpression = invocation.ArgumentList.Arguments[1].Expression;
+        }
+
+        if (keyExpression is null)
+        {
+            return false;
+        }
+
+        var constantValue = semanticModel.GetConstantValue(keyExpression);
+        if (!constantValue.HasValue)
+        {
+            return false;
+        }
+
+        key = constantValue.Value;
+        return true;
+    }
+
+    private static bool ShouldSkipDependencyCheck(
+        ITypeSymbol dependencyType,
+        IParameterSymbol? parameter,
+        WellKnownTypes? wellKnownTypes)
+    {
+        if (parameter?.HasExplicitDefaultValue == true)
+        {
+            return true;
+        }
+
+        if (wellKnownTypes is not null &&
+            wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType))
+        {
+            return true;
+        }
+
+        return IsFrameworkProvidedDependency(dependencyType);
+    }
+
+    private static bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
+    {
+        if (dependencyType is not INamedTypeSymbol namedType)
+        {
+            return false;
+        }
+
+        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
+
+        if (namedType.Name == "IEnumerable" &&
+            namespaceName == "System.Collections.Generic" &&
+            namedType.IsGenericType)
+        {
+            return true;
+        }
+
+        if (namedType.Name == "IConfiguration" &&
+            namespaceName == "Microsoft.Extensions.Configuration")
+        {
+            return true;
+        }
+
+        if (namedType.Name == "ILoggerFactory" &&
+            namespaceName == "Microsoft.Extensions.Logging")
+        {
+            return true;
+        }
+
+        if (namedType.Name is "IHostEnvironment" or "IWebHostEnvironment" &&
+            (namespaceName == "Microsoft.Extensions.Hosting" ||
+             namespaceName == "Microsoft.AspNetCore.Hosting"))
+        {
+            return true;
+        }
+
+        if (namedType.Name == "ILogger" &&
+            namespaceName == "Microsoft.Extensions.Logging")
+        {
+            return true;
+        }
+
+        if (namedType.IsGenericType &&
+            namedType.ConstructedFrom.Name == "ILogger" &&
+            namedType.ConstructedFrom.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.Logging")
+        {
+            return true;
+        }
+
+        if (namedType.Name is "IOptions" or "IOptionsSnapshot" or "IOptionsMonitor" &&
+            namespaceName == "Microsoft.Extensions.Options")
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsDependencyRegistered(
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed,
+        RegistrationCollector registrationCollector)
+    {
+        if (registrationCollector.GetLifetime(dependencyType, key, isKeyed).HasValue)
+        {
+            return true;
+        }
+
+        if (dependencyType is not INamedTypeSymbol namedType ||
+            !namedType.IsGenericType ||
+            namedType.IsUnboundGenericType)
+        {
+            return false;
+        }
+
+        var openGenericType = namedType.ConstructUnboundGenericType();
+        return registrationCollector.GetLifetime(openGenericType, key, isKeyed).HasValue;
+    }
+
+    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
+    {
+        foreach (var attribute in parameter.GetAttributes())
+        {
+            if (attribute.AttributeClass?.Name == "FromKeyedServicesAttribute" &&
+                attribute.AttributeClass.ContainingNamespace.ToDisplayString() ==
+                "Microsoft.Extensions.DependencyInjection")
+            {
+                return (attribute.ConstructorArguments.Length > 0
+                    ? attribute.ConstructorArguments[0].Value
+                    : null, true);
+            }
+        }
+
+        return (null, false);
+    }
+
+    private static string FormatDependencyName(ITypeSymbol dependencyType, object? key, bool isKeyed)
+    {
+        var typeName = dependencyType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        if (!isKeyed)
+        {
+            return typeName;
+        }
+
+        return $"{typeName} (key: {key ?? "null"})";
+    }
+
+    private static bool IsServiceImplementationCompatible(
+        INamedTypeSymbol serviceType,
+        INamedTypeSymbol implementationType)
+    {
+        if (SymbolEqualityComparer.Default.Equals(serviceType, implementationType))
+        {
+            return true;
+        }
+
+        if (serviceType.IsUnboundGenericType)
+        {
+            if (!implementationType.IsGenericType)
+            {
+                return false;
+            }
+
+            var originalService = serviceType.OriginalDefinition;
+            if (SymbolEqualityComparer.Default.Equals(implementationType.OriginalDefinition, originalService))
+            {
+                return true;
+            }
+
+            foreach (var iface in implementationType.OriginalDefinition.AllInterfaces)
+            {
+                if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService))
+                {
+                    return true;
+                }
+            }
+
+            var currentBaseType = implementationType.OriginalDefinition.BaseType;
+            while (currentBaseType is not null)
+            {
+                if (SymbolEqualityComparer.Default.Equals(currentBaseType.OriginalDefinition, originalService))
+                {
+                    return true;
+                }
+
+                currentBaseType = currentBaseType.BaseType;
+            }
+
+            return false;
+        }
+
+        foreach (var iface in implementationType.AllInterfaces)
+        {
+            if (SymbolEqualityComparer.Default.Equals(iface, serviceType))
+            {
+                return true;
+            }
+        }
+
+        var baseType = implementationType.BaseType;
+        while (baseType is not null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(baseType, serviceType))
+            {
+                return true;
+            }
+
+            baseType = baseType.BaseType;
+        }
+
+        return false;
+    }
+}
