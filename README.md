@@ -30,6 +30,11 @@ dotnet add package DependencyInjection.Lifetime.Analyzers
 
 The analyzers will automatically run during compilation and in your IDE.
 
+## Samples
+
+- `samples/SampleApp`: One diagnostics folder per rule (`DI001` through `DI015`) for quick IDE/build inspection.
+- `samples/DI015InAction`: Focused runnable sample that shows DI015 failures and the corrected registration path.
+
 ## The Rules
 
 | ID                                                    | Title                                 | Severity | Code Fix |
@@ -662,6 +667,8 @@ services.AddSingleton<IMyService, MyService>();
 ```
 
 **Code Fix:** No - Requires registering the dependency or changing constructor/factory design
+
+See a runnable end-to-end example in `samples/DI015InAction`.
 
 ---
 
