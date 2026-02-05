@@ -12,7 +12,7 @@ public static class ConstructorSelection
     /// <summary>
     /// Gets constructors to analyze for DI diagnostics.
     /// Prefers constructors marked with <c>[ActivatorUtilitiesConstructor]</c>;
-    /// otherwise falls back to the "greediest" accessible constructors.
+    /// otherwise analyzes all accessible constructors.
     /// </summary>
     public static IEnumerable<IMethodSymbol> GetConstructorsToAnalyze(INamedTypeSymbol implementationType)
     {
@@ -34,8 +34,7 @@ public static class ConstructorSelection
             return attributed;
         }
 
-        var maxParameterCount = candidates.Max(c => c.Parameters.Length);
-        return candidates.Where(c => c.Parameters.Length == maxParameterCount);
+        return candidates;
     }
 
     private static bool HasActivatorUtilitiesConstructorAttribute(IMethodSymbol constructor)

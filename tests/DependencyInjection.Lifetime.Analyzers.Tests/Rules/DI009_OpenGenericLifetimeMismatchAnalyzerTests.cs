@@ -79,6 +79,43 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
                 .WithArguments("Repository", "transient", "ITransientService"));
     }
 
+    [Fact]
+    public async Task OpenGenericSingleton_WithUnresolvableGreedyConstructor_UsesCaptiveFallback_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IUnregisteredDependency { }
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IUnregisteredDependency missing, ISingletonDependency singleton) { }
+
+                public Repository(IScopedDependency scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(23, 9)
+                .WithArguments("Repository", "scoped", "IScopedDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -245,6 +282,43 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_WithActivatorUtilitiesConstructor_OnCaptiveConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(ISingletonDependency dep) { }
+
+                [ActivatorUtilitiesConstructor]
+                public Repository(IScopedDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(23, 9)
+                .WithArguments("Repository", "scoped", "IScopedDependency"));
     }
 
     #endregion

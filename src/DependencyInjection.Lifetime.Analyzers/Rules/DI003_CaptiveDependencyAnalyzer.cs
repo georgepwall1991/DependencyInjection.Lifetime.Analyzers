@@ -200,12 +200,21 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        for (var i = 0; i < methodSymbol.Parameters.Length; i++)
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        var isReducedExtension = methodSymbol.ReducedFrom is not null;
+
+        for (var i = 0; i < sourceMethod.Parameters.Length; i++)
         {
-            if (methodSymbol.Parameters[i].Name == parameterName &&
-                i < invocation.ArgumentList.Arguments.Count)
+            if (sourceMethod.Parameters[i].Name != parameterName)
             {
-                return invocation.ArgumentList.Arguments[i].Expression;
+                continue;
+            }
+
+            // Reduced extension method calls omit the receiver argument from the invocation argument list.
+            var argumentIndex = isReducedExtension ? i - 1 : i;
+            if (argumentIndex >= 0 && argumentIndex < invocation.ArgumentList.Arguments.Count)
+            {
+                return invocation.ArgumentList.Arguments[argumentIndex].Expression;
             }
         }
 
