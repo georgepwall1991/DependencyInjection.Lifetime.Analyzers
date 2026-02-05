@@ -3,7 +3,6 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Testing.Verifiers;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
@@ -50,9 +49,9 @@ public static class AnalyzerVerifier<TAnalyzer>
         return new DiagnosticResult(descriptor);
     }
 
-    private static CSharpAnalyzerTest<TAnalyzer, XUnitVerifier> CreateTest(string source)
+    private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(string source)
     {
-        var test = new CSharpAnalyzerTest<TAnalyzer, XUnitVerifier>
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
             TestCode = source,
             ReferenceAssemblies = ReferenceAssembliesWithDi

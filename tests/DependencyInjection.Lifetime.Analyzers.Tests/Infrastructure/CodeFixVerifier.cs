@@ -4,7 +4,6 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
-using Microsoft.CodeAnalysis.Testing.Verifiers;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
@@ -162,9 +161,9 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         await test.RunAsync();
     }
 
-    private static CSharpCodeFixTest<TAnalyzer, TCodeFix, XUnitVerifier> CreateTest(string source, string fixedSource)
+    private static CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier> CreateTest(string source, string fixedSource)
     {
-        var test = new CSharpCodeFixTest<TAnalyzer, TCodeFix, XUnitVerifier>
+        var test = new CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier>
         {
             TestCode = source,
             FixedCode = fixedSource,

@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 ### Prerequisites
 
-- .NET 8.0 SDK or later
+- .NET 10.0 SDK (the repository includes a `global.json` pin)
 - Visual Studio 2022, JetBrains Rider, or VS Code with C# extension
 
 ### Building

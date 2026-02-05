@@ -65,16 +65,10 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var constructors = implementationType.Constructors;
+            var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
 
             foreach (var constructor in constructors)
             {
-                // Skip static and private constructors
-                if (constructor.IsStatic || constructor.DeclaredAccessibility == Accessibility.Private)
-                {
-                    continue;
-                }
-
                 // Count meaningful dependencies (exclude primitives, ILogger, CancellationToken, etc.)
                 var dependencyCount = CountMeaningfulDependencies(constructor, wellKnownTypes);
 

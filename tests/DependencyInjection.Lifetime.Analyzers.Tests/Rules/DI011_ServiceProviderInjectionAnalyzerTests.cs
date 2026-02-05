@@ -135,6 +135,40 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 .WithArguments("MyService", "IServiceProvider"));
     }
 
+    [Fact]
+    public async Task Constructor_WithUnresolvableGreedyConstructor_AndServiceProviderFallback_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IUnregisteredDependency { }
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IUnregisteredDependency missing, IDependency dependency) { }
+
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(20, 9)
+                .WithArguments("MyService", "IServiceProvider"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (Allowed Cases)
@@ -278,6 +312,69 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
 
         // Normal dependencies don't trigger
         await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithActivatorUtilitiesConstructor_UsesAttributedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                [ActivatorUtilitiesConstructor]
+                public MyService(IDependency dependency) { }
+
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithActivatorUtilitiesConstructor_OnServiceProviderConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dependency) { }
+
+                [ActivatorUtilitiesConstructor]
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(20, 9)
+                .WithArguments("MyService", "IServiceProvider"));
     }
 
     [Fact]

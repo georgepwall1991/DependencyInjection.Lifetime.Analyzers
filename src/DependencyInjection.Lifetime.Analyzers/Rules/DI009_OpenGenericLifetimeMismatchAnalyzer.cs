@@ -73,15 +73,10 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
 
             // For open generics, we need to analyze the generic type definition's constructor
             var genericDefinition = registration.ImplementationType.OriginalDefinition;
-            var constructors = genericDefinition.Constructors;
+            var constructors = ConstructorSelection.GetConstructorsToAnalyze(genericDefinition);
 
             foreach (var constructor in constructors)
             {
-                if (constructor.IsStatic || constructor.DeclaredAccessibility == Accessibility.Private)
-                {
-                    continue;
-                }
-
                 foreach (var parameter in constructor.Parameters)
                 {
                     var parameterType = GetNonGenericTypeFromParameter(parameter.Type);

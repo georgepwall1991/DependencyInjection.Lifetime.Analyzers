@@ -160,6 +160,43 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .WithArguments("SingletonService", "scoped", "IScopedService2"));
     }
 
+    [Fact]
+    public async Task SingletonWithUnresolvableGreedyConstructor_AndCaptiveFallbackConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IUnregisteredDependency { }
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IUnregisteredDependency missing, ISingletonDependency singleton) { }
+
+                public SingletonService(IScopedDependency scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(23, 9)
+                .WithArguments("SingletonService", "scoped", "IScopedDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (False Positives)
@@ -344,6 +381,175 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
                 .WithSpan(17, 77, 17, 116)
                 .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingScoped_ViaFactory_NonGenericGetService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp => new SingletonService((IScopedService)sp.GetService(typeof(IScopedService))!));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(17, 93)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingScoped_ViaFactory_NonGenericGetRequiredService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp => new SingletonService((IScopedService)sp.GetRequiredService(typeof(IScopedService))));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(17, 93)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingScoped_ViaFactory_WithActivatorUtilitiesAttribute_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                [ActivatorUtilitiesConstructor]
+                public SingletonService(ISingletonDependency singleton) { }
+
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService(sp.GetRequiredService<IScopedService>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(24, 40)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonWithActivatorUtilitiesConstructor_UsesAttributedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                [ActivatorUtilitiesConstructor]
+                public SingletonService(ISingletonDependency dep) { }
+
+                public SingletonService(IScopedDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonWithActivatorUtilitiesConstructor_OnCaptiveConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(ISingletonDependency dep) { }
+
+                [ActivatorUtilitiesConstructor]
+                public SingletonService(IScopedDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(23, 9)
+                .WithArguments("SingletonService", "scoped", "IScopedDependency"));
     }
 
     #endregion
