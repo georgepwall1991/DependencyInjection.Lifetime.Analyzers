@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-02-05
+
 ### Added
 
 - **DI015**: New analyzer detecting registered services that depend on unregistered dependencies in constructor injection and `GetRequiredService` factory paths, including keyed and open-generic checks.

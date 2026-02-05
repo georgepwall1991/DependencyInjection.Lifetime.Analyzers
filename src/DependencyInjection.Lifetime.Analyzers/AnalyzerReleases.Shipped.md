@@ -27,3 +27,10 @@ DI012 | DependencyInjection | Info | TryAdd registration will be ignored because
 DI012b | DependencyInjection | Info | Service registered multiple times; later registration overrides earlier
 DI013 | DependencyInjection | Error | Implementation type does not implement service type (runtime exception)
 DI014 | DependencyInjection | Warning | Root IServiceProvider created by BuildServiceProvider() is not disposed
+
+## Release 1.10.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI015 | DependencyInjection | Warning | Registered service depends on unregistered dependency (constructor/factory)
