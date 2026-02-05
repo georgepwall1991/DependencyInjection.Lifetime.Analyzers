@@ -1,26 +1,26 @@
 using Microsoft.Extensions.DependencyInjection;
 
-Console.WriteLine("DI015 In Action: Unresolvable Dependency");
-Console.WriteLine("========================================");
+Console.WriteLine(@"DI015 In Action: Unresolvable Dependency");
+Console.WriteLine(@"========================================");
 Console.WriteLine();
 
-Console.WriteLine("Broken configuration (expected runtime failures):");
-using (var provider = Di015DemoRegistrations.BuildBrokenProvider())
+Console.WriteLine(@"Broken configuration (expected runtime failures):");
+using (ServiceProvider provider = Di015DemoRegistrations.BuildBrokenProvider())
 {
     TryResolve<BrokenInvoiceScheduler>(provider);
     TryResolve<BrokenKeyedNotificationRunner>(provider);
 }
 
 Console.WriteLine();
-Console.WriteLine("Fixed configuration (expected successful resolution):");
-using (var provider = Di015DemoRegistrations.BuildFixedProvider())
+Console.WriteLine(@"Fixed configuration (expected successful resolution):");
+using (ServiceProvider provider = Di015DemoRegistrations.BuildFixedProvider())
 {
-    var scheduler = TryResolve<FixedInvoiceScheduler>(provider);
-    var runner = TryResolve<FixedKeyedNotificationRunner>(provider);
+    FixedInvoiceScheduler? scheduler = TryResolve<FixedInvoiceScheduler>(provider);
+    FixedKeyedNotificationRunner? runner = TryResolve<FixedKeyedNotificationRunner>(provider);
 
     if (scheduler is not null)
     {
-        Console.WriteLine($"  Next invoice run: {scheduler.GetNextRunUtc()}");
+        Console.WriteLine($@"  Next invoice run: {scheduler.GetNextRunUtc()}");
     }
 
     runner?.Run();
@@ -31,18 +31,18 @@ Console.WriteLine();
 #pragma warning disable DI007
 static T? TryResolve<T>(IServiceProvider provider) where T : class
 {
-    var name = typeof(T).Name;
+    string name = typeof(T).Name;
 
     try
     {
-        var resolved = provider.GetRequiredService<T>();
-        Console.WriteLine($"  OK: {name}");
+        T resolved = provider.GetRequiredService<T>();
+        Console.WriteLine($@"  OK: {name}");
         return resolved;
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"  FAIL: {name}");
-        Console.WriteLine($"    {ex.GetType().Name}: {ex.Message}");
+        Console.WriteLine($@"  FAIL: {name}");
+        Console.WriteLine($@"    {ex.GetType().Name}: {ex.Message}");
         return null;
     }
 }
@@ -108,19 +108,9 @@ public sealed class BrokenInvoiceScheduler
     }
 }
 
-public sealed class FixedInvoiceScheduler
+public sealed class FixedInvoiceScheduler(IClock clock)
 {
-    private readonly IClock _clock;
-
-    public FixedInvoiceScheduler(IClock clock)
-    {
-        _clock = clock;
-    }
-
-    public string GetNextRunUtc()
-    {
-        return _clock.UtcNow.AddHours(1).ToString("O");
-    }
+    public string GetNextRunUtc() => clock.UtcNow.AddHours(1).ToString("O");
 }
 
 public interface INotificationSender
@@ -134,10 +124,7 @@ public interface IBrokenNotificationSender
 
 public sealed class ConsoleNotificationSender : INotificationSender
 {
-    public void Send(string message)
-    {
-        Console.WriteLine($"  Notification sent: {message}");
-    }
+    public void Send(string message) => Console.WriteLine($"  Notification sent: {message}");
 }
 
 public sealed class BrokenKeyedNotificationRunner
@@ -147,17 +134,7 @@ public sealed class BrokenKeyedNotificationRunner
     }
 }
 
-public sealed class FixedKeyedNotificationRunner
+public sealed class FixedKeyedNotificationRunner(INotificationSender sender)
 {
-    private readonly INotificationSender _sender;
-
-    public FixedKeyedNotificationRunner(INotificationSender sender)
-    {
-        _sender = sender;
-    }
-
-    public void Run()
-    {
-        _sender.Send("Invoices scheduled");
-    }
+    public void Run() => sender.Send("Invoices scheduled");
 }

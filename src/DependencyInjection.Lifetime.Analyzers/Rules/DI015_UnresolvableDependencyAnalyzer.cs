@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -66,11 +67,6 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
     {
         foreach (var registration in registrationCollector.Registrations)
         {
-            if (registration.ImplementationType is not null)
-            {
-                AnalyzeConstructorRegistration(context, registrationCollector, registration, wellKnownTypes);
-            }
-
             if (registration.FactoryExpression is not null)
             {
                 AnalyzeFactoryRegistration(
@@ -79,6 +75,13 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     registration,
                     wellKnownTypes,
                     semanticModelsByTree);
+
+                continue;
+            }
+
+            if (registration.ImplementationType is not null)
+            {
+                AnalyzeConstructorRegistration(context, registrationCollector, registration, wellKnownTypes);
             }
         }
     }
@@ -95,10 +98,20 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var constructors = ConstructorSelection.GetConstructorsToAnalyze(registration.ImplementationType!);
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(registration.ImplementationType!).ToArray();
+        if (constructors.Length == 0)
+        {
+            return;
+        }
+
+        List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? bestMissingDependencies = null;
+        var bestMissingCount = int.MaxValue;
+        var bestParameterCount = -1;
 
         foreach (var constructor in constructors)
         {
+            var missingDependencies = new List<(ITypeSymbol Type, object? Key, bool IsKeyed)>();
+
             foreach (var parameter in constructor.Parameters)
             {
                 if (ShouldSkipDependencyCheck(parameter.Type, parameter, wellKnownTypes))
@@ -112,14 +125,39 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                var diagnostic = Diagnostic.Create(
-                    DiagnosticDescriptors.UnresolvableDependency,
-                    registration.Location,
-                    registration.ServiceType.Name,
-                    FormatDependencyName(parameter.Type, key, isKeyed));
-
-                context.ReportDiagnostic(diagnostic);
+                missingDependencies.Add((parameter.Type, key, isKeyed));
             }
+
+            // If any constructor is fully resolvable, DI can activate the service.
+            if (missingDependencies.Count == 0)
+            {
+                return;
+            }
+
+            if (missingDependencies.Count < bestMissingCount ||
+                (missingDependencies.Count == bestMissingCount &&
+                 constructor.Parameters.Length > bestParameterCount))
+            {
+                bestMissingDependencies = missingDependencies;
+                bestMissingCount = missingDependencies.Count;
+                bestParameterCount = constructor.Parameters.Length;
+            }
+        }
+
+        if (bestMissingDependencies is null)
+        {
+            return;
+        }
+
+        foreach (var missingDependency in bestMissingDependencies)
+        {
+            var diagnostic = Diagnostic.Create(
+                DiagnosticDescriptors.UnresolvableDependency,
+                registration.Location,
+                registration.ServiceType.Name,
+                FormatDependencyName(missingDependency.Type, missingDependency.Key, missingDependency.IsKeyed));
+
+            context.ReportDiagnostic(diagnostic);
         }
     }
 

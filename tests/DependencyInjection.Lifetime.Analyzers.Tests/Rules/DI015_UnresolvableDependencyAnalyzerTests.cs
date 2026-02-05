@@ -235,6 +235,36 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMyDependency (key: blue)"));
     }
 
+    [Fact]
+    public async Task FactoryOverload_WithImplementationTypeAndMissingGetRequiredServiceDependency_ReportsSingleDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>(
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(49, 33)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -257,6 +287,34 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 public void ConfigureServices(IServiceCollection services)
                 {
                     services.AddScoped<IMyDependency, MyDependency>();
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithResolvableAlternativeConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRegisteredDependency { }
+            public class RegisteredDependency : IRegisteredDependency { }
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency missing) { }
+                public MyService(IRegisteredDependency registered) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IRegisteredDependency, RegisteredDependency>();
                     services.AddSingleton<IMyService, MyService>();
                 }
             }

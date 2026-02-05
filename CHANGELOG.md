@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DI015**: New analyzer detecting registered services that depend on unregistered dependencies in constructor injection and `GetRequiredService` factory paths, including keyed and open-generic checks.
 - **Samples**: Added `samples/DI015InAction`, a dedicated runnable sample showing broken and fixed DI015 registration patterns.
 
+### Changed
+
+- **DI015**: Reduced false positives for multi-constructor services by only reporting when no constructor is fully resolvable, and avoided duplicate reports for factory registrations that include implementation type metadata.
+
 ## [1.9.0] - 2026-02-05
 
 ### Fixed
