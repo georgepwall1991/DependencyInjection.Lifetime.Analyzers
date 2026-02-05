@@ -102,8 +102,9 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 return true;
             }
 
-            // using (var provider = ...) { }
-            if (parent is UsingStatementSyntax)
+            // using (var provider = ...) { } OR using (services.BuildServiceProvider()) { }
+            if (parent is UsingStatementSyntax usingStatement &&
+                IsUsingStatementResource(syntax, usingStatement))
             {
                 return true;
             }
@@ -126,6 +127,23 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             }
 
             parent = parent.Parent;
+        }
+
+        return false;
+    }
+
+    private static bool IsUsingStatementResource(SyntaxNode invocationSyntax, UsingStatementSyntax usingStatement)
+    {
+        if (usingStatement.Declaration is { } declaration &&
+            declaration.Span.Contains(invocationSyntax.Span))
+        {
+            return true;
+        }
+
+        if (usingStatement.Expression is { } expression &&
+            expression.Span.Contains(invocationSyntax.Span))
+        {
+            return true;
         }
 
         return false;

@@ -281,6 +281,35 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task Constructor_WithActivatorUtilitiesConstructor_UsesAttributedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                [ActivatorUtilitiesConstructor]
+                public MyService(IDependency dependency) { }
+
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task UnregisteredService_NoDiagnostic()
     {
         var source = Usings + """

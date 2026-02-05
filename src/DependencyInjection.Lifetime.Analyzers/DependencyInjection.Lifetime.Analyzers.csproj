@@ -8,6 +8,8 @@
     <IsRoslynComponent>true</IsRoslynComponent>
     <RootNamespace>DependencyInjection.Lifetime.Analyzers</RootNamespace>
     <AssemblyName>DependencyInjection.Lifetime.Analyzers</AssemblyName>
+    <!-- RS1038 is expected for combined analyzer+code-fix assemblies that reference Workspaces. -->
+    <NoWarn>$(NoWarn);RS1038</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup>

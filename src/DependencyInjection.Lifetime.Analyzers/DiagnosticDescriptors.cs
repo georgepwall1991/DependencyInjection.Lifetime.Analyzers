@@ -39,11 +39,11 @@ public static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor CaptiveDependency = new(
         id: DiagnosticIds.CaptiveDependency,
         title: "Captive dependency detected",
-        messageFormat: "Singleton '{0}' captures {1} dependency '{2}'",
+        messageFormat: "Service '{0}' captures {1} dependency '{2}'",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "A singleton service should not depend on scoped or transient services. The captured service will live for the entire application lifetime, which can cause incorrect behavior, memory leaks, or concurrency issues.",
+        description: "A longer-lived service should not depend on shorter-lived services. Capturing shorter-lived services can cause incorrect behavior, memory leaks, or concurrency issues.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>

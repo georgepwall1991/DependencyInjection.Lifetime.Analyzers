@@ -165,10 +165,12 @@ public class DI001_ScopeDisposalAnalyzerTests
             }
             """;
 
-        // KNOWN LIMITATION: The analyzer currently doesn't detect scopes created
-        // inside using blocks. This is a known gap to be addressed in a future release.
-        // For now, document that this scenario is not detected.
-        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithLocation(17, 30)
+                .WithArguments("CreateScope"));
     }
 
     #endregion

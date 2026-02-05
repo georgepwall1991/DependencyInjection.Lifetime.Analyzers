@@ -78,10 +78,19 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
         // Scan for GetService/GetRequiredService calls within the factory
         var invocations = factory.DescendantNodes().OfType<InvocationExpressionSyntax>();
-        
+        #pragma warning disable RS1030
+        var semanticModel = context.Compilation.GetSemanticModel(factory.SyntaxTree);
+        #pragma warning restore RS1030
+
         foreach (var invocation in invocations)
         {
-            var methodName = GetMethodName(invocation);
+            var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+            if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
+            {
+                continue;
+            }
+
+            var methodName = methodSymbol.Name;
             bool isKeyedResolution = methodName == "GetKeyedService" || methodName == "GetRequiredKeyedService";
 
             if (methodName != "GetService" && methodName != "GetRequiredService" && !isKeyedResolution)
@@ -89,26 +98,17 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            // Extract the type argument T from GetService<T>()
-            var typeArgument = GetGenericTypeArgument(invocation);
-            if (typeArgument == null)
+            var dependencyType = GetResolvedDependencyType(invocation, methodSymbol, semanticModel);
+            if (dependencyType == null)
             {
                 continue;
             }
-            
-            #pragma warning disable RS1030
-            var semanticModel = context.Compilation.GetSemanticModel(invocation.SyntaxTree);
-            #pragma warning restore RS1030
-            var symbolInfo = semanticModel.GetSymbolInfo(typeArgument);
-            var dependencyType = symbolInfo.Symbol as ITypeSymbol;
-
-            if (dependencyType == null) continue;
 
             object? key = null;
             bool isKeyed = false;
             if (isKeyedResolution)
             {
-                key = ExtractKeyFromResolution(invocation, semanticModel);
+                key = ExtractKeyFromResolution(invocation, methodSymbol, semanticModel);
                 isKeyed = true;
             }
 
@@ -130,15 +130,51 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static object? ExtractKeyFromResolution(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+    private static ITypeSymbol? GetResolvedDependencyType(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel)
     {
-        // provider.GetRequiredKeyedService<T>(key)
-        // Extension method: argument 0 is key.
-        if (invocation.ArgumentList.Arguments.Count > 0)
+        if (methodSymbol.IsGenericMethod && methodSymbol.TypeArguments.Length > 0)
         {
-            return ExtractConstantValue(invocation.ArgumentList.Arguments[0].Expression, semanticModel);
+            return methodSymbol.TypeArguments[0];
         }
+
+        // Non-generic overloads pass the service type as a System.Type argument.
+        var serviceTypeExpression = GetInvocationArgumentExpression(invocation, methodSymbol, "serviceType");
+        if (serviceTypeExpression is TypeOfExpressionSyntax typeOfExpression)
+        {
+            return semanticModel.GetTypeInfo(typeOfExpression.Type).Type;
+        }
+
         return null;
+    }
+
+    private static object? ExtractKeyFromResolution(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel)
+    {
+        var keyExpression =
+            GetInvocationArgumentExpression(invocation, methodSymbol, "serviceKey") ??
+            GetInvocationArgumentExpression(invocation, methodSymbol, "key");
+
+        // Fallback for simplified test stubs or unusual signatures.
+        if (keyExpression is null)
+        {
+            if (invocation.ArgumentList.Arguments.Count == 1)
+            {
+                keyExpression = invocation.ArgumentList.Arguments[0].Expression;
+            }
+            else if (invocation.ArgumentList.Arguments.Count >= 2)
+            {
+                keyExpression = invocation.ArgumentList.Arguments[1].Expression;
+            }
+        }
+
+        return keyExpression is null
+            ? null
+            : ExtractConstantValue(keyExpression, semanticModel);
     }
 
     private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel)
@@ -151,23 +187,28 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         return null;
     }
 
-    private static string? GetMethodName(InvocationExpressionSyntax invocation)
+    private static ExpressionSyntax? GetInvocationArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        string parameterName)
     {
-        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+        foreach (var argument in invocation.ArgumentList.Arguments)
         {
-            return memberAccess.Name.Identifier.Text;
+            if (argument.NameColon?.Name.Identifier.Text == parameterName)
+            {
+                return argument.Expression;
+            }
         }
-        return null;
-    }
 
-    private static TypeSyntax? GetGenericTypeArgument(InvocationExpressionSyntax invocation)
-    {
-        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
-            memberAccess.Name is GenericNameSyntax genericName &&
-            genericName.TypeArgumentList.Arguments.Count > 0)
+        for (var i = 0; i < methodSymbol.Parameters.Length; i++)
         {
-            return genericName.TypeArgumentList.Arguments[0];
+            if (methodSymbol.Parameters[i].Name == parameterName &&
+                i < invocation.ArgumentList.Arguments.Count)
+            {
+                return invocation.ArgumentList.Arguments[i].Expression;
+            }
         }
+
         return null;
     }
 
@@ -178,15 +219,10 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     {
         // Analyze the implementation type's constructor parameters
         var implementationType = registration.ImplementationType!;
-        var constructors = implementationType.Constructors;
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
 
         foreach (var constructor in constructors)
         {
-            if (constructor.IsStatic || constructor.DeclaredAccessibility == Accessibility.Private)
-            {
-                continue;
-            }
-
             foreach (var parameter in constructor.Parameters)
             {
                 var parameterType = parameter.Type;

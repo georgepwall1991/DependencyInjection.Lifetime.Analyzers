@@ -92,4 +92,31 @@ public class Program
                 .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
                 .WithLocation(10, 24));
     }
+
+    [Fact]
+    public async Task BuildServiceProvider_InsideUsingBody_NotDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        using (var disposable = new DummyDisposable())
+        {
+            var provider = services.BuildServiceProvider();
+        }
+    }
+}
+
+public sealed class DummyDisposable : IDisposable
+{
+    public void Dispose() { }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(12, 28));
+    }
 }

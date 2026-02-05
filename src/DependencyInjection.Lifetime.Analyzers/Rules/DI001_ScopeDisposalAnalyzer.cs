@@ -118,8 +118,9 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 return true;
             }
 
-            // using (var scope = CreateScope()) { }
-            if (parent is UsingStatementSyntax)
+            // using (var scope = CreateScope()) { } OR using (CreateScope()) { }
+            if (parent is UsingStatementSyntax usingStatement &&
+                IsUsingStatementResource(syntax, usingStatement))
             {
                 return true;
             }
@@ -142,6 +143,23 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             }
 
             parent = parent.Parent;
+        }
+
+        return false;
+    }
+
+    private static bool IsUsingStatementResource(SyntaxNode invocationSyntax, UsingStatementSyntax usingStatement)
+    {
+        if (usingStatement.Declaration is { } declaration &&
+            declaration.Span.Contains(invocationSyntax.Span))
+        {
+            return true;
+        }
+
+        if (usingStatement.Expression is { } expression &&
+            expression.Span.Contains(invocationSyntax.Span))
+        {
+            return true;
         }
 
         return false;

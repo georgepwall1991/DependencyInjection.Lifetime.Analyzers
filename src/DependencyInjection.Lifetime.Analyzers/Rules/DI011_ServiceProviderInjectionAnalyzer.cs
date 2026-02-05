@@ -76,16 +76,10 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var constructors = implementationType.Constructors;
+            var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
 
             foreach (var constructor in constructors)
             {
-                // Skip static and private constructors
-                if (constructor.IsStatic || constructor.DeclaredAccessibility == Accessibility.Private)
-                {
-                    continue;
-                }
-
                 foreach (var parameter in constructor.Parameters)
                 {
                     var parameterType = parameter.Type;

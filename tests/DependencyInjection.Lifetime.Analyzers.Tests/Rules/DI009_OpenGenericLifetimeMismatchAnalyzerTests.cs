@@ -215,5 +215,37 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
         await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task OpenGenericSingleton_WithActivatorUtilitiesConstructor_UsesAttributedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                [ActivatorUtilitiesConstructor]
+                public Repository(ISingletonDependency dep) { }
+
+                public Repository(IScopedDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }
