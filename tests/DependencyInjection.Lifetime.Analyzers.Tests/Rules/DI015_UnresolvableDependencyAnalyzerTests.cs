@@ -395,6 +395,40 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task FactoryMethodGroup_WithActivatorUtilitiesGenericCreateInstanceMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(CreateMyService);
+                }
+
+                private static IMyService CreateMyService(IServiceProvider sp)
+                {
+                    return ActivatorUtilities.CreateInstance<MyService>(sp);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(59, 16)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -775,6 +809,42 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
                 .WithLocation(52, 9)
+                .WithArguments("IMyService", "ILoggerFactory"));
+    }
+
+    [Fact]
+    public async Task Factory_WithFrameworkDependencyAndStrictMode_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(ILoggerFactory loggerFactory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(
+                        sp => new MyService(sp.GetRequiredService<ILoggerFactory>()));
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI015.assume_framework_services_registered = false
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(53, 33)
                 .WithArguments("IMyService", "ILoggerFactory"));
     }
 

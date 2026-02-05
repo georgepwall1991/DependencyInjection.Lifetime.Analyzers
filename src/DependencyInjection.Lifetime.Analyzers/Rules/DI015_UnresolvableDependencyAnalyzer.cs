@@ -392,7 +392,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             yield break;
         }
 
-        if (!IsMethodGroupExpression(unwrappedFactoryExpression))
+        if (!IsMethodGroupExpression(unwrappedFactoryExpression, semanticModel))
         {
             yield break;
         }
@@ -426,9 +426,22 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool IsMethodGroupExpression(ExpressionSyntax expression)
+    private static bool IsMethodGroupExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
     {
-        return expression is IdentifierNameSyntax or MemberAccessExpressionSyntax;
+        if (expression is not (IdentifierNameSyntax or MemberAccessExpressionSyntax))
+        {
+            return false;
+        }
+
+        var symbolInfo = semanticModel.GetSymbolInfo(expression);
+        if (symbolInfo.Symbol is IMethodSymbol)
+        {
+            return true;
+        }
+
+        return symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().Any();
     }
 
     private static bool TryGetFactoryMethodBodyNode(

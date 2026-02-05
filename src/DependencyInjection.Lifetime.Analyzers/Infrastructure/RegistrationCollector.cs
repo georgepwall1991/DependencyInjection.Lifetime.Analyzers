@@ -629,7 +629,8 @@ public sealed class RegistrationCollector
             foreach (var argument in invocationOperation.Arguments)
             {
                 if (argument.Parameter?.Type.TypeKind != TypeKind.Delegate ||
-                    argument.Value.Syntax is not ExpressionSyntax argumentExpression)
+                    argument.Value.Syntax is not ExpressionSyntax argumentExpression ||
+                    !IsFactoryExpression(argumentExpression))
                 {
                     continue;
                 }
@@ -667,10 +668,38 @@ public sealed class RegistrationCollector
                 continue;
             }
 
-            factoryExpression = invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            var candidateExpression = invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            if (!IsFactoryExpression(candidateExpression))
+            {
+                continue;
+            }
+
+            factoryExpression = candidateExpression;
             return true;
         }
 
         return false;
+    }
+
+    private static bool IsFactoryExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression is
+                        LambdaExpressionSyntax or
+                        AnonymousMethodExpressionSyntax or
+                        IdentifierNameSyntax or
+                        MemberAccessExpressionSyntax;
+            }
+        }
     }
 }
