@@ -32,11 +32,30 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies that the analyzer produces no diagnostics for the given source and editorconfig.
+    /// </summary>
+    public static async Task VerifyNoDiagnosticsAsync(string source, string editorConfig)
+    {
+        var test = CreateTest(source, editorConfig);
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies that the analyzer produces the expected diagnostics.
     /// </summary>
     public static async Task VerifyDiagnosticsAsync(string source, params DiagnosticResult[] expected)
     {
         var test = CreateTest(source);
+        test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    /// <summary>
+    /// Verifies that the analyzer produces the expected diagnostics for the given source and editorconfig.
+    /// </summary>
+    public static async Task VerifyDiagnosticsAsync(string source, string editorConfig, params DiagnosticResult[] expected)
+    {
+        var test = CreateTest(source, editorConfig);
         test.ExpectedDiagnostics.AddRange(expected);
         await test.RunAsync();
     }
@@ -49,13 +68,20 @@ public static class AnalyzerVerifier<TAnalyzer>
         return new DiagnosticResult(descriptor);
     }
 
-    private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(string source)
+    private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(
+        string source,
+        string? editorConfig = null)
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
             TestCode = source,
             ReferenceAssemblies = ReferenceAssembliesWithDi
         };
+
+        if (!string.IsNullOrWhiteSpace(editorConfig))
+        {
+            test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", editorConfig));
+        }
 
         return test;
     }

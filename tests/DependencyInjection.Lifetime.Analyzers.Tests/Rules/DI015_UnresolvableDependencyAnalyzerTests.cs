@@ -29,6 +29,12 @@ public class DI015_UnresolvableDependencyAnalyzerTests
 
                 public static T GetRequiredKeyedService<T>(this IServiceProvider provider, object? serviceKey) => default!;
             }
+
+            public static class ActivatorUtilities
+            {
+                public static T CreateInstance<T>(IServiceProvider provider, params object[] parameters) => default!;
+                public static object CreateInstance(IServiceProvider provider, Type instanceType, params object[] parameters) => default!;
+            }
         }
 
         namespace Microsoft.Extensions.Logging
@@ -73,7 +79,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(48, 9)
+                .WithLocation(54, 9)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -104,7 +110,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(50, 9)
+                .WithLocation(56, 9)
                 .WithArguments("IMyService", "IMyDependency (key: blue)"));
     }
 
@@ -139,7 +145,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(54, 9)
+                .WithLocation(60, 9)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -169,7 +175,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(49, 33)
+                .WithLocation(55, 33)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -199,7 +205,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(49, 53)
+                .WithLocation(55, 53)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -231,7 +237,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(51, 33)
+                .WithLocation(57, 33)
                 .WithArguments("IMyService", "IMyDependency (key: blue)"));
     }
 
@@ -265,7 +271,7 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(53, 30)
+                .WithLocation(59, 30)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -295,7 +301,67 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(49, 33)
+                .WithLocation(55, 33)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task Factory_WithActivatorUtilitiesGenericCreateInstanceMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(
+                        sp => ActivatorUtilities.CreateInstance<MyService>(sp));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(55, 19)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task Factory_WithActivatorUtilitiesNonGenericCreateInstanceMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(
+                        sp => (IMyService)ActivatorUtilities.CreateInstance(sp, typeof(MyService)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(55, 31)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -547,6 +613,31 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task Factory_WithActivatorUtilitiesCreateInstanceAndExplicitArguments_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(
+                        sp => ActivatorUtilities.CreateInstance<MyService>(sp, new object()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task Factory_WithGetServiceMissingDependency_NoDiagnostic()
     {
         var source = Usings + """
@@ -593,6 +684,41 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithFrameworkDependencyAndStrictMode_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(ILoggerFactory loggerFactory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI015.assume_framework_services_registered = false
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(52, 9)
+                .WithArguments("IMyService", "ILoggerFactory"));
     }
 
     #endregion
