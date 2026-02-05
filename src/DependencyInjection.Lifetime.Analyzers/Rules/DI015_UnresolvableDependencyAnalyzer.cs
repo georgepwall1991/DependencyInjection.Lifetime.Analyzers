@@ -174,13 +174,18 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var invocations = registration.FactoryExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>();
+        var invocations = GetFactoryInvocations(registration.FactoryExpression, semanticModel);
 
         foreach (var invocation in invocations)
         {
+            if (!semanticModelsByTree.TryGetValue(invocation.SyntaxTree, out var invocationSemanticModel))
+            {
+                continue;
+            }
+
             if (!TryGetRequiredResolutionInfo(
                     invocation,
-                    semanticModel,
+                    invocationSemanticModel,
                     wellKnownTypes,
                     out var dependencyType,
                     out var key,
@@ -206,6 +211,72 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                 FormatDependencyName(dependencyType, key, isKeyed));
 
             context.ReportDiagnostic(diagnostic);
+        }
+    }
+
+    private static IEnumerable<InvocationExpressionSyntax> GetFactoryInvocations(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel)
+    {
+        foreach (var invocation in factoryExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            yield return invocation;
+        }
+
+        if (factoryExpression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+        {
+            yield break;
+        }
+
+        if (!TryGetFactoryMethodBodyNode(factoryExpression, semanticModel, out var bodyNode))
+        {
+            yield break;
+        }
+
+        foreach (var invocation in bodyNode.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            yield return invocation;
+        }
+    }
+
+    private static bool TryGetFactoryMethodBodyNode(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        out SyntaxNode bodyNode)
+    {
+        bodyNode = null!;
+
+        var symbolInfo = semanticModel.GetSymbolInfo(factoryExpression);
+        var methodSymbol = symbolInfo.Symbol as IMethodSymbol ??
+                           symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+        if (methodSymbol is null)
+        {
+            return false;
+        }
+
+        var declaration = methodSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        switch (declaration)
+        {
+            case MethodDeclarationSyntax methodDeclaration:
+                var methodBody = (SyntaxNode?)methodDeclaration.Body ?? methodDeclaration.ExpressionBody?.Expression;
+                if (methodBody is null)
+                {
+                    return false;
+                }
+
+                bodyNode = methodBody;
+                return true;
+            case LocalFunctionStatementSyntax localFunction:
+                var localFunctionBody = (SyntaxNode?)localFunction.Body ?? localFunction.ExpressionBody?.Expression;
+                if (localFunctionBody is null)
+                {
+                    return false;
+                }
+
+                bodyNode = localFunctionBody;
+                return true;
+            default:
+                return false;
         }
     }
 

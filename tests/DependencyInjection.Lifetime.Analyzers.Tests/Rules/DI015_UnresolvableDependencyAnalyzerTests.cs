@@ -236,6 +236,40 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task FactoryMethodGroup_WithMissingGetRequiredServiceDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(CreateMyService);
+                }
+
+                private static IMyService CreateMyService(IServiceProvider sp)
+                {
+                    return new MyService(sp.GetRequiredService<IMissingDependency>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(53, 30)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
     public async Task FactoryOverload_WithImplementationTypeAndMissingGetRequiredServiceDependency_ReportsSingleDiagnostic()
     {
         var source = Usings + """
@@ -474,6 +508,37 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 {
                     services.AddSingleton<IMyService>(
                         sp => new MyService(sp.GetRequiredKeyedService<IMyDependency>(GetKey())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task FactoryMethodGroup_WithRegisteredGetRequiredServiceDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyDependency, MyDependency>();
+                    services.AddSingleton<IMyService>(CreateMyService);
+                }
+
+                private static IMyService CreateMyService(IServiceProvider sp)
+                {
+                    return new MyService(sp.GetRequiredService<IMyDependency>());
                 }
             }
             """;

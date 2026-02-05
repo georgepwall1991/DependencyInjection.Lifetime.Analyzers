@@ -538,14 +538,9 @@ public sealed class RegistrationCollector
         ExpressionSyntax? factoryExpression = null;
         object? key = null;
 
-        // Check for factory delegate in arguments
-        foreach (var arg in invocation.ArgumentList.Arguments)
+        if (TryGetFactoryArgumentExpression(method, invocation, out var factoryArgumentExpression))
         {
-            if (arg.Expression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
-            {
-                factoryExpression = arg.Expression;
-                break;
-            }
+            factoryExpression = factoryArgumentExpression;
         }
 
         bool isKeyed = IsKeyedMethod(method.Name);
@@ -618,5 +613,36 @@ public sealed class RegistrationCollector
         }
 
         return (null, null, null, key);
+    }
+
+    private static bool TryGetFactoryArgumentExpression(
+        IMethodSymbol method,
+        InvocationExpressionSyntax invocation,
+        out ExpressionSyntax factoryExpression)
+    {
+        factoryExpression = null!;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        var isReducedExtension = method.ReducedFrom is not null;
+
+        for (var parameterIndex = 0; parameterIndex < sourceMethod.Parameters.Length; parameterIndex++)
+        {
+            var parameter = sourceMethod.Parameters[parameterIndex];
+            if (parameter.Type.TypeKind != TypeKind.Delegate)
+            {
+                continue;
+            }
+
+            var argumentIndex = isReducedExtension ? parameterIndex - 1 : parameterIndex;
+            if (argumentIndex < 0 || argumentIndex >= invocation.ArgumentList.Arguments.Count)
+            {
+                continue;
+            }
+
+            factoryExpression = invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            return true;
+        }
+
+        return false;
     }
 }
