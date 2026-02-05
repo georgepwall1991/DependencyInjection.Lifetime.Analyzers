@@ -31,6 +31,9 @@ jobs:
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity normal
 
+      - name: Clean package artifacts
+        run: rm -f ./artifacts/*.nupkg
+
       - name: Pack
         run: dotnet pack src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj --no-build --configuration Release --output ./artifacts
 
