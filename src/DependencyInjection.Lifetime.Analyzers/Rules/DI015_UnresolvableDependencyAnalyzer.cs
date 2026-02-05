@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -38,9 +39,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             }
 
             var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
-            var assumeFrameworkServicesRegistered = GetAssumeFrameworkServicesRegistered(
-                compilationContext.Options.AnalyzerConfigOptionsProvider,
-                compilationContext.Compilation.SyntaxTrees);
+            var assumeFrameworkServicesRegisteredResolver = CreateAssumeFrameworkServicesRegisteredResolver(
+                compilationContext.Options.AnalyzerConfigOptionsProvider);
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
 
             compilationContext.RegisterSyntaxNodeAction(
@@ -61,7 +61,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     endContext,
                     registrationCollector,
                     wellKnownTypes,
-                    assumeFrameworkServicesRegistered,
+                    assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree));
         });
     }
@@ -70,7 +70,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered,
+        Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         foreach (var registration in registrationCollector.Registrations)
@@ -83,7 +83,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     registrationCollector,
                     registration,
                     wellKnownTypes,
-                    assumeFrameworkServicesRegistered,
+                    assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree);
 
                 continue;
@@ -91,6 +91,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
 
             if (registration.ImplementationType is not null)
             {
+                var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(
+                    registration.Location.SourceTree);
                 AnalyzeConstructorRegistration(
                     context,
                     registrationCollector,
@@ -141,7 +143,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         ServiceRegistration registration,
         WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered,
+        Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (!semanticModelsByTree.TryGetValue(registration.FactoryExpression!.SyntaxTree, out var semanticModel))
@@ -153,6 +155,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
 
         foreach (var invocation in invocations)
         {
+            var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(invocation.SyntaxTree);
+
             if (!semanticModelsByTree.TryGetValue(invocation.SyntaxTree, out var invocationSemanticModel))
             {
                 continue;
@@ -375,17 +379,25 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         ExpressionSyntax factoryExpression,
         SemanticModel semanticModel)
     {
-        foreach (var invocation in factoryExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        var unwrappedFactoryExpression = UnwrapFactoryExpression(factoryExpression);
+
+        if (unwrappedFactoryExpression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
         {
-            yield return invocation;
+            foreach (var invocation in unwrappedFactoryExpression.DescendantNodesAndSelf()
+                         .OfType<InvocationExpressionSyntax>())
+            {
+                yield return invocation;
+            }
+
+            yield break;
         }
 
-        if (factoryExpression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+        if (!IsMethodGroupExpression(unwrappedFactoryExpression))
         {
             yield break;
         }
 
-        if (!TryGetFactoryMethodBodyNode(factoryExpression, semanticModel, out var bodyNode))
+        if (!TryGetFactoryMethodBodyNode(unwrappedFactoryExpression, semanticModel, out var bodyNode))
         {
             yield break;
         }
@@ -394,6 +406,29 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         {
             yield return invocation;
         }
+    }
+
+    private static ExpressionSyntax UnwrapFactoryExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    private static bool IsMethodGroupExpression(ExpressionSyntax expression)
+    {
+        return expression is IdentifierNameSyntax or MemberAccessExpressionSyntax;
     }
 
     private static bool TryGetFactoryMethodBodyNode(
@@ -726,28 +761,33 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool GetAssumeFrameworkServicesRegistered(
-        AnalyzerConfigOptionsProvider optionsProvider,
-        IEnumerable<SyntaxTree> syntaxTrees)
+    private static Func<SyntaxTree?, bool> CreateAssumeFrameworkServicesRegisteredResolver(
+        AnalyzerConfigOptionsProvider optionsProvider)
     {
-        if (TryParseAssumeFrameworkServicesRegistered(
-                optionsProvider.GlobalOptions,
-                out var globalValue))
-        {
-            return globalValue;
-        }
+        var valuesByTree = new ConcurrentDictionary<SyntaxTree, bool>();
+        var hasGlobalValue = TryParseAssumeFrameworkServicesRegistered(
+            optionsProvider.GlobalOptions,
+            out var globalValue);
 
-        foreach (var syntaxTree in syntaxTrees)
+        return syntaxTree =>
         {
-            if (TryParseAssumeFrameworkServicesRegistered(
-                    optionsProvider.GetOptions(syntaxTree),
-                    out var treeValue))
+            if (syntaxTree is null)
             {
-                return treeValue;
+                return hasGlobalValue ? globalValue : true;
             }
-        }
 
-        return true;
+            return valuesByTree.GetOrAdd(syntaxTree, tree =>
+            {
+                if (TryParseAssumeFrameworkServicesRegistered(
+                        optionsProvider.GetOptions(tree),
+                        out var treeValue))
+                {
+                    return treeValue;
+                }
+
+                return hasGlobalValue ? globalValue : true;
+            });
+        };
     }
 
     private static bool TryParseAssumeFrameworkServicesRegistered(

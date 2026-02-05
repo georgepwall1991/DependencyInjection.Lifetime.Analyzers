@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **DI015**: Added factory method-group analysis support (for registrations such as `AddSingleton<IMyService>(CreateMyService)`) and corresponding test coverage.
 - **DI015**: Added factory-path analysis for `ActivatorUtilities.CreateInstance(...)` and introduced `.editorconfig` option `dotnet_code_quality.DI015.assume_framework_services_registered` for strict vs framework-assumed dependency checks.
+- **DI015**: Hardened factory analysis by supporting named factory arguments, limiting method-body traversal to true method-group registrations, and applying `.editorconfig` framework-service assumptions per syntax tree.
 
 ## [1.10.0] - 2026-02-05
 

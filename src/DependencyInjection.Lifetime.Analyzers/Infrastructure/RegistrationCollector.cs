@@ -5,6 +5,7 @@ using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
@@ -538,7 +539,7 @@ public sealed class RegistrationCollector
         ExpressionSyntax? factoryExpression = null;
         object? key = null;
 
-        if (TryGetFactoryArgumentExpression(method, invocation, out var factoryArgumentExpression))
+        if (TryGetFactoryArgumentExpression(method, invocation, semanticModel, out var factoryArgumentExpression))
         {
             factoryExpression = factoryArgumentExpression;
         }
@@ -618,9 +619,25 @@ public sealed class RegistrationCollector
     private static bool TryGetFactoryArgumentExpression(
         IMethodSymbol method,
         InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
         out ExpressionSyntax factoryExpression)
     {
         factoryExpression = null!;
+
+        if (semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation)
+        {
+            foreach (var argument in invocationOperation.Arguments)
+            {
+                if (argument.Parameter?.Type.TypeKind != TypeKind.Delegate ||
+                    argument.Value.Syntax is not ExpressionSyntax argumentExpression)
+                {
+                    continue;
+                }
+
+                factoryExpression = argumentExpression;
+                return true;
+            }
+        }
 
         var sourceMethod = method.ReducedFrom ?? method;
         var isReducedExtension = method.ReducedFrom is not null;
@@ -631,6 +648,17 @@ public sealed class RegistrationCollector
             if (parameter.Type.TypeKind != TypeKind.Delegate)
             {
                 continue;
+            }
+
+            foreach (var argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.NameColon?.Name.Identifier.Text != parameter.Name)
+                {
+                    continue;
+                }
+
+                factoryExpression = argument.Expression;
+                return true;
             }
 
             var argumentIndex = isReducedExtension ? parameterIndex - 1 : parameterIndex;
