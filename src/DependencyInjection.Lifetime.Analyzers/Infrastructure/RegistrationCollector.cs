@@ -5,6 +5,7 @@ using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
@@ -538,14 +539,9 @@ public sealed class RegistrationCollector
         ExpressionSyntax? factoryExpression = null;
         object? key = null;
 
-        // Check for factory delegate in arguments
-        foreach (var arg in invocation.ArgumentList.Arguments)
+        if (TryGetFactoryArgumentExpression(method, invocation, semanticModel, out var factoryArgumentExpression))
         {
-            if (arg.Expression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
-            {
-                factoryExpression = arg.Expression;
-                break;
-            }
+            factoryExpression = factoryArgumentExpression;
         }
 
         bool isKeyed = IsKeyedMethod(method.Name);
@@ -618,5 +614,92 @@ public sealed class RegistrationCollector
         }
 
         return (null, null, null, key);
+    }
+
+    private static bool TryGetFactoryArgumentExpression(
+        IMethodSymbol method,
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out ExpressionSyntax factoryExpression)
+    {
+        factoryExpression = null!;
+
+        if (semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation)
+        {
+            foreach (var argument in invocationOperation.Arguments)
+            {
+                if (argument.Parameter?.Type.TypeKind != TypeKind.Delegate ||
+                    argument.Value.Syntax is not ExpressionSyntax argumentExpression ||
+                    !IsFactoryExpression(argumentExpression))
+                {
+                    continue;
+                }
+
+                factoryExpression = argumentExpression;
+                return true;
+            }
+        }
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        var isReducedExtension = method.ReducedFrom is not null;
+
+        for (var parameterIndex = 0; parameterIndex < sourceMethod.Parameters.Length; parameterIndex++)
+        {
+            var parameter = sourceMethod.Parameters[parameterIndex];
+            if (parameter.Type.TypeKind != TypeKind.Delegate)
+            {
+                continue;
+            }
+
+            foreach (var argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.NameColon?.Name.Identifier.Text != parameter.Name)
+                {
+                    continue;
+                }
+
+                factoryExpression = argument.Expression;
+                return true;
+            }
+
+            var argumentIndex = isReducedExtension ? parameterIndex - 1 : parameterIndex;
+            if (argumentIndex < 0 || argumentIndex >= invocation.ArgumentList.Arguments.Count)
+            {
+                continue;
+            }
+
+            var candidateExpression = invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            if (!IsFactoryExpression(candidateExpression))
+            {
+                continue;
+            }
+
+            factoryExpression = candidateExpression;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsFactoryExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression is
+                        LambdaExpressionSyntax or
+                        AnonymousMethodExpressionSyntax or
+                        IdentifierNameSyntax or
+                        MemberAccessExpressionSyntax;
+            }
+        }
     }
 }

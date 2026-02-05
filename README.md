@@ -670,6 +670,16 @@ services.AddSingleton<IMyService, MyService>();
 
 See a runnable end-to-end example in `samples/DI015InAction`.
 
+**DI015 Strict Mode (Optional):**
+
+By default, DI015 assumes common host-provided framework services (like logging/options/configuration) are available.
+You can disable this assumption for stricter analysis:
+
+```ini
+[*.cs]
+dotnet_code_quality.DI015.assume_framework_services_registered = false
+```
+
 ---
 
 ## Configuration

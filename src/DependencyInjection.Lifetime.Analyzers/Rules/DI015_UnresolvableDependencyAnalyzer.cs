@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -16,6 +17,9 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
 {
+    private const string AssumeFrameworkServicesRegisteredOption =
+        "dotnet_code_quality.DI015.assume_framework_services_registered";
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.UnresolvableDependency);
@@ -35,6 +39,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             }
 
             var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
+            var assumeFrameworkServicesRegisteredResolver = CreateAssumeFrameworkServicesRegisteredResolver(
+                compilationContext.Options.AnalyzerConfigOptionsProvider);
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
 
             compilationContext.RegisterSyntaxNodeAction(
@@ -55,6 +61,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     endContext,
                     registrationCollector,
                     wellKnownTypes,
+                    assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree));
         });
     }
@@ -63,6 +70,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes,
+        Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         foreach (var registration in registrationCollector.Registrations)
@@ -75,6 +83,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     registrationCollector,
                     registration,
                     wellKnownTypes,
+                    assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree);
 
                 continue;
@@ -82,7 +91,14 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
 
             if (registration.ImplementationType is not null)
             {
-                AnalyzeConstructorRegistration(context, registrationCollector, registration, wellKnownTypes);
+                var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(
+                    registration.Location.SourceTree);
+                AnalyzeConstructorRegistration(
+                    context,
+                    registrationCollector,
+                    registration,
+                    wellKnownTypes,
+                    assumeFrameworkServicesRegistered);
             }
         }
     }
@@ -91,7 +107,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector,
         ServiceRegistration registration,
-        WellKnownTypes? wellKnownTypes)
+        WellKnownTypes? wellKnownTypes,
+        bool assumeFrameworkServicesRegistered)
     {
         if (!IsServiceImplementationCompatible(registration.ServiceType, registration.ImplementationType!))
         {
@@ -99,52 +116,11 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var constructors = ConstructorSelection.GetConstructorsToAnalyze(registration.ImplementationType!).ToArray();
-        if (constructors.Length == 0)
-        {
-            return;
-        }
-
-        List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? bestMissingDependencies = null;
-        var bestMissingCount = int.MaxValue;
-        var bestParameterCount = -1;
-
-        foreach (var constructor in constructors)
-        {
-            var missingDependencies = new List<(ITypeSymbol Type, object? Key, bool IsKeyed)>();
-
-            foreach (var parameter in constructor.Parameters)
-            {
-                if (ShouldSkipDependencyCheck(parameter.Type, parameter, wellKnownTypes))
-                {
-                    continue;
-                }
-
-                var (key, isKeyed) = GetServiceKey(parameter);
-                if (IsDependencyRegistered(parameter.Type, key, isKeyed, registrationCollector))
-                {
-                    continue;
-                }
-
-                missingDependencies.Add((parameter.Type, key, isKeyed));
-            }
-
-            // If any constructor is fully resolvable, DI can activate the service.
-            if (missingDependencies.Count == 0)
-            {
-                return;
-            }
-
-            if (missingDependencies.Count < bestMissingCount ||
-                (missingDependencies.Count == bestMissingCount &&
-                 constructor.Parameters.Length > bestParameterCount))
-            {
-                bestMissingDependencies = missingDependencies;
-                bestMissingCount = missingDependencies.Count;
-                bestParameterCount = constructor.Parameters.Length;
-            }
-        }
-
+        var bestMissingDependencies = GetBestMissingDependenciesForType(
+            registration.ImplementationType!,
+            registrationCollector,
+            wellKnownTypes,
+            assumeFrameworkServicesRegistered);
         if (bestMissingDependencies is null)
         {
             return;
@@ -167,6 +143,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         ServiceRegistration registration,
         WellKnownTypes? wellKnownTypes,
+        Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (!semanticModelsByTree.TryGetValue(registration.FactoryExpression!.SyntaxTree, out var semanticModel))
@@ -174,22 +151,55 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var invocations = registration.FactoryExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>();
+        var invocations = GetFactoryInvocations(registration.FactoryExpression, semanticModel);
 
         foreach (var invocation in invocations)
         {
+            var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(invocation.SyntaxTree);
+
+            if (!semanticModelsByTree.TryGetValue(invocation.SyntaxTree, out var invocationSemanticModel))
+            {
+                continue;
+            }
+
             if (!TryGetRequiredResolutionInfo(
                     invocation,
-                    semanticModel,
+                    invocationSemanticModel,
                     wellKnownTypes,
                     out var dependencyType,
                     out var key,
                     out var isKeyed))
             {
+                if (!TryGetActivatorUtilitiesMissingDependencies(
+                        invocation,
+                        invocationSemanticModel,
+                        registrationCollector,
+                        wellKnownTypes,
+                        assumeFrameworkServicesRegistered,
+                        out var missingDependencies))
+                {
+                    continue;
+                }
+
+                foreach (var missingDependency in missingDependencies)
+                {
+                    var activatorDiagnostic = Diagnostic.Create(
+                        DiagnosticDescriptors.UnresolvableDependency,
+                        invocation.GetLocation(),
+                        registration.ServiceType.Name,
+                        FormatDependencyName(missingDependency.Type, missingDependency.Key, missingDependency.IsKeyed));
+
+                    context.ReportDiagnostic(activatorDiagnostic);
+                }
+
                 continue;
             }
 
-            if (ShouldSkipDependencyCheck(dependencyType, parameter: null, wellKnownTypes))
+            if (ShouldSkipDependencyCheck(
+                    dependencyType,
+                    parameter: null,
+                    wellKnownTypes,
+                    assumeFrameworkServicesRegistered))
             {
                 continue;
             }
@@ -206,6 +216,272 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                 FormatDependencyName(dependencyType, key, isKeyed));
 
             context.ReportDiagnostic(diagnostic);
+        }
+    }
+
+    private static List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? GetBestMissingDependenciesForType(
+        INamedTypeSymbol implementationType,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes? wellKnownTypes,
+        bool assumeFrameworkServicesRegistered)
+    {
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType).ToArray();
+        if (constructors.Length == 0)
+        {
+            return null;
+        }
+
+        List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? bestMissingDependencies = null;
+        var bestMissingCount = int.MaxValue;
+        var bestParameterCount = -1;
+
+        foreach (var constructor in constructors)
+        {
+            var missingDependencies = new List<(ITypeSymbol Type, object? Key, bool IsKeyed)>();
+
+            foreach (var parameter in constructor.Parameters)
+            {
+                if (ShouldSkipDependencyCheck(
+                        parameter.Type,
+                        parameter,
+                        wellKnownTypes,
+                        assumeFrameworkServicesRegistered))
+                {
+                    continue;
+                }
+
+                var (key, isKeyed) = GetServiceKey(parameter);
+                if (IsDependencyRegistered(parameter.Type, key, isKeyed, registrationCollector))
+                {
+                    continue;
+                }
+
+                missingDependencies.Add((parameter.Type, key, isKeyed));
+            }
+
+            // If any constructor is fully resolvable, DI can activate the service.
+            if (missingDependencies.Count == 0)
+            {
+                return null;
+            }
+
+            if (missingDependencies.Count < bestMissingCount ||
+                (missingDependencies.Count == bestMissingCount &&
+                 constructor.Parameters.Length > bestParameterCount))
+            {
+                bestMissingDependencies = missingDependencies;
+                bestMissingCount = missingDependencies.Count;
+                bestParameterCount = constructor.Parameters.Length;
+            }
+        }
+
+        return bestMissingDependencies;
+    }
+
+    private static bool TryGetActivatorUtilitiesMissingDependencies(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes? wellKnownTypes,
+        bool assumeFrameworkServicesRegistered,
+        out List<(ITypeSymbol Type, object? Key, bool IsKeyed)> missingDependencies)
+    {
+        missingDependencies = null!;
+
+        if (!TryGetActivatorUtilitiesImplementationType(
+                invocation,
+                semanticModel,
+                out var implementationType,
+                out var hasExplicitConstructorArguments))
+        {
+            return false;
+        }
+
+        if (hasExplicitConstructorArguments)
+        {
+            return false;
+        }
+
+        var bestMissingDependencies = GetBestMissingDependenciesForType(
+            implementationType,
+            registrationCollector,
+            wellKnownTypes,
+            assumeFrameworkServicesRegistered);
+        if (bestMissingDependencies is null || bestMissingDependencies.Count == 0)
+        {
+            return false;
+        }
+
+        missingDependencies = bestMissingDependencies;
+        return true;
+    }
+
+    private static bool TryGetActivatorUtilitiesImplementationType(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out INamedTypeSymbol implementationType,
+        out bool hasExplicitConstructorArguments)
+    {
+        implementationType = null!;
+        hasExplicitConstructorArguments = false;
+
+        var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+        if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
+        {
+            return false;
+        }
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        if (sourceMethod.Name != "CreateInstance" ||
+            sourceMethod.ContainingType?.Name != "ActivatorUtilities" ||
+            sourceMethod.ContainingNamespace.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
+        {
+            return false;
+        }
+
+        if (methodSymbol.IsGenericMethod && methodSymbol.TypeArguments.Length > 0)
+        {
+            if (methodSymbol.TypeArguments[0] is not INamedTypeSymbol namedType)
+            {
+                return false;
+            }
+
+            implementationType = namedType;
+            hasExplicitConstructorArguments = invocation.ArgumentList.Arguments.Count > 1;
+            return true;
+        }
+
+        var instanceTypeExpression =
+            GetInvocationArgumentExpression(invocation, methodSymbol, "instanceType") ??
+            GetInvocationArgumentExpression(invocation, methodSymbol, "type");
+        if (instanceTypeExpression is null)
+        {
+            return false;
+        }
+
+        if (instanceTypeExpression is not TypeOfExpressionSyntax typeOfExpression)
+        {
+            return false;
+        }
+
+        var typeInfo = semanticModel.GetTypeInfo(typeOfExpression.Type);
+        if (typeInfo.Type is not INamedTypeSymbol nonGenericNamedType)
+        {
+            return false;
+        }
+
+        implementationType = nonGenericNamedType;
+        hasExplicitConstructorArguments = invocation.ArgumentList.Arguments.Count > 2;
+        return true;
+    }
+
+    private static IEnumerable<InvocationExpressionSyntax> GetFactoryInvocations(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel)
+    {
+        var unwrappedFactoryExpression = UnwrapFactoryExpression(factoryExpression);
+
+        if (unwrappedFactoryExpression is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+        {
+            foreach (var invocation in unwrappedFactoryExpression.DescendantNodesAndSelf()
+                         .OfType<InvocationExpressionSyntax>())
+            {
+                yield return invocation;
+            }
+
+            yield break;
+        }
+
+        if (!IsMethodGroupExpression(unwrappedFactoryExpression, semanticModel))
+        {
+            yield break;
+        }
+
+        if (!TryGetFactoryMethodBodyNode(unwrappedFactoryExpression, semanticModel, out var bodyNode))
+        {
+            yield break;
+        }
+
+        foreach (var invocation in bodyNode.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            yield return invocation;
+        }
+    }
+
+    private static ExpressionSyntax UnwrapFactoryExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    private static bool IsMethodGroupExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        if (expression is not (IdentifierNameSyntax or MemberAccessExpressionSyntax))
+        {
+            return false;
+        }
+
+        var symbolInfo = semanticModel.GetSymbolInfo(expression);
+        if (symbolInfo.Symbol is IMethodSymbol)
+        {
+            return true;
+        }
+
+        return symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().Any();
+    }
+
+    private static bool TryGetFactoryMethodBodyNode(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        out SyntaxNode bodyNode)
+    {
+        bodyNode = null!;
+
+        var symbolInfo = semanticModel.GetSymbolInfo(factoryExpression);
+        var methodSymbol = symbolInfo.Symbol as IMethodSymbol ??
+                           symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+        if (methodSymbol is null)
+        {
+            return false;
+        }
+
+        var declaration = methodSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        switch (declaration)
+        {
+            case MethodDeclarationSyntax methodDeclaration:
+                var methodBody = (SyntaxNode?)methodDeclaration.Body ?? methodDeclaration.ExpressionBody?.Expression;
+                if (methodBody is null)
+                {
+                    return false;
+                }
+
+                bodyNode = methodBody;
+                return true;
+            case LocalFunctionStatementSyntax localFunction:
+                var localFunctionBody = (SyntaxNode?)localFunction.Body ?? localFunction.ExpressionBody?.Expression;
+                if (localFunctionBody is null)
+                {
+                    return false;
+                }
+
+                bodyNode = localFunctionBody;
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -408,7 +684,8 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
     private static bool ShouldSkipDependencyCheck(
         ITypeSymbol dependencyType,
         IParameterSymbol? parameter,
-        WellKnownTypes? wellKnownTypes)
+        WellKnownTypes? wellKnownTypes,
+        bool assumeFrameworkServicesRegistered)
     {
         if (parameter?.HasExplicitDefaultValue == true)
         {
@@ -421,7 +698,30 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        return IsFrameworkProvidedDependency(dependencyType);
+        if (IsContainerProvidedDependency(dependencyType))
+        {
+            return true;
+        }
+
+        return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType);
+    }
+
+    private static bool IsContainerProvidedDependency(ITypeSymbol dependencyType)
+    {
+        if (dependencyType is not INamedTypeSymbol namedType)
+        {
+            return false;
+        }
+
+        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
+        if (namedType.Name == "IEnumerable" &&
+            namespaceName == "System.Collections.Generic" &&
+            namedType.IsGenericType)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
@@ -432,13 +732,6 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-
-        if (namedType.Name == "IEnumerable" &&
-            namespaceName == "System.Collections.Generic" &&
-            namedType.IsGenericType)
-        {
-            return true;
-        }
 
         if (namedType.Name == "IConfiguration" &&
             namespaceName == "Microsoft.Extensions.Configuration")
@@ -479,6 +772,64 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static Func<SyntaxTree?, bool> CreateAssumeFrameworkServicesRegisteredResolver(
+        AnalyzerConfigOptionsProvider optionsProvider)
+    {
+        var valuesByTree = new ConcurrentDictionary<SyntaxTree, bool>();
+        var hasGlobalValue = TryParseAssumeFrameworkServicesRegistered(
+            optionsProvider.GlobalOptions,
+            out var globalValue);
+
+        return syntaxTree =>
+        {
+            if (syntaxTree is null)
+            {
+                return hasGlobalValue ? globalValue : true;
+            }
+
+            return valuesByTree.GetOrAdd(syntaxTree, tree =>
+            {
+                if (TryParseAssumeFrameworkServicesRegistered(
+                        optionsProvider.GetOptions(tree),
+                        out var treeValue))
+                {
+                    return treeValue;
+                }
+
+                return hasGlobalValue ? globalValue : true;
+            });
+        };
+    }
+
+    private static bool TryParseAssumeFrameworkServicesRegistered(
+        AnalyzerConfigOptions options,
+        out bool value)
+    {
+        value = true;
+
+        if (!options.TryGetValue(AssumeFrameworkServicesRegisteredOption, out var optionValue))
+        {
+            return false;
+        }
+
+        if (bool.TryParse(optionValue, out value))
+        {
+            return true;
+        }
+
+        switch (optionValue)
+        {
+            case "1":
+                value = true;
+                return true;
+            case "0":
+                value = false;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static bool IsDependencyRegistered(
