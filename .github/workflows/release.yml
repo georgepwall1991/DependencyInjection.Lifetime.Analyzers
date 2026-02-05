@@ -15,6 +15,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate tag matches project version
+        run: |
+          PROJECT_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          echo "Tag version: $TAG_VERSION"
+          echo "Project version: $PROJECT_VERSION"
+
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "Tag version does not match project version."
+            exit 1
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

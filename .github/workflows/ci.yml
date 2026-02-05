@@ -40,6 +40,30 @@ jobs:
           targetdir: ./coverage/report
           reporttypes: Cobertura;MarkdownSummaryGithub;Badges
 
+      - name: Enforce coverage thresholds
+        run: |
+          COVERAGE_FILE="./coverage/report/Cobertura.xml"
+          if [ ! -f "$COVERAGE_FILE" ]; then
+            echo "Merged coverage file not found at $COVERAGE_FILE."
+            exit 1
+          fi
+
+          LINE_RATE=$(grep -o 'line-rate="[0-9.]*"' "$COVERAGE_FILE" | head -n 1 | cut -d'"' -f2)
+          BRANCH_RATE=$(grep -o 'branch-rate="[0-9.]*"' "$COVERAGE_FILE" | head -n 1 | cut -d'"' -f2)
+          if [ -z "$LINE_RATE" ] || [ -z "$BRANCH_RATE" ]; then
+            echo "Failed to parse line/branch coverage from $COVERAGE_FILE."
+            exit 1
+          fi
+
+          LINE_THRESHOLD=0.85
+          BRANCH_THRESHOLD=0.70
+
+          echo "Line coverage: $LINE_RATE (threshold: $LINE_THRESHOLD)"
+          echo "Branch coverage: $BRANCH_RATE (threshold: $BRANCH_THRESHOLD)"
+
+          awk "BEGIN {exit !($LINE_RATE >= $LINE_THRESHOLD)}" || { echo "Line coverage below threshold"; exit 1; }
+          awk "BEGIN {exit !($BRANCH_RATE >= $BRANCH_THRESHOLD)}" || { echo "Branch coverage below threshold"; exit 1; }
+
       - name: Create badges directory
         run: mkdir -p .github/badges
 

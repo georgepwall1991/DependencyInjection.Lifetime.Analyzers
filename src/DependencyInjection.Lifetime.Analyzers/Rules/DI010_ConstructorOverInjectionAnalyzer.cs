@@ -57,7 +57,7 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes)
     {
-        foreach (var registration in registrationCollector.Registrations)
+        foreach (var registration in registrationCollector.AllRegistrations)
         {
             var implementationType = registration.ImplementationType;
             if (implementationType is null)

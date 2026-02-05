@@ -160,6 +160,7 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
     {
         // Check for ServiceProviderServiceExtensions.CreateScope extension method
         if (containingType.Name == "ServiceProviderServiceExtensions" &&
+            containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" &&
             method.IsExtensionMethod &&
             method.Name == "CreateScope")
         {

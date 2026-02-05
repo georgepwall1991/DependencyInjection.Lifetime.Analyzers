@@ -64,7 +64,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         // Check if we're in an allowed context (factory registration, middleware Invoke, etc.)
-        if (IsAllowedContext(invocation, context.SemanticModel))
+        if (IsAllowedContext(invocation, context.SemanticModel, wellKnownTypes))
         {
             return;
         }
@@ -80,46 +80,52 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
 
     private static bool IsServiceResolutionMethod(IMethodSymbol method, WellKnownTypes wellKnownTypes)
     {
-        // Check for extension methods on IServiceProvider
         var originalMethod = method.ReducedFrom ?? method;
+        var containingType = originalMethod.ContainingType;
 
-        // Check if it's an extension method from ServiceProviderServiceExtensions
-        if (originalMethod.IsExtensionMethod)
+        if (containingType is null)
         {
-            var containingType = originalMethod.ContainingType;
-            if (containingType?.Name == "ServiceProviderServiceExtensions")
-            {
-                var methodName = originalMethod.Name;
-                return methodName == "GetService" ||
-                       methodName == "GetRequiredService" ||
-                       methodName == "GetServices" ||
-                       methodName == "GetKeyedService" ||
-                       methodName == "GetRequiredKeyedService" ||
-                       methodName == "GetKeyedServices";
-            }
+            return false;
         }
 
-        // Check for IServiceProvider.GetService directly
-        if (method.Name == "GetService" && method.Parameters.Length == 1)
+        var methodName = originalMethod.Name;
+        var isResolutionName = methodName == "GetService" ||
+                               methodName == "GetRequiredService" ||
+                               methodName == "GetServices" ||
+                               methodName == "GetKeyedService" ||
+                               methodName == "GetRequiredKeyedService" ||
+                               methodName == "GetKeyedServices";
+        if (!isResolutionName)
         {
-            var containingType = method.ContainingType;
-            if (containingType?.Name == "IServiceProvider")
-            {
-                return true;
-            }
+            return false;
         }
 
-        // Check for IKeyedServiceProvider methods
-        if (method.Name is "GetKeyedService" or "GetRequiredKeyedService")
+        // ServiceProviderServiceExtensions extension methods
+        if (containingType.Name == "ServiceProviderServiceExtensions" &&
+            containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection")
         {
-            var containingType = method.ContainingType;
-            if (containingType?.Name == "IKeyedServiceProvider")
+            if (originalMethod.IsExtensionMethod &&
+                originalMethod.Parameters.Length > 0)
             {
-                return true;
+                var receiverType = originalMethod.Parameters[0].Type;
+                return IsSystemIServiceProvider(receiverType) ||
+                       wellKnownTypes.IsKeyedServiceProvider(receiverType);
             }
+
+            return true;
         }
 
-        return false;
+        // IServiceProvider members
+        if (IsSystemIServiceProvider(containingType) &&
+            methodName == "GetService" &&
+            originalMethod.Parameters.Length == 1)
+        {
+            return true;
+        }
+
+        // IKeyedServiceProvider members
+        return wellKnownTypes.IsKeyedServiceProvider(containingType) &&
+               methodName is "GetKeyedService" or "GetRequiredKeyedService";
     }
 
     private static ITypeSymbol? GetResolvedServiceType(IMethodSymbol method)
@@ -135,7 +141,10 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         return method.ReturnType;
     }
 
-    private static bool IsAllowedContext(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+    private static bool IsAllowedContext(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
     {
         // Walk up the syntax tree to check the context
         var node = invocation.Parent;
@@ -150,7 +159,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
 
                 // Check if we're inside a method
                 case MethodDeclarationSyntax methodDecl:
-                    return IsAllowedMethod(methodDecl, semanticModel);
+                    return IsAllowedMethod(methodDecl, semanticModel, wellKnownTypes);
 
                 // Check if we're inside a constructor
                 case ConstructorDeclarationSyntax:
@@ -180,6 +189,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
 
                     // Check if it's a service registration method
                     if (containingType?.Name == "ServiceCollectionServiceExtensions" &&
+                        containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" &&
                         (originalMethod.Name.StartsWith("Add") || originalMethod.Name == "TryAdd"))
                     {
                         return true;
@@ -199,7 +209,10 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsAllowedMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    private static bool IsAllowedMethod(
+        MethodDeclarationSyntax methodDecl,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
     {
         var methodName = methodDecl.Identifier.Text;
 
@@ -221,7 +234,8 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
             if (parameter.Type is not null)
             {
                 var typeInfo = semanticModel.GetTypeInfo(parameter.Type);
-                if (typeInfo.Type?.Name == "IServiceProvider")
+                if ((typeInfo.Type is not null && IsSystemIServiceProvider(typeInfo.Type)) ||
+                    (typeInfo.Type is not null && wellKnownTypes.IsKeyedServiceProvider(typeInfo.Type)))
                 {
                     return true;
                 }
@@ -229,5 +243,11 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsSystemIServiceProvider(ITypeSymbol type)
+    {
+        return type.Name == "IServiceProvider" &&
+               type.ContainingNamespace.ToDisplayString() == "System";
     }
 }

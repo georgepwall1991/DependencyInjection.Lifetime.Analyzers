@@ -49,7 +49,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector)
     {
-        foreach (var registration in registrationCollector.Registrations)
+        foreach (var registration in registrationCollector.AllRegistrations)
         {
             // Only check singletons and scoped services for captive dependencies
             if (registration.Lifetime == ServiceLifetime.Transient)

@@ -307,5 +307,69 @@ public class DI001_ScopeDisposalAnalyzerTests
         await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task DisposeCallBeforeScopeCreation_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    IServiceScope? scope = null;
+                    scope?.Dispose();
+
+                    scope = _scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithLocation(18, 17)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task ShadowedScopeVariableDisposed_OuterScopeStillReported()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+
+                    {
+                        var scope2 = _scopeFactory.CreateScope();
+                        scope2.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithLocation(15, 21)
+                .WithArguments("CreateScope"));
+    }
+
     #endregion
 }

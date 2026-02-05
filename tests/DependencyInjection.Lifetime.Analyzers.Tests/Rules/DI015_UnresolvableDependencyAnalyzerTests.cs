@@ -429,6 +429,44 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task EarlierDuplicateRegistrationWithMissingDependency_StillReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MissingService : IMyService
+            {
+                public MissingService(IMissingDependency missing) { }
+            }
+
+            public class SafeService : IMyService
+            {
+                public SafeService(IDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, Dependency>();
+                    services.AddSingleton<IMyService, MissingService>();
+                    services.AddSingleton<IMyService, SafeService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(62, 9)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic

@@ -197,6 +197,47 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .WithArguments("SingletonService", "scoped", "IScopedDependency"));
     }
 
+    [Fact]
+    public async Task EarlierDuplicateRegistration_IsStillAnalyzedForCaptiveDependency()
+    {
+        var source = Usings + """
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+
+            public interface IMyService { }
+            public class CaptiveService : IMyService
+            {
+                public CaptiveService(IScopedDependency scoped) { }
+            }
+
+            public class SafeService : IMyService
+            {
+                public SafeService(ISingletonDependency singleton) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.AddSingleton<IMyService, CaptiveService>();
+                    services.AddSingleton<IMyService, SafeService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(26, 9)
+                .WithArguments("CaptiveService", "scoped", "IScopedDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (False Positives)

@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a defect or false positive/false negative in an analyzer rule
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue. Please provide a minimal repro so we can validate quickly.
+  - type: input
+    id: rule_id
+    attributes:
+      label: Rule ID
+      description: Which rule is affected (for example `DI003`)?
+      placeholder: DI00X
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Paste the smallest possible code sample that reproduces the issue.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected vs actual behavior
+      description: Explain what you expected and what happened.
+    validations:
+      required: true
+  - type: input
+    id: sdk
+    attributes:
+      label: .NET SDK version
+      placeholder: 10.0.102
+    validations:
+      required: true
+  - type: input
+    id: ide
+    attributes:
+      label: IDE and version
+      placeholder: Rider 2025.x / Visual Studio 2022 / VS Code
+    validations:
+      required: true

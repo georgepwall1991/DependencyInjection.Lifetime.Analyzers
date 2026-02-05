@@ -51,7 +51,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector)
     {
-        foreach (var registration in registrationCollector.Registrations)
+        foreach (var registration in registrationCollector.AllRegistrations)
         {
             // Only check singletons for open generic captive dependencies
             if (registration.Lifetime != ServiceLifetime.Singleton)

@@ -238,10 +238,8 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
-    public async Task FieldAssignment_ThisQualified_NotCurrentlyDetected()
+    public async Task FieldAssignment_ThisQualified_ReportsDiagnostic()
     {
-        // KNOWN LIMITATION: this._field assignment pattern not currently detected
-        // The analyzer looks for simple identifier assignments, not member access
         var source = Usings + """
             public interface IMyService { }
 
@@ -263,8 +261,12 @@ public class DI002_ScopeEscapeAnalyzerTests
             }
             """;
 
-        // Document current behavior - this pattern is not detected
-        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(19, 25)
+                .WithArguments("_service"));
     }
 
     [Fact]
@@ -333,11 +335,8 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
-    public async Task ServiceVariable_ReturnedAfterScopeEnds_NotCurrentlyDetected()
+    public async Task ServiceVariable_ReturnedAfterScopeEnds_ReportsDiagnostic()
     {
-        // KNOWN LIMITATION: Variable tracking across using statement blocks
-        // is not currently implemented. The analyzer tracks direct returns
-        // but not variables assigned inside and returned outside.
         var source = Usings + """
             public interface IMyService { }
 
@@ -362,7 +361,81 @@ public class DI002_ScopeEscapeAnalyzerTests
             }
             """;
 
-        // Document current behavior - this pattern is not detected
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(20, 23)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task SingletonResolvedFromScope_Returned_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return scope.ServiceProvider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientResolvedFromScope_Returned_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient<IMyService, MyService>();
+                }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return scope.ServiceProvider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 

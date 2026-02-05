@@ -31,7 +31,7 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
 
     private static void AnalyzeRegistrations(CompilationAnalysisContext context, RegistrationCollector collector)
     {
-        foreach (var registration in collector.Registrations)
+        foreach (var registration in collector.AllRegistrations)
         {
             if (registration.ImplementationType == null) continue;
 

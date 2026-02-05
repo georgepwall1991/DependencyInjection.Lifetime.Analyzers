@@ -56,7 +56,7 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes)
     {
-        foreach (var registration in registrationCollector.Registrations)
+        foreach (var registration in registrationCollector.AllRegistrations)
         {
             var implementationType = registration.ImplementationType;
             if (implementationType is null)

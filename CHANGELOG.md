@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-02-05
+
+### Added
+
+- **Quality Gates**: Added CI coverage thresholds (line + branch) and release-time tag/version validation.
+- **Community Files**: Added issue templates, pull request template, and `CODE_OF_CONDUCT.md`.
+- **Documentation**: Added `docs/RULES.md` as the deep-dive rule reference and reshaped `README.md` into a quickstart-focused guide.
+
+### Changed
+
+- **RegistrationCollector**: Added all-registration tracking (`AllRegistrations`) so analyzers can inspect duplicate `Add*` registrations instead of only the last one.
+- **Analyzer Coverage for Duplicates**: Updated DI003, DI009, DI010, DI011, DI013, and DI015 to analyze all discovered `Add*` registrations.
+- **DI002**: Switched to symbol-based tracking and lifetime-aware filtering to reduce false positives (known singleton/transient registrations no longer trigger scope-escape diagnostics).
+- **DI004**: Switched to symbol-based tracking and lifetime-aware filtering (known singleton services resolved from scope are excluded from use-after-dispose diagnostics).
+- **DI001 / DI014**: Hardened explicit-dispose detection by requiring symbol-matched dispose calls that occur after creation, reducing false negatives from name-only matching.
+- **Symbol Matching**: Improved service-provider and registration matching logic to prefer robust symbol/namespace checks while preserving compatibility with test stubs.
+- **Tests**: Expanded regression coverage for variable shadowing, singleton scope-usage scenarios, duplicate registration analysis, and dispose-before-create edge cases.
+
 ## [1.11.0] - 2026-02-05
 
 ### Changed

@@ -119,4 +119,49 @@ public sealed class DummyDisposable : IDisposable
                 .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
                 .WithLocation(12, 28));
     }
+
+    [Fact]
+    public async Task BuildServiceProvider_DisposeCallBeforeCreation_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        IServiceProvider? provider = null;
+        (provider as IDisposable)?.Dispose();
+        provider = services.BuildServiceProvider();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(12, 20));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ShadowedVariableDisposed_OuterProviderStillReported()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+
+        {
+            var provider2 = services.BuildServiceProvider();
+            provider2.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 24));
+    }
 }

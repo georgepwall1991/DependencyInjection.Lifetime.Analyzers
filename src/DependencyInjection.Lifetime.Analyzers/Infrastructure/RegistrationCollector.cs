@@ -15,14 +15,26 @@ namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 public sealed class RegistrationCollector
 {
     private readonly ConcurrentDictionary<ServiceIdentifier, ServiceRegistration> _registrations;
+    private readonly ConcurrentBag<ServiceRegistration> _allRegistrations;
     private readonly ConcurrentBag<OrderedRegistration> _orderedRegistrations;
     private readonly INamedTypeSymbol? _serviceCollectionType;
+    private readonly INamedTypeSymbol? _serviceCollectionServiceExtensionsType;
+    private readonly INamedTypeSymbol? _serviceCollectionDescriptorExtensionsType;
+    private readonly INamedTypeSymbol? _serviceDescriptorType;
     private int _registrationOrder;
 
-    private RegistrationCollector(INamedTypeSymbol? serviceCollectionType)
+    private RegistrationCollector(
+        INamedTypeSymbol? serviceCollectionType,
+        INamedTypeSymbol? serviceCollectionServiceExtensionsType,
+        INamedTypeSymbol? serviceCollectionDescriptorExtensionsType,
+        INamedTypeSymbol? serviceDescriptorType)
     {
         _serviceCollectionType = serviceCollectionType;
+        _serviceCollectionServiceExtensionsType = serviceCollectionServiceExtensionsType;
+        _serviceCollectionDescriptorExtensionsType = serviceCollectionDescriptorExtensionsType;
+        _serviceDescriptorType = serviceDescriptorType;
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
+        _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
         _registrationOrder = 0;
     }
@@ -75,7 +87,23 @@ public sealed class RegistrationCollector
             return null;
         }
 
-        return new RegistrationCollector(serviceCollectionType);
+        var serviceCollectionServiceExtensionsType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions");
+
+        // `ServiceCollectionDescriptorExtensions` has moved namespaces across package versions.
+        var serviceCollectionDescriptorExtensionsType = compilation.GetTypeByMetadataName(
+                "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions") ??
+            compilation.GetTypeByMetadataName(
+                "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions");
+
+        var serviceDescriptorType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceDescriptor");
+
+        return new RegistrationCollector(
+            serviceCollectionType,
+            serviceCollectionServiceExtensionsType,
+            serviceCollectionDescriptorExtensionsType,
+            serviceDescriptorType);
     }
 
     /// <summary>
@@ -87,6 +115,11 @@ public sealed class RegistrationCollector
     /// Gets all ordered registrations for analyzing registration order.
     /// </summary>
     public IEnumerable<OrderedRegistration> OrderedRegistrations => _orderedRegistrations;
+
+    /// <summary>
+    /// Gets all collected Add* registrations (including duplicates) that include implementation metadata.
+    /// </summary>
+    public IEnumerable<ServiceRegistration> AllRegistrations => _allRegistrations;
 
     /// <summary>
     /// Tries to get the registration for a specific service type and key.
@@ -158,7 +191,8 @@ public sealed class RegistrationCollector
                  (isExtension || isAddMethod))
         {
             // Handle Add(ServiceDescriptor)
-            (serviceType, implementationType, factoryExpression, lifetime, key, isKeyed) = ExtractFromServiceDescriptor(invocation, semanticModel);
+            (serviceType, implementationType, factoryExpression, lifetime, key, isKeyed) =
+                ExtractFromServiceDescriptor(invocation, semanticModel);
         }
         else
         {
@@ -195,6 +229,8 @@ public sealed class RegistrationCollector
                 lifetime.Value,
                 invocation.GetLocation());
 
+            _allRegistrations.Add(registration);
+
             // Store by service type and key (later registrations override earlier ones, like DI container behavior)
             _registrations[new ServiceIdentifier(serviceType, key, isKeyed)] = registration;
         }
@@ -210,10 +246,14 @@ public sealed class RegistrationCollector
             return false;
         }
 
-        // Check if the containing type is ServiceCollectionServiceExtensions or ServiceCollectionDescriptorExtensions
         var containingType = originalMethod.ContainingType;
-        if (containingType?.Name != "ServiceCollectionServiceExtensions" &&
-            containingType?.Name != "ServiceCollectionDescriptorExtensions")
+        if (containingType is null)
+        {
+            return false;
+        }
+
+        var isKnownContainingType = IsKnownServiceCollectionExtensionsType(containingType);
+        if (!isKnownContainingType)
         {
             return false;
         }
@@ -225,7 +265,7 @@ public sealed class RegistrationCollector
         }
 
         var firstParam = originalMethod.Parameters[0];
-        return firstParam.Type.Name == "IServiceCollection";
+        return SymbolEqualityComparer.Default.Equals(firstParam.Type, _serviceCollectionType);
     }
 
     private bool IsServiceCollectionAddMethod(IMethodSymbol method)
@@ -234,6 +274,11 @@ public sealed class RegistrationCollector
         if (method.Parameters.Length != 1) return false;
 
         var paramType = method.Parameters[0].Type;
+        if (_serviceDescriptorType is not null)
+        {
+            return SymbolEqualityComparer.Default.Equals(paramType, _serviceDescriptorType);
+        }
+
         return paramType.Name == "ServiceDescriptor" &&
                (paramType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" ||
                 paramType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.Abstractions");
@@ -312,7 +357,7 @@ public sealed class RegistrationCollector
         return methodName.StartsWith("TryAdd");
     }
 
-    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptor(
+    private (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptor(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel)
     {
@@ -322,9 +367,7 @@ public sealed class RegistrationCollector
             if (arg.Expression is ObjectCreationExpressionSyntax creation)
             {
                 var typeSymbol = semanticModel.GetTypeInfo(creation).Type;
-                if (typeSymbol?.Name == "ServiceDescriptor" && 
-                    (typeSymbol.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" ||
-                     typeSymbol.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.Abstractions"))
+                if (IsServiceDescriptorType(typeSymbol))
                 {
                     return ExtractFromServiceDescriptorArguments(creation.ArgumentList, semanticModel);
                 }
@@ -333,9 +376,7 @@ public sealed class RegistrationCollector
             {
                 var methodSymbol = semanticModel.GetSymbolInfo(describeInvocation).Symbol as IMethodSymbol;
                 if (methodSymbol?.Name == "Describe" &&
-                    methodSymbol.ContainingType.Name == "ServiceDescriptor" &&
-                    (methodSymbol.ContainingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" ||
-                     methodSymbol.ContainingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.Abstractions"))
+                    IsServiceDescriptorType(methodSymbol.ContainingType))
                 {
                     return ExtractFromServiceDescriptorArguments(describeInvocation.ArgumentList, semanticModel);
                 }
@@ -679,6 +720,32 @@ public sealed class RegistrationCollector
         }
 
         return false;
+    }
+
+    private bool IsKnownServiceCollectionExtensionsType(INamedTypeSymbol type)
+    {
+        if (SymbolEqualityComparer.Default.Equals(type, _serviceCollectionServiceExtensionsType) ||
+            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionDescriptorExtensionsType))
+        {
+            return true;
+        }
+
+        var fullName = type.ToDisplayString();
+        return fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions";
+    }
+
+    private bool IsServiceDescriptorType(ITypeSymbol? type)
+    {
+        if (_serviceDescriptorType is not null)
+        {
+            return SymbolEqualityComparer.Default.Equals(type, _serviceDescriptorType);
+        }
+
+        return type?.Name == "ServiceDescriptor" &&
+               (type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" ||
+                type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.Abstractions");
     }
 
     private static bool IsFactoryExpression(ExpressionSyntax expression)

@@ -73,7 +73,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
-        foreach (var registration in registrationCollector.Registrations)
+        foreach (var registration in registrationCollector.AllRegistrations)
         {
             if (registration.FactoryExpression is not null)
             {

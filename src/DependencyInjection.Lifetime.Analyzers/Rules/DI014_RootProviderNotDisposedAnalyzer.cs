@@ -45,13 +45,18 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
 
         // Verify it's on ServiceCollectionContainerBuilderExtensions
         var containingType = invocation.TargetMethod.ContainingType;
-        if (containingType?.Name != "ServiceCollectionContainerBuilderExtensions")
+        if (containingType?.Name != "ServiceCollectionContainerBuilderExtensions" ||
+            containingType.ContainingNamespace.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
         {
             return;
         }
 
+        #pragma warning disable RS1030
+        var semanticModel = context.Compilation.GetSemanticModel(invocation.Syntax.SyntaxTree);
+        #pragma warning restore RS1030
+
         // Check if the result is properly handled
-        if (IsProperlyDisposed(invocation))
+        if (IsProperlyDisposed(invocation, semanticModel))
         {
             return;
         }
@@ -63,7 +68,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(diagnostic);
     }
 
-    private static bool IsProperlyDisposed(IInvocationOperation invocation)
+    private static bool IsProperlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
         // Case 1: Result is used in a using statement or declaration
         if (IsInUsingContext(invocation))
@@ -78,7 +83,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         }
 
         // Case 3: Result is assigned to a variable that is later disposed
-        if (IsExplicitlyDisposed(invocation))
+        if (IsExplicitlyDisposed(invocation, semanticModel))
         {
             return true;
         }
@@ -171,7 +176,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsExplicitlyDisposed(IInvocationOperation invocation)
+    private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
         var syntax = invocation.Syntax;
 
@@ -185,7 +190,10 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var variableName = declarator.Identifier.Text;
+        if (semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol variableSymbol)
+        {
+            return false;
+        }
 
         var containingBlock = GetContainingBlock(syntax);
         if (containingBlock is null)
@@ -193,7 +201,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        return HasDisposeCall(containingBlock, variableName);
+        return HasDisposeCall(containingBlock, syntax.SpanStart, variableSymbol, semanticModel);
     }
 
     private static SyntaxNode? GetContainingBlock(SyntaxNode node)
@@ -210,20 +218,40 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return null;
     }
 
-    private static bool HasDisposeCall(SyntaxNode block, string variableName)
+    private static bool HasDisposeCall(
+        SyntaxNode block,
+        int creationPosition,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
     {
         foreach (var descendant in block.DescendantNodes())
         {
-            if (descendant is InvocationExpressionSyntax invocationSyntax &&
-                invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess &&
-                (memberAccess.Name.Identifier.Text == "Dispose" || memberAccess.Name.Identifier.Text == "DisposeAsync") &&
-                memberAccess.Expression is IdentifierNameSyntax identifier &&
-                identifier.Identifier.Text == variableName)
+            if (descendant is not InvocationExpressionSyntax invocationSyntax ||
+                invocationSyntax.SpanStart <= creationPosition ||
+                invocationSyntax.Expression is not MemberAccessExpressionSyntax memberAccess ||
+                IsInNestedExecutableBoundary(invocationSyntax))
+            {
+                continue;
+            }
+
+            if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            {
+                continue;
+            }
+
+            var targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
+            if (SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsInNestedExecutableBoundary(SyntaxNode node)
+    {
+        return node.FirstAncestorOrSelf<AnonymousFunctionExpressionSyntax>() is not null ||
+               node.FirstAncestorOrSelf<LocalFunctionStatementSyntax>() is not null;
     }
 }

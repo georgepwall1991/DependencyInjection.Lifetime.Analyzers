@@ -68,7 +68,8 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "Services resolved from a scope should not escape the scope's lifetime. Returning or storing scoped services in longer-lived locations can cause issues when the scope is disposed.");
+        description: "Services resolved from a scope should not escape the scope's lifetime. Returning or storing scoped services in longer-lived locations can cause issues when the scope is disposed.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>
     /// DI004: Service used after its scope was disposed.
@@ -80,7 +81,8 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "Using a service after its scope has been disposed can cause ObjectDisposedException or other errors. Ensure all service usage occurs within the scope's lifetime.");
+        description: "Using a service after its scope has been disposed can cause ObjectDisposedException or other errors. Ensure all service usage occurs within the scope's lifetime.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>
     /// DI007: Service locator anti-pattern detected.
