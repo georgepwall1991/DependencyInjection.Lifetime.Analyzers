@@ -30,6 +30,11 @@ dotnet add package DependencyInjection.Lifetime.Analyzers
 
 The analyzers will automatically run during compilation and in your IDE.
 
+## Samples
+
+- `samples/SampleApp`: One diagnostics folder per rule (`DI001` through `DI015`) for quick IDE/build inspection.
+- `samples/DI015InAction`: Focused runnable sample that shows DI015 failures and the corrected registration path.
+
 ## The Rules
 
 | ID                                                    | Title                                 | Severity | Code Fix |
@@ -48,6 +53,7 @@ The analyzers will automatically run during compilation and in your IDE.
 | [DI012](#di012-conditional-registration-misuse)       | Conditional registration misuse       | Info     | No       |
 | [DI013](#di013-implementation-type-mismatch)          | Implementation type mismatch          | Error    | No       |
 | [DI014](#di014-root-service-provider-not-disposed)    | Root service provider not disposed    | Warning  | Yes      |
+| [DI015](#di015-unresolvable-dependency)               | Unresolvable dependency               | Warning  | No       |
 
 ---
 
@@ -627,6 +633,42 @@ var service = provider.GetRequiredService<IMyService>();
 ```
 
 **Code Fix:** Yes - Adds `using` statement
+
+---
+
+## DI015: Unresolvable Dependency
+
+When a registered service depends on another service that was never registered, service resolution fails at runtime
+with an `InvalidOperationException`.
+
+> **Explain Like I'm Ten:** You packed a lunchbox with a sandwich recipe, but never bought bread. Lunch prep fails when you actually try to make it.
+
+**The Problem:**
+
+```csharp
+public interface IMyService { }
+public interface IMissingDependency { }
+
+public class MyService : IMyService
+{
+    public MyService(IMissingDependency dependency) { } // Not registered
+}
+
+services.AddSingleton<IMyService, MyService>(); // Fails when resolved
+```
+
+**The Solution:**
+
+```csharp
+public class MissingDependency : IMissingDependency { }
+
+services.AddScoped<IMissingDependency, MissingDependency>();
+services.AddSingleton<IMyService, MyService>();
+```
+
+**Code Fix:** No - Requires registering the dependency or changing constructor/factory design
+
+See a runnable end-to-end example in `samples/DI015InAction`.
 
 ---
 

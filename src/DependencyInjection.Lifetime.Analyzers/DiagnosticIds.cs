@@ -72,4 +72,9 @@ public static class DiagnosticIds
     public const string ConditionalRegistrationMisuse = "DI012";
     public const string ImplementationTypeMismatch = "DI013";
     public const string RootProviderNotDisposed = "DI014";
+
+    /// <summary>
+    /// DI015: Registered service depends on an unregistered dependency.
+    /// </summary>
+    public const string UnresolvableDependency = "DI015";
 }

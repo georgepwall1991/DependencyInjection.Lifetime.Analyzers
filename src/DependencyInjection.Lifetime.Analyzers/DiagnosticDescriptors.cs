@@ -195,4 +195,17 @@ public static class DiagnosticDescriptors
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "The root service provider implements IDisposable and should be disposed to ensure that any disposable singletons are properly cleaned up.");
+
+    /// <summary>
+    /// DI015: Registered service depends on an unregistered dependency.
+    /// </summary>
+    public static readonly DiagnosticDescriptor UnresolvableDependency = new(
+        id: DiagnosticIds.UnresolvableDependency,
+        title: "Unresolvable dependency detected",
+        messageFormat: "Service '{0}' depends on unregistered service '{1}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A registered service has a constructor or factory dependency that is not registered in the DI container. This commonly causes runtime InvalidOperationException when resolving the service.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }
