@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-02-05
+
 ### Changed
 
 - **DI015**: Added factory method-group analysis support (for registrations such as `AddSingleton<IMyService>(CreateMyService)`) and corresponding test coverage.
