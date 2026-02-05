@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-02-05
+
+### Fixed
+
+- **DI001 / DI014**: Avoided false negatives where any enclosing `using` statement was incorrectly treated as disposing a scope/provider created elsewhere.
+- **DI003**: Fixed non-generic service-resolution argument mapping for reduced extension methods (`GetService(typeof(...))`, `GetRequiredService(typeof(...))`), preventing missed captive-dependency reports.
+- **Constructor Selection**: Added shared constructor-selection logic honoring `[ActivatorUtilitiesConstructor]` and preventing regressions with new analyzer tests.
+
+### Changed
+
+- **DI003**: Expanded non-generic and keyed resolution handling for factory delegates.
+- **CI/Tooling**: Added `global.json`, updated CI/release workflows to install .NET 8 and .NET 10, and aligned test infrastructure/packages with current Roslyn testing defaults.
+- **Tests**: Added targeted regression coverage across DI003, DI009, DI010, and DI011 for constructor-selection behavior and factory-resolution edge cases.
+
 ## [1.8.0] - 2025-12-11
 
 ### Fixed
