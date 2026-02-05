@@ -69,6 +69,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         {
             if (registration.FactoryExpression is not null)
             {
+                // Factory registrations control activation, so constructor analysis would be duplicate/noisy.
                 AnalyzeFactoryRegistration(
                     context,
                     registrationCollector,
@@ -180,6 +181,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             if (!TryGetRequiredResolutionInfo(
                     invocation,
                     semanticModel,
+                    wellKnownTypes,
                     out var dependencyType,
                     out var key,
                     out var isKeyed))
@@ -210,6 +212,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
     private static bool TryGetRequiredResolutionInfo(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
+        WellKnownTypes? wellKnownTypes,
         out ITypeSymbol dependencyType,
         out object? key,
         out bool isKeyed)
@@ -224,7 +227,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        if (!IsRequiredResolutionMethod(methodSymbol))
+        if (!IsRequiredResolutionMethod(methodSymbol, wellKnownTypes))
         {
             return false;
         }
@@ -243,7 +246,9 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         return TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, out key);
     }
 
-    private static bool IsRequiredResolutionMethod(IMethodSymbol methodSymbol)
+    private static bool IsRequiredResolutionMethod(
+        IMethodSymbol methodSymbol,
+        WellKnownTypes? wellKnownTypes)
     {
         var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
         if (sourceMethod.Name is not ("GetRequiredService" or "GetRequiredKeyedService"))
@@ -251,14 +256,38 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        if (sourceMethod.IsExtensionMethod &&
-            sourceMethod.Parameters.Length > 0 &&
-            sourceMethod.Parameters[0].Type.Name is "IServiceProvider" or "IKeyedServiceProvider")
+        if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
+        {
+            var receiverType = sourceMethod.Parameters[0].Type;
+            if (wellKnownTypes?.IServiceProvider is not null &&
+                SymbolEqualityComparer.Default.Equals(receiverType, wellKnownTypes.IServiceProvider))
+            {
+                return true;
+            }
+
+            if (wellKnownTypes?.IKeyedServiceProvider is not null &&
+                SymbolEqualityComparer.Default.Equals(receiverType, wellKnownTypes.IKeyedServiceProvider))
+            {
+                return true;
+            }
+
+            // Fallback for reduced test stubs when well-known symbols are unavailable.
+            if (wellKnownTypes is null &&
+                receiverType.Name is "IServiceProvider" or "IKeyedServiceProvider")
+            {
+                return true;
+            }
+        }
+
+        if (wellKnownTypes?.IKeyedServiceProvider is not null &&
+            SymbolEqualityComparer.Default.Equals(sourceMethod.ContainingType, wellKnownTypes.IKeyedServiceProvider) &&
+            sourceMethod.Name == "GetRequiredKeyedService")
         {
             return true;
         }
 
-        if (sourceMethod.ContainingType?.Name == "IKeyedServiceProvider" &&
+        if (wellKnownTypes is null &&
+            sourceMethod.ContainingType?.Name == "IKeyedServiceProvider" &&
             sourceMethod.Name == "GetRequiredKeyedService")
         {
             return true;
