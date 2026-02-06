@@ -239,6 +239,7 @@ public sealed class RegistrationCollector
                 implementationType,
                 factoryExpression,
                 key,
+                isKeyed,
                 lifetime.Value,
                 invocation.GetLocation());
 

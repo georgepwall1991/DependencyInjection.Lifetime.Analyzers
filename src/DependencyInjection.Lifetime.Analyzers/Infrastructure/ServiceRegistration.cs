@@ -29,6 +29,11 @@ public sealed class ServiceRegistration
     public object? Key { get; }
 
     /// <summary>
+    /// Gets whether this registration is keyed.
+    /// </summary>
+    public bool IsKeyed { get; }
+
+    /// <summary>
     /// Gets the lifetime of the registration.
     /// </summary>
     public ServiceLifetime Lifetime { get; }
@@ -46,6 +51,7 @@ public sealed class ServiceRegistration
         INamedTypeSymbol? implementationType,
         ExpressionSyntax? factoryExpression,
         object? key,
+        bool isKeyed,
         ServiceLifetime lifetime,
         Location location)
     {
@@ -53,6 +59,7 @@ public sealed class ServiceRegistration
         ImplementationType = implementationType;
         FactoryExpression = factoryExpression;
         Key = key;
+        IsKeyed = isKeyed;
         Lifetime = lifetime;
         Location = location;
     }
