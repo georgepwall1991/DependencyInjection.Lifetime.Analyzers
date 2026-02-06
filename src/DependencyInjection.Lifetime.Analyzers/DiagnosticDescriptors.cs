@@ -210,4 +210,16 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A registered service has a constructor or factory dependency that is not registered in the DI container. This commonly causes runtime InvalidOperationException when resolving the service.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI016: BuildServiceProvider called while composing service registrations.
+    /// </summary>
+    public static readonly DiagnosticDescriptor BuildServiceProviderMisuse = new(
+        id: DiagnosticIds.BuildServiceProviderMisuse,
+        title: "Avoid BuildServiceProvider during service registration",
+        messageFormat: "Avoid calling 'BuildServiceProvider()' while composing service registrations",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Calling BuildServiceProvider() during service registration creates an additional root container, which can duplicate singletons and cause lifetime inconsistencies.");
 }
