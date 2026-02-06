@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-02-06
+
+### Changed
+
+- **DI002**: Reduced false positives by reporting scope-escape diagnostics only when the resolved service lifetime is known and scoped.
+- **DI004**: Reduced false positives by reporting use-after-dispose diagnostics only when the resolved service lifetime is known and scoped/transient.
+- **RegistrationCollector**: Improved fallback symbol handling to track DI registrations in unresolved/ambiguous invocation cases, including `Add*(typeof(...))` patterns.
+- **Tests**: Added and updated regression coverage for unknown-lifetime suppression and `typeof`-based registration tracking in collector/rule/code-fix scenarios.
+
 ## [1.12.0] - 2026-02-05
 
 ### Added
