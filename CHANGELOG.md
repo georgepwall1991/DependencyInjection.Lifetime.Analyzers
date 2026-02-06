@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-02-06
+
+### Changed
+
+- **DI001 / DI014**: Reduced false positives by recognising explicit disposal inside the same lambda/local-function execution boundary while still warning when disposal is only deferred into a different boundary.
+- **DI007**: Reduced false positives by continuing context analysis from lambdas up to containing methods (for example `Create*`/`Build*` factory methods), instead of stopping early.
+- **DI008**: Reduced false positives with stricter symbol-based `AddTransient` detection and factory method-group detection for member-access expressions (for example `FactoryMethods.Create`).
+- **Tests**: Added dedicated regression coverage for all fixed cases plus negative guardrail scenarios to ensure diagnostics still fire for deferred-lambda disposal patterns.
+
 ## [2.1.0] - 2026-02-06
 
 ### Added
