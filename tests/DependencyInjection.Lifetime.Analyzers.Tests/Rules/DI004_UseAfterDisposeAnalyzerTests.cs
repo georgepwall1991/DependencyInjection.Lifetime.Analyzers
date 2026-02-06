@@ -44,6 +44,19 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     service.DoWork();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
             """;
 
         await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
@@ -83,6 +96,19 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     // Using service after scope disposed (block ended)!
                     service.DoWork();
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
             }
             """;
 
@@ -129,6 +155,19 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     // Using firstService after its scope disposed!
                     firstService.DoWork();
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
             }
             """;
 
@@ -400,6 +439,19 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     await service.DoWorkAsync();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, AsyncScopedMyService>();
+                }
+            }
+
+            public class AsyncScopedMyService : IMyService
+            {
+                public Task DoWorkAsync() => Task.CompletedTask;
+            }
             """;
 
         await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
@@ -438,6 +490,19 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     // Accessing property after scope disposed!
                     return service.Name;
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, NamedScopedMyService>();
+                }
+            }
+
+            public class NamedScopedMyService : IMyService
+            {
+                public string Name => "name";
             }
             """;
 
@@ -557,6 +622,25 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     svc2.DoOtherWork();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IService1, ScopedService1>();
+                    services.AddScoped<IService2, ScopedService2>();
+                }
+            }
+
+            public class ScopedService1 : IService1
+            {
+                public void DoWork() { }
+            }
+
+            public class ScopedService2 : IService2
+            {
+                public void DoOtherWork() { }
+            }
             """;
 
         await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
@@ -569,6 +653,40 @@ public class DI004_UseAfterDisposeAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
                 .WithSpan(34, 9, 34, 27)
                 .WithArguments("svc2"));
+    }
+
+    [Fact]
+    public async Task UnknownLifetime_UsedAfterScopeDisposed_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    service.DoWork();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     #endregion

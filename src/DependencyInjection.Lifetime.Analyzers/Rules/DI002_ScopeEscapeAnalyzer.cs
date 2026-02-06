@@ -415,9 +415,9 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
     private static bool ShouldReportScopedEscape(ServiceLifetime? lifetime)
     {
-        // Unknown lifetime: keep reporting to preserve detection quality when registrations aren't analyzable.
-        // DI002 specifically targets scoped-lifetime escape patterns, so known singleton/transient services are excluded.
-        return lifetime is null or ServiceLifetime.Scoped;
+        // DI002 targets scoped services escaping their scope. If lifetime is unknown,
+        // skip reporting to avoid false positives when registration metadata is incomplete.
+        return lifetime is ServiceLifetime.Scoped;
     }
 
     private static void ReportDiagnostic(
