@@ -290,12 +290,8 @@ public class RegistrationCollectorTests
     #region AnalyzeInvocation - typeof Pattern
 
     [Fact]
-    public void AnalyzeInvocation_TypeofPattern_NotCurrentlyTracked()
+    public void AnalyzeInvocation_TypeofPattern_TracksRegistration()
     {
-        // KNOWN LIMITATION: Non-generic typeof-based registration patterns
-        // (e.g., AddSingleton(typeof(IService), typeof(Impl))) are not
-        // currently tracked by the collector as they may use different
-        // overloads that don't go through ServiceCollectionServiceExtensions.
         var source = """
             using Microsoft.Extensions.DependencyInjection;
             public interface IMyService { }
@@ -316,15 +312,19 @@ public class RegistrationCollectorTests
             collector.AnalyzeInvocation(invocation, semanticModel);
         }
 
-        // Document current behavior: typeof patterns may not be tracked
-        // This is acceptable as the analyzer focuses on common generic patterns
-        Assert.Empty(collector.OrderedRegistrations);
+        Assert.Single(collector.OrderedRegistrations);
+        Assert.Single(collector.Registrations);
+
+        var registration = collector.Registrations.First();
+        Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("MyService", registration.ImplementationType!.Name);
+        Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
     }
 
     [Fact]
-    public void AnalyzeInvocation_TypeofPatternSingleArg_NotCurrentlyTracked()
+    public void AnalyzeInvocation_TypeofPatternSingleArg_TracksRegistration()
     {
-        // KNOWN LIMITATION: Single-arg typeof patterns are not tracked
         var source = """
             using Microsoft.Extensions.DependencyInjection;
             public class MyService { }
@@ -344,8 +344,14 @@ public class RegistrationCollectorTests
             collector.AnalyzeInvocation(invocation, semanticModel);
         }
 
-        // Document current behavior
-        Assert.Empty(collector.OrderedRegistrations);
+        Assert.Single(collector.OrderedRegistrations);
+        Assert.Single(collector.Registrations);
+
+        var registration = collector.Registrations.First();
+        Assert.Equal("MyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("MyService", registration.ImplementationType!.Name);
+        Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
     }
 
     #endregion
@@ -603,12 +609,8 @@ public class RegistrationCollectorTests
     }
 
     [Fact]
-    public void AnalyzeInvocation_OpenGenericWithTypeofPattern_NotCurrentlyTracked()
+    public void AnalyzeInvocation_OpenGenericWithTypeofPattern_TracksRegistration()
     {
-        // KNOWN LIMITATION: Open generic registrations via typeof pattern
-        // (e.g., AddSingleton(typeof(IRepository<>), typeof(Repository<>)))
-        // are not tracked because the typeof extraction doesn't handle
-        // unbound generic types in a way that the analyzer can use.
         var source = """
             using Microsoft.Extensions.DependencyInjection;
             public interface IRepository<T> { }
@@ -629,8 +631,16 @@ public class RegistrationCollectorTests
             collector.AnalyzeInvocation(invocation, semanticModel);
         }
 
-        // Document current behavior: open generics via typeof not tracked
-        Assert.Empty(collector.OrderedRegistrations);
+        Assert.Single(collector.OrderedRegistrations);
+        Assert.Single(collector.Registrations);
+
+        var registration = collector.Registrations.First();
+        Assert.Equal("IRepository", registration.ServiceType.Name);
+        Assert.True(registration.ServiceType.IsUnboundGenericType);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("Repository", registration.ImplementationType!.Name);
+        Assert.True(registration.ImplementationType.IsUnboundGenericType);
+        Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
     }
 
     #endregion

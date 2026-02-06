@@ -36,6 +36,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     return scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
             """;
 
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
@@ -67,6 +80,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     using var scope = _scopeFactory.CreateScope();
                     _service = scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
             }
             """;
 
@@ -227,6 +253,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     return scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
             """;
 
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
@@ -258,6 +297,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     using var scope = _scopeFactory.CreateScope();
                     this._service = scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
             }
             """;
 
@@ -324,6 +376,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     _service = scope2.ServiceProvider.GetRequiredService<IMyService>(); // Escapes!
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
             """;
 
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
@@ -358,6 +423,19 @@ public class DI002_ScopeEscapeAnalyzerTests
                     }
                     return service; // Service escapes after scope ends
                 }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
             }
             """;
 
@@ -418,6 +496,32 @@ public class DI002_ScopeEscapeAnalyzerTests
                     services.AddTransient<IMyService, MyService>();
                 }
             }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return scope.ServiceProvider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task UnknownLifetimeResolvedFromScope_Returned_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
 
             public class MyClass
             {

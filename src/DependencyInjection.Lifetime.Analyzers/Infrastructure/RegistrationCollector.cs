@@ -150,9 +150,22 @@ public sealed class RegistrationCollector
     {
         // Get the method symbol
         var symbolInfo = semanticModel.GetSymbolInfo(invocation);
-        if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
+        var methodSymbol = symbolInfo.Symbol as IMethodSymbol;
+        if (methodSymbol is null)
         {
-            return;
+            // In incomplete code or overload-resolution failures Roslyn can surface
+            // candidates without a final symbol. Prefer DI registration candidates so
+            // typeof-based Add* calls are still tracked when possible.
+            methodSymbol = symbolInfo.CandidateSymbols
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault(candidate =>
+                    IsServiceCollectionExtensionMethod(candidate) ||
+                    IsServiceCollectionAddMethod(candidate));
+
+            if (methodSymbol is null)
+            {
+                return;
+            }
         }
 
         var isExtension = IsServiceCollectionExtensionMethod(methodSymbol);

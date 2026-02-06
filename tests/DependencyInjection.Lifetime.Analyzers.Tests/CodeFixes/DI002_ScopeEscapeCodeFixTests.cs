@@ -41,6 +41,16 @@ public class DI002_ScopeEscapeCodeFixTests
                     return scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
             """;
 
         var fixedSource = Usings + """
@@ -63,6 +73,16 @@ public class DI002_ScopeEscapeCodeFixTests
             #pragma warning restore DI002
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
             """;
 
         var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
@@ -96,6 +116,16 @@ public class DI002_ScopeEscapeCodeFixTests
                     _service = scope.ServiceProvider.GetRequiredService<IMyService>();
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
             """;
 
         var fixedSource = Usings + """
@@ -119,6 +149,16 @@ public class DI002_ScopeEscapeCodeFixTests
             #pragma warning restore DI002
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
             """;
 
         var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>

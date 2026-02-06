@@ -588,7 +588,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
     private static bool ShouldReportUseAfterDispose(ServiceLifetime? lifetime)
     {
-        // Known singleton lifetimes are safe to use after scope disposal.
-        return lifetime is not ServiceLifetime.Singleton;
+        // Unknown lifetime should not produce a warning to avoid false positives
+        // when registration metadata cannot be resolved.
+        return lifetime is ServiceLifetime.Scoped or ServiceLifetime.Transient;
     }
 }
