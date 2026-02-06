@@ -56,7 +56,6 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
 
         if (!IsRegistrationContext(
                 invocation,
-                context.Compilation,
                 iServiceCollectionType,
                 iServiceProviderType))
         {
@@ -97,15 +96,15 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
 
     private static bool IsRegistrationContext(
         IInvocationOperation invocation,
-        Compilation compilation,
         INamedTypeSymbol iServiceCollectionType,
         INamedTypeSymbol? iServiceProviderType)
     {
         var syntax = invocation.Syntax;
-
-        #pragma warning disable RS1030
-        var semanticModel = compilation.GetSemanticModel(syntax.SyntaxTree);
-        #pragma warning restore RS1030
+        var semanticModel = invocation.SemanticModel;
+        if (semanticModel is null)
+        {
+            return false;
+        }
 
         for (var node = syntax.Parent; node is not null; node = node.Parent)
         {
