@@ -81,6 +81,54 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
                 .WithLocation(11, 13));
     }
 
+    [Fact]
+    public async Task RegistrationLambda_WithContextAndServicesParameters_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class Startup
+            {
+                private static void Configure(Action<object, IServiceCollection> configure) { }
+
+                public void Compose()
+                {
+                    Configure((context, services) =>
+                    {
+                        services.BuildServiceProvider();
+                    });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(11, 13));
+    }
+
+    [Fact]
+    public async Task LocalFunctionWithServiceCollectionParameter_WithBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class Startup
+            {
+                public void Compose()
+                {
+                    void Configure(IServiceCollection services)
+                    {
+                        services.BuildServiceProvider();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(9, 13));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -156,6 +204,22 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
                 {
                     var builder = new CustomBuilder();
                     var provider = builder.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceCollectionBuildServiceProviderCall_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class ServiceCollectionConsumer
+            {
+                public ServiceCollectionConsumer(IServiceCollection services)
+                {
+                    services.BuildServiceProvider();
                 }
             }
             """;
