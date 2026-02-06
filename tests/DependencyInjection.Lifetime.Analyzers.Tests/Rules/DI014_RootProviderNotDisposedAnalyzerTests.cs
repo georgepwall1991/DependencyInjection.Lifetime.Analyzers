@@ -113,6 +113,26 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_DisposedOnlyInsideLambda_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        Action action = () => provider.Dispose();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithSpan(10, 24, 10, 55));
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_InsideUsingBody_NotDisposed_ReportsDiagnostic()
     {
         var source = Usings + @"
