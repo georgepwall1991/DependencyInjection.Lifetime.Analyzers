@@ -50,7 +50,7 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         // Check if this is an AddTransient method on IServiceCollection
-        if (!IsAddTransientMethod(methodSymbol))
+        if (!IsAddTransientMethod(methodSymbol, wellKnownTypes))
         {
             return;
         }
@@ -85,7 +85,7 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(diagnostic);
     }
 
-    private static bool IsAddTransientMethod(IMethodSymbol method)
+    private static bool IsAddTransientMethod(IMethodSymbol method, WellKnownTypes wellKnownTypes)
     {
         // Get the original definition if this is a reduced extension method
         var originalMethod = method.ReducedFrom ?? method;
@@ -97,14 +97,14 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
 
         // Check if the method name is AddTransient or AddKeyedTransient (for .NET 8+ keyed services)
         var methodName = originalMethod.Name;
-        if (!methodName.StartsWith("AddTransient") && !methodName.StartsWith("AddKeyedTransient"))
+        if (methodName is not ("AddTransient" or "AddKeyedTransient"))
         {
             return false;
         }
 
-        // Check if the containing type is ServiceCollectionServiceExtensions
+        // Check if the containing type is the framework ServiceCollectionServiceExtensions symbol
         var containingType = originalMethod.ContainingType;
-        if (containingType?.Name != "ServiceCollectionServiceExtensions")
+        if (!wellKnownTypes.IsServiceCollectionServiceExtensions(containingType))
         {
             return false;
         }
@@ -116,7 +116,7 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         var firstParam = originalMethod.Parameters[0];
-        return firstParam.Type.Name == "IServiceCollection";
+        return wellKnownTypes.IsServiceCollection(firstParam.Type);
     }
 
     private static bool IsFactoryRegistration(IMethodSymbol method, InvocationExpressionSyntax invocation)
@@ -129,6 +129,7 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                 case LambdaExpressionSyntax:
                 case AnonymousMethodExpressionSyntax:
                 case IdentifierNameSyntax: // Could be a method group
+                case MemberAccessExpressionSyntax: // Could be a static method group, e.g. Factory.Create
                     // Check if the method signature accepts a factory delegate
                     var originalMethod = method.ReducedFrom ?? method;
                     foreach (var param in originalMethod.Parameters)

@@ -61,6 +61,25 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_DisposedInsideLambda_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        Action action = () =>
+        {
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+            provider.Dispose();
+        };
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_Returned_NoDiagnostic()
     {
         var source = Usings + @"
@@ -91,6 +110,26 @@ public class Program
             AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
                 .WithLocation(10, 24));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_DisposedOnlyInsideLambda_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        Action action = () => provider.Dispose();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithSpan(10, 24, 10, 55));
     }
 
     [Fact]

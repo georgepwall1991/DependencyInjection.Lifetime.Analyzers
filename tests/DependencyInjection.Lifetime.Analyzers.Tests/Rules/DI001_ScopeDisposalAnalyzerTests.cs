@@ -46,6 +46,35 @@ public class DI001_ScopeDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_DisposedOnlyInsideLambda_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    Action action = () => scope.Dispose();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 21, 15, 48)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
     public async Task CreateScope_AssignedToField_NotDisposed_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -276,6 +305,33 @@ public class DI001_ScopeDisposalAnalyzerTests
                     {
                         scope.Dispose();
                     }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_DisposedInsideLambda_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Action BuildAction()
+                {
+                    return () =>
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        scope.Dispose();
+                    };
                 }
             }
             """;

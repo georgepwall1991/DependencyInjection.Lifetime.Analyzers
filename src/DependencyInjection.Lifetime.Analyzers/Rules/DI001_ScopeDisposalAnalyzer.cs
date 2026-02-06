@@ -225,7 +225,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         // Look for scope.Dispose() call in the same block or try-finally
-        return HasDisposeCall(containingBlock, syntax.SpanStart, variableSymbol, semanticModel);
+        return HasDisposeCall(containingBlock, syntax, variableSymbol, semanticModel);
     }
 
     private static SyntaxNode? GetContainingBlock(SyntaxNode node)
@@ -244,7 +244,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool HasDisposeCall(
         SyntaxNode block,
-        int creationPosition,
+        SyntaxNode creationSyntax,
         ILocalSymbol variableSymbol,
         SemanticModel semanticModel)
     {
@@ -252,14 +252,18 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         foreach (var descendant in block.DescendantNodes())
         {
             if (descendant is not InvocationExpressionSyntax invocationSyntax ||
-                invocationSyntax.SpanStart <= creationPosition ||
-                invocationSyntax.Expression is not MemberAccessExpressionSyntax memberAccess ||
-                IsInNestedExecutableBoundary(invocationSyntax))
+                invocationSyntax.SpanStart <= creationSyntax.SpanStart ||
+                invocationSyntax.Expression is not MemberAccessExpressionSyntax memberAccess)
             {
                 continue;
             }
 
             if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            {
+                continue;
+            }
+
+            if (!SharesExecutableBoundary(invocationSyntax, creationSyntax))
             {
                 continue;
             }
@@ -274,9 +278,25 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsInNestedExecutableBoundary(SyntaxNode node)
+    private static bool SharesExecutableBoundary(SyntaxNode candidateSyntax, SyntaxNode creationSyntax)
     {
-        return node.FirstAncestorOrSelf<AnonymousFunctionExpressionSyntax>() is not null ||
-               node.FirstAncestorOrSelf<LocalFunctionStatementSyntax>() is not null;
+        var candidateBoundary = GetExecutableBoundary(candidateSyntax);
+        var creationBoundary = GetExecutableBoundary(creationSyntax);
+        if (candidateBoundary is null || creationBoundary is null)
+        {
+            return true;
+        }
+
+        return candidateBoundary == creationBoundary;
+    }
+
+    private static SyntaxNode? GetExecutableBoundary(SyntaxNode syntax)
+    {
+        return syntax.AncestorsAndSelf().FirstOrDefault(node =>
+            node is AnonymousFunctionExpressionSyntax or
+            LocalFunctionStatementSyntax or
+            MethodDeclarationSyntax or
+            ConstructorDeclarationSyntax or
+            AccessorDeclarationSyntax);
     }
 }

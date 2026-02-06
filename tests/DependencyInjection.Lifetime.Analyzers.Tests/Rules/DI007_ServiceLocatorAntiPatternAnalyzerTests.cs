@@ -96,6 +96,36 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     }
 
     [Fact]
+    public async Task GetRequiredService_InLambdaInsideRegularMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    Action action = () => _provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(16, 31, 16, 73)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
     public async Task GetServices_PluralMethod_InConstructor_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -251,6 +281,31 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                 public IMyService CreateService()
                 {
                     return _provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InLambdaInsideCreateMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Action CreateWork()
+                {
+                    return () => _provider.GetRequiredService<IMyService>();
                 }
             }
             """;
