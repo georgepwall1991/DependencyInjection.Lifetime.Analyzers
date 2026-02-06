@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-02-06
+
+### Changed
+
+- **DI015**: Expanded dependency resolution from direct constructor parameters to transitive constructor chains, including open-generic dependency closures.
+- **DI015**: Factory registrations using `GetRequiredService`/`GetRequiredKeyedService` now resolve transitive dependency graphs and report missing leaf dependencies.
+- **DI015**: Added conservative cycle handling (treat cycles as resolvable) and preserved framework/factory assumptions to keep false positives low.
+- **Tests**: Added transitive DI015 regression coverage for constructor chains, factory-rooted chains, open-generic transitive resolution, and circular dependency paths.
+
 ## [1.13.0] - 2026-02-06
 
 ### Changed
