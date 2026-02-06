@@ -16,16 +16,17 @@ For the latest full rule content, see:
 | [DI003](#di003-captive-dependency) | Captive dependency | Warning | Yes |
 | [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | No |
 | [DI005](#di005-use-createasyncscope-in-async-methods) | Use `CreateAsyncScope` in async methods | Warning | Yes |
-| [DI006](#di006-static-serviceprovider-cache) | Static `IServiceProvider` cache | Warning | Yes |
+| [DI006](#di006-static-iserviceprovider-cache) | Static `IServiceProvider` cache | Warning | Yes |
 | [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Warning | No |
 | [DI008](#di008-disposable-transient-service) | Disposable transient service | Warning | Yes |
 | [DI009](#di009-open-generic-captive-dependency) | Open generic captive dependency | Warning | Yes |
 | [DI010](#di010-constructor-over-injection) | Constructor over-injection | Info | No |
-| [DI011](#di011-serviceprovider-injection) | `IServiceProvider` injection | Warning | No |
+| [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Warning | No |
 | [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | No |
 | [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | No |
+| [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
 
 ---
 
@@ -493,7 +494,7 @@ var service = provider.GetRequiredService<IMyService>();
 
 ## DI015: Unresolvable Dependency
 
-**What it catches:** registered services with constructor/factory dependencies that are not registered.
+**What it catches:** registered services with direct or transitive constructor/factory dependencies that are not registered (including keyed and open-generic paths).
 
 **Why it matters:** runtime activation fails when DI tries to create the service.
 
@@ -533,3 +534,46 @@ Disable that assumption for stricter analysis:
 [*.cs]
 dotnet_code_quality.DI015.assume_framework_services_registered = false
 ```
+
+DI015 is intentionally conservative to keep false positives low:
+
+- Dependency cycles are treated as resolvable.
+- Factory registrations without inspectable dependency paths are treated as resolvable.
+
+---
+
+## DI016: BuildServiceProvider Misuse
+
+**What it catches:** `BuildServiceProvider()` calls while composing registrations (for example in `ConfigureServices`, `IServiceCollection` extension registration methods, or registration lambdas).
+
+**Why it matters:** building a second provider during registration can duplicate singleton instances and produce lifetime inconsistencies.
+
+> **Explain Like I'm Ten:** If you set up a second classroom register halfway through, children can end up counted twice and rules become muddled.
+
+**Problem:**
+
+```csharp
+public static IServiceCollection AddFeature(this IServiceCollection services)
+{
+    var provider = services.BuildServiceProvider();
+    var options = provider.GetRequiredService<IMyOptions>();
+    return services;
+}
+```
+
+**Better pattern:**
+
+```csharp
+public static IServiceCollection AddFeature(this IServiceCollection services, IMyOptions options)
+{
+    // Use provided dependencies/options without creating a second container
+    return services;
+}
+```
+
+**Code Fix:** No.
+
+DI016 is intentionally conservative to reduce false positives:
+
+- It only reports symbol-confirmed DI `BuildServiceProvider()` calls in registration contexts.
+- It does not report provider-factory methods that intentionally return `IServiceProvider`.

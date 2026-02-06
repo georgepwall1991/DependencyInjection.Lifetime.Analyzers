@@ -77,4 +77,9 @@ public static class DiagnosticIds
     /// DI015: Registered service depends on an unregistered dependency.
     /// </summary>
     public const string UnresolvableDependency = "DI015";
+
+    /// <summary>
+    /// DI016: BuildServiceProvider used during service registration.
+    /// </summary>
+    public const string BuildServiceProviderMisuse = "DI016";
 }

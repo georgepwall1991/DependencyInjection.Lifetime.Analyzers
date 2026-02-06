@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DI016**: New analyser detecting `BuildServiceProvider()` misuse during service-registration composition (for example in `ConfigureServices`, `IServiceCollection` extension registration methods, and registration lambdas).
+
+### Changed
+
+- **Documentation/Samples**: Added DI016 rule documentation and sample coverage, including conservative false-positive guardrail notes.
+
 ## [2.0.0] - 2026-02-06
 
 ### Changed

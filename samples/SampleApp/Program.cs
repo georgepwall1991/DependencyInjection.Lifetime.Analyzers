@@ -43,5 +43,6 @@ Console.WriteLine("  - DI012/: Conditional registration misuse");
 Console.WriteLine("  - DI013/: Implementation type mismatch");
 Console.WriteLine("  - DI014/: Root provider not disposed");
 Console.WriteLine("  - DI015/: Unresolvable dependency");
+Console.WriteLine("  - DI016/: BuildServiceProvider misuse during registration");
 Console.WriteLine();
 Console.WriteLine("Run 'dotnet build' to see all warnings.");
