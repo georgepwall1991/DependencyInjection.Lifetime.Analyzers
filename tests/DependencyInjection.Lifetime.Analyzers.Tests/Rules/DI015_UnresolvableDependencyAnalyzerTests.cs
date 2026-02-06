@@ -467,6 +467,46 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task RegisteredService_WithTransitivelyUnresolvableDependency_ReportsDiagnosticForRootAndIntermediate()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface ILevel1Service { }
+            public class Level1Service : ILevel1Service
+            {
+                public Level1Service(IMissingDependency dependency) { }
+            }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(ILevel1Service level1) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ILevel1Service, Level1Service>();
+                    services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(60, 9)
+                .WithArguments("ILevel1Service", "IMissingDependency"),
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(61, 9)
+                .WithArguments("IRootService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -808,6 +848,39 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 public void ConfigureServices(IServiceCollection services)
                 {
                     services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithTransitivelyResolvableDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface ILevel2Dependency { }
+            public class Level2Dependency : ILevel2Dependency { }
+
+            public interface ILevel1Service { }
+            public class Level1Service : ILevel1Service
+            {
+                public Level1Service(ILevel2Dependency dependency) { }
+            }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(ILevel1Service level1) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ILevel2Dependency, Level2Dependency>();
+                    services.AddSingleton<ILevel1Service, Level1Service>();
+                    services.AddSingleton<IRootService, RootService>();
                 }
             }
             """;
