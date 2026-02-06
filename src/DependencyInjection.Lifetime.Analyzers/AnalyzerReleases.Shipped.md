@@ -34,3 +34,10 @@ DI014 | DependencyInjection | Warning | Root IServiceProvider created by BuildSe
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI015 | DependencyInjection | Warning | Registered service depends on unregistered dependency (constructor/factory)
+
+## Release 2.1.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI016 | DependencyInjection | Warning | Avoid BuildServiceProvider() while composing service registrations (duplicate container risk)
