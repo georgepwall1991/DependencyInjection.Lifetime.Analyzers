@@ -507,6 +507,83 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IRootService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task Factory_WithTransitivelyUnresolvableRequiredService_ReportsMissingLeafDependency()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IInnerService { }
+            public class InnerService : IInnerService
+            {
+                public InnerService(IMissingDependency dependency) { }
+            }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(IInnerService inner) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IInnerService, InnerService>();
+                    services.AddSingleton<IRootService>(
+                        sp => new RootService(sp.GetRequiredService<IInnerService>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(60, 9)
+                .WithArguments("IInnerService", "IMissingDependency"),
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(62, 35)
+                .WithArguments("IRootService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task OpenGenericRegistration_WithTransitivelyUnresolvableDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IRepository<T> { }
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IMissingDependency dependency) { }
+            }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(IRepository<string> repository) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+                    services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(61, 9)
+                .WithArguments("IRootService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -881,6 +958,36 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                     services.AddSingleton<ILevel2Dependency, Level2Dependency>();
                     services.AddSingleton<ILevel1Service, Level1Service>();
                     services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredServices_WithCircularDependencyChain_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IA { }
+            public interface IB { }
+
+            public class A : IA
+            {
+                public A(IB b) { }
+            }
+
+            public class B : IB
+            {
+                public B(IA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IA, A>();
+                    services.AddSingleton<IB, B>();
                 }
             }
             """;
