@@ -270,5 +270,66 @@ public class DI008_DisposableTransientAnalyzerTests
         await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task TransientDisposable_FactoryMethodGroupMemberAccess_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class DisposableService : IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public static class FactoryMethods
+            {
+                public static DisposableService Create(IServiceProvider sp) => new DisposableService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient<DisposableService>(FactoryMethods.Create);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CustomLookalikeServiceCollection_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using Custom;
+
+            namespace Custom
+            {
+                public interface IServiceCollection { }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddTransient<T>(this IServiceCollection services)
+                        where T : class => services;
+                }
+            }
+
+            public class DisposableService : IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(Custom.IServiceCollection services)
+                {
+                    services.AddTransient<DisposableService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }

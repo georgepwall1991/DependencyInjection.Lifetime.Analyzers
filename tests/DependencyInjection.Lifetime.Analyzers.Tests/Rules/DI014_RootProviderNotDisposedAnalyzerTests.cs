@@ -61,6 +61,25 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_DisposedInsideLambda_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        Action action = () =>
+        {
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+            provider.Dispose();
+        };
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_Returned_NoDiagnostic()
     {
         var source = Usings + @"

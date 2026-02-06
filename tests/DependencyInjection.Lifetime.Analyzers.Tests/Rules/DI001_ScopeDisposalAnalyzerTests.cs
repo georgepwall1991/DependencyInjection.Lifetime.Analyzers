@@ -284,6 +284,33 @@ public class DI001_ScopeDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_DisposedInsideLambda_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Action BuildAction()
+                {
+                    return () =>
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        scope.Dispose();
+                    };
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task CreateScope_ReturnedFromMethod_NoDiagnostic()
     {
         var source = Usings + """

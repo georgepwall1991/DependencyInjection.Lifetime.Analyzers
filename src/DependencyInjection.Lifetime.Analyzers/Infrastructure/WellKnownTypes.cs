@@ -43,6 +43,16 @@ public sealed class WellKnownTypes
     /// </summary>
     public INamedTypeSymbol? IKeyedServiceProvider { get; }
 
+    /// <summary>
+    /// Gets the IServiceCollection type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IServiceCollection { get; }
+
+    /// <summary>
+    /// Gets the ServiceCollectionServiceExtensions type symbol.
+    /// </summary>
+    public INamedTypeSymbol? ServiceCollectionServiceExtensions { get; }
+
     private WellKnownTypes(
         INamedTypeSymbol? serviceProvider,
         INamedTypeSymbol? serviceScopeFactory,
@@ -50,7 +60,9 @@ public sealed class WellKnownTypes
         INamedTypeSymbol? asyncServiceScope,
         INamedTypeSymbol? disposable,
         INamedTypeSymbol? asyncDisposable,
-        INamedTypeSymbol? keyedServiceProvider)
+        INamedTypeSymbol? keyedServiceProvider,
+        INamedTypeSymbol? serviceCollection,
+        INamedTypeSymbol? serviceCollectionServiceExtensions)
     {
         IServiceProvider = serviceProvider;
         IServiceScopeFactory = serviceScopeFactory;
@@ -59,6 +71,8 @@ public sealed class WellKnownTypes
         IDisposable = disposable;
         IAsyncDisposable = asyncDisposable;
         IKeyedServiceProvider = keyedServiceProvider;
+        IServiceCollection = serviceCollection;
+        ServiceCollectionServiceExtensions = serviceCollectionServiceExtensions;
     }
 
     /// <summary>
@@ -74,6 +88,8 @@ public sealed class WellKnownTypes
         var disposable = compilation.GetTypeByMetadataName("System.IDisposable");
         var asyncDisposable = compilation.GetTypeByMetadataName("System.IAsyncDisposable");
         var keyedServiceProvider = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider");
+        var serviceCollection = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceCollection");
+        var serviceCollectionServiceExtensions = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions");
 
         // Return null if we don't have the basic types needed for analysis
         if (serviceProvider is null && serviceScopeFactory is null)
@@ -81,7 +97,16 @@ public sealed class WellKnownTypes
             return null;
         }
 
-        return new WellKnownTypes(serviceProvider, serviceScopeFactory, serviceScope, asyncServiceScope, disposable, asyncDisposable, keyedServiceProvider);
+        return new WellKnownTypes(
+            serviceProvider,
+            serviceScopeFactory,
+            serviceScope,
+            asyncServiceScope,
+            disposable,
+            asyncDisposable,
+            keyedServiceProvider,
+            serviceCollection,
+            serviceCollectionServiceExtensions);
     }
 
     /// <summary>
@@ -130,6 +155,22 @@ public sealed class WellKnownTypes
     public bool IsKeyedServiceProvider(ITypeSymbol? type)
     {
         return type is not null && SymbolEqualityComparer.Default.Equals(type, IKeyedServiceProvider);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IServiceCollection.
+    /// </summary>
+    public bool IsServiceCollection(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IServiceCollection);
+    }
+
+    /// <summary>
+    /// Checks if the given type is ServiceCollectionServiceExtensions.
+    /// </summary>
+    public bool IsServiceCollectionServiceExtensions(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, ServiceCollectionServiceExtensions);
     }
 
     /// <summary>

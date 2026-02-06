@@ -155,7 +155,11 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
                 // Check if we're inside a lambda/anonymous function (factory registration)
                 case LambdaExpressionSyntax:
                 case AnonymousMethodExpressionSyntax:
-                    return IsFactoryRegistrationContext(node, semanticModel);
+                    if (IsFactoryRegistrationContext(node, semanticModel))
+                    {
+                        return true;
+                    }
+                    break;
 
                 // Check if we're inside a method
                 case MethodDeclarationSyntax methodDecl:

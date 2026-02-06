@@ -259,6 +259,31 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     }
 
     [Fact]
+    public async Task GetRequiredService_InLambdaInsideCreateMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Action CreateWork()
+                {
+                    return () => _provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task GetRequiredService_InMethodWithIServiceProviderParameter_NoDiagnostic()
     {
         var source = Usings + """
