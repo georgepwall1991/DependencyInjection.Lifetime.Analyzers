@@ -47,13 +47,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.1.4
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.2.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.1.4">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -61,7 +61,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.1.4" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0" />
 ```
 
 Then reference it from the project file:
@@ -148,7 +148,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | No |
 | [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
-| [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | No |
+| [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
 
 ---
@@ -527,7 +527,29 @@ public sealed class MyService
 
 **Better pattern:** inject concrete dependencies directly.
 
-**Code Fix:** No.
+**Code Fix:** Yes. Adds a missing self-binding registration only when DI015 can prove a single direct constructor dependency is a concrete, non-keyed type and the registration call is local and unambiguous.
+
+**Fixable case:**
+
+```csharp
+public sealed class MissingDependency { }
+
+public sealed class MyService : IMyService
+{
+    public MyService(MissingDependency missing) { }
+}
+
+services.AddScoped<IMyService, MyService>();
+```
+
+DI015 can offer:
+
+```csharp
+services.AddScoped<MissingDependency>();
+services.AddScoped<IMyService, MyService>();
+```
+
+**Not auto-fixable:** abstractions/interfaces, keyed dependencies, multiple missing dependencies, transitive-only missing leaves, `ServiceDescriptor` registrations, and factory-rooted diagnostics.
 
 **Known exceptions in this rule:** factory-style types, middleware `Invoke`/`InvokeAsync` paths, hosted services, and endpoint filter factories.
 
@@ -662,6 +684,8 @@ DI015 is intentionally conservative to keep false positives low:
 
 - Dependency cycles are treated as resolvable.
 - Factory registrations without inspectable dependency paths are treated as resolvable.
+- `GetService(...)` and dynamic keyed resolutions are treated as optional/unknown.
+- If any effective candidate registration is backed by an opaque factory, DI015 stays silent instead of speculating.
 
 ---
 

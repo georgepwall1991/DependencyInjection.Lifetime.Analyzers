@@ -584,6 +584,153 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IRootService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task TryAddRegistration_WithMissingConstructorDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionDescriptorExtensions
+                {
+                    public static IServiceCollection TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class
+                        where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(64, 9)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorDescribe_WithMissingConstructorDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Describe(typeof(IMyService), typeof(MyService), ServiceLifetime.Singleton));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(54, 9)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task Factory_WithDirectIKeyedServiceProviderMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public interface IKeyedServiceProvider
+                {
+                    T GetRequiredKeyedService<T>(object? serviceKey);
+                }
+            }
+
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyDependency, MyDependency>("green");
+                    services.AddSingleton<IMyService>(
+                        sp => new MyService(((IKeyedServiceProvider)sp).GetRequiredKeyedService<IMyDependency>("blue")));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(65, 33)
+                .WithArguments("IMyService", "IMyDependency (key: blue)"));
+    }
+
+    [Fact]
+    public async Task DuplicateRegistrations_WithOpaqueFactoryCandidate_OnlyReportsInnerDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IInnerService { }
+            public class MissingInnerService : IInnerService
+            {
+                public MissingInnerService(IMissingDependency dependency) { }
+            }
+
+            public class SafeInnerService : IInnerService { }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(IInnerService inner) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IInnerService>(_ => new SafeInnerService());
+                    services.AddSingleton<IInnerService, MissingInnerService>();
+                    services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(63, 9)
+                .WithArguments("IInnerService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -1095,6 +1242,144 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source, editorConfig);
+    }
+
+    [Fact]
+    public async Task TryAddRegistration_WithRegisteredConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionDescriptorExtensions
+                {
+                    public static IServiceCollection TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class
+                        where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddSingleton<IMyDependency, MyDependency>();
+                    services.TryAddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TryAddRegistration_ShadowedByExistingRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionDescriptorExtensions
+                {
+                    public static IServiceCollection TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class
+                        where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class SafeService : IMyService { }
+            public class MissingService : IMyService
+            {
+                public MissingService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, SafeService>();
+                    services.TryAddSingleton<IMyService, MissingService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorSingleton_WithRegisteredConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Singleton<IMyDependency, MyDependency>());
+                    services.Add(ServiceDescriptor.Singleton<IMyService, MyService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithConfigurationAndEnvironmentDependencies_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Configuration
+            {
+                public interface IConfiguration { }
+            }
+
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostEnvironment { }
+            }
+
+            namespace Microsoft.AspNetCore.Hosting
+            {
+                public interface IWebHostEnvironment { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(
+                    Microsoft.Extensions.Configuration.IConfiguration configuration,
+                    Microsoft.Extensions.Hosting.IHostEnvironment hostEnvironment,
+                    Microsoft.AspNetCore.Hosting.IWebHostEnvironment webHostEnvironment) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     #endregion

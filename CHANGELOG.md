@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-03-16
+
 ### Changed
 
+- **DI015 Precision Refactor**: Moved unresolved-dependency analysis onto a shared resolution engine with explicit confidence/provenance tracking, so constructor, factory, keyed, open-generic, and strict-mode paths share the same conservative resolution rules.
+- **DI015 TryAdd/Descriptor Coverage**: Effective `TryAdd*` registrations now participate in DI015 analysis, while shadowed `TryAdd*` registrations stay silent to match runtime behaviour; coverage also now includes `ServiceDescriptor` registration forms and direct `IKeyedServiceProvider` resolutions.
+- **DI015 Code Fix**: Added a narrow safe fix that inserts a self-binding registration for one direct concrete constructor dependency when the registration site is local and unambiguous; factory-rooted, keyed, abstract, multi-missing, and transitive-only cases intentionally remain no-fix.
+- **DI015 Guardrails**: Expanded DI015 regression coverage with paired should-report / should-not-report scenarios for `TryAdd*`, `ServiceDescriptor`, framework-provided dependencies, opaque duplicate registrations, and fixer/no-fixer boundaries.
 - **Packaging Metadata**: Expanded NuGet description, package tags, and release notes so search and package landing pages better describe DI lifetime, scope, and registration coverage.
 - **Adoption Docs**: Added `docs/ADOPTION.md` and linked it from `README.md` so teams evaluating the analyzer have a fast install and rollout path.
 - **Repository Intake**: Added GitHub issue-template routing to point users toward setup guidance and the full rule reference before they file issues.

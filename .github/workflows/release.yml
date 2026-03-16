@@ -56,7 +56,12 @@ jobs:
         run: rm -f ./artifacts/*.nupkg
 
       - name: Pack
-        run: dotnet pack src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj --no-build --configuration Release --output ./artifacts -p:CustomAfterMicrosoftCommonTargets=./artifacts/release-notes/package-release-notes.targets
+        run: |
+          node tools/pack-package-with-release-notes.mjs \
+            --project src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj \
+            --configuration Release \
+            --output ./artifacts \
+            --release-notes-file ./artifacts/release-notes/package-release-notes.txt
 
       - name: Push to NuGet
         run: dotnet nuget push ./artifacts/DependencyInjection.Lifetime.Analyzers.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

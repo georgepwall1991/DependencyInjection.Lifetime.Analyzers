@@ -241,10 +241,18 @@ public sealed class RegistrationCollector
             methodName);
         _orderedRegistrations.Add(orderedRegistration);
 
-        // Store in main registrations dictionary if we have implementation type OR a factory
-        // and this is not a TryAdd (TryAdd doesn't override existing registrations)
-        if ((implementationType is not null || factoryExpression is not null) && !isTryAdd)
+        // Store registrations that can actually become effective at runtime. TryAdd* only
+        // participates when no earlier effective registration exists for the same service/key.
+        // This uses analyzer discovery order as an approximation of source registration order;
+        // cross-file ordering remains a known limitation.
+        var hasEffectiveRegistration = _registrations.ContainsKey(new ServiceIdentifier(serviceType, key, isKeyed));
+        if (implementationType is not null || factoryExpression is not null)
         {
+            if (isTryAdd && hasEffectiveRegistration)
+            {
+                return;
+            }
+
             var registration = new ServiceRegistration(
                 serviceType,
                 implementationType,
