@@ -99,7 +99,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection and high-confidence factory paths such as inline delegates, method-group factories, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -141,7 +141,7 @@ public sealed class SingletonService : ISingletonService
 }
 ```
 
-**Code Fix:** Yes. Can adjust lifetime registration where supported.
+**Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, keyed `AddKeyedSingleton`, and supported `ServiceDescriptor` forms).
 
 ---
 

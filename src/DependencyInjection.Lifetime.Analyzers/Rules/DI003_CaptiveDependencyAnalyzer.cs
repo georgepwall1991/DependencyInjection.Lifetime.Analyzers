@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -16,6 +16,54 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 {
     internal const string DependencyLifetimePropertyName = "DependencyLifetime";
+
+    private readonly struct ReportedDiagnosticKey : System.IEquatable<ReportedDiagnosticKey>
+    {
+        public int RegistrationStart { get; }
+        public ITypeSymbol DependencyType { get; }
+        public object? Key { get; }
+        public bool IsKeyed { get; }
+        public int DiagnosticStart { get; }
+
+        public ReportedDiagnosticKey(
+            int registrationStart,
+            ITypeSymbol dependencyType,
+            object? key,
+            bool isKeyed,
+            int diagnosticStart)
+        {
+            RegistrationStart = registrationStart;
+            DependencyType = dependencyType;
+            Key = key;
+            IsKeyed = isKeyed;
+            DiagnosticStart = diagnosticStart;
+        }
+
+        public bool Equals(ReportedDiagnosticKey other)
+        {
+            return RegistrationStart == other.RegistrationStart &&
+                   SymbolEqualityComparer.Default.Equals(DependencyType, other.DependencyType) &&
+                   Equals(Key, other.Key) &&
+                   IsKeyed == other.IsKeyed &&
+                   DiagnosticStart == other.DiagnosticStart;
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = RegistrationStart;
+                hashCode = (hashCode * 397) ^ SymbolEqualityComparer.Default.GetHashCode(DependencyType);
+                hashCode = (hashCode * 397) ^ (Key?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
+                hashCode = (hashCode * 397) ^ DiagnosticStart;
+                return hashCode;
+            }
+        }
+
+        public override bool Equals(object? obj) =>
+            obj is ReportedDiagnosticKey other && Equals(other);
+    }
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -52,6 +100,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector)
     {
+        var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+        var reportedDiagnostics = new HashSet<ReportedDiagnosticKey>();
+
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             // Limit DI003 to singleton consumers. Scoped -> transient is common and generally safe,
@@ -63,11 +114,20 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
             if (registration.FactoryExpression != null)
             {
-                AnalyzeFactoryRegistration(context, registration, registrationCollector);
+                AnalyzeFactoryRegistration(
+                    context,
+                    registration,
+                    registrationCollector,
+                    semanticModelsByTree,
+                    reportedDiagnostics);
             }
             else if (registration.ImplementationType != null)
             {
-                AnalyzeConstructorRegistration(context, registration, registrationCollector);
+                AnalyzeConstructorRegistration(
+                    context,
+                    registration,
+                    registrationCollector,
+                    reportedDiagnostics);
             }
         }
     }
@@ -75,20 +135,23 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeFactoryRegistration(
         CompilationAnalysisContext context,
         ServiceRegistration registration,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
+        HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
         var factory = registration.FactoryExpression;
-        if (factory == null) return;
+        if (factory == null)
+        {
+            return;
+        }
 
-        // Scan for GetService/GetRequiredService calls within the factory
-        var invocations = factory.DescendantNodes().OfType<InvocationExpressionSyntax>();
-        #pragma warning disable RS1030
-        var semanticModel = context.Compilation.GetSemanticModel(factory.SyntaxTree);
-        #pragma warning restore RS1030
+        var semanticModel = GetSemanticModel(factory.SyntaxTree, context.Compilation, semanticModelsByTree);
+        var invocations = FactoryAnalysis.GetFactoryInvocations(factory, semanticModel);
 
         foreach (var invocation in invocations)
         {
-            var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+            var invocationSemanticModel = GetSemanticModel(invocation.SyntaxTree, context.Compilation, semanticModelsByTree);
+            var symbolInfo = invocationSemanticModel.GetSymbolInfo(invocation);
             if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
             {
                 continue;
@@ -99,10 +162,26 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
             if (methodName != "GetService" && methodName != "GetRequiredService" && !isKeyedResolution)
             {
+                if (FactoryAnalysis.TryGetActivatorUtilitiesImplementationType(
+                        invocation,
+                        invocationSemanticModel,
+                        out var implementationType,
+                        out var hasExplicitConstructorArguments) &&
+                    !hasExplicitConstructorArguments)
+                {
+                    AnalyzeActivatorUtilitiesConstruction(
+                        context,
+                        registration,
+                        registrationCollector,
+                        implementationType,
+                        invocation.GetLocation(),
+                        reportedDiagnostics);
+                }
+
                 continue;
             }
 
-            var dependencyType = GetResolvedDependencyType(invocation, methodSymbol, semanticModel);
+            var dependencyType = GetResolvedDependencyType(invocation, methodSymbol, invocationSemanticModel);
             if (dependencyType == null)
             {
                 continue;
@@ -112,26 +191,27 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             bool isKeyed = false;
             if (isKeyedResolution)
             {
-                key = ExtractKeyFromResolution(invocation, methodSymbol, semanticModel);
+                key = ExtractKeyFromResolution(invocation, methodSymbol, invocationSemanticModel);
                 isKeyed = true;
             }
 
             var dependencyLifetime = registrationCollector.GetLifetime(dependencyType, key, isKeyed);
-            if (dependencyLifetime == null) continue;
-
-                if (IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
-                {
-                    var lifetimeName = dependencyLifetime.Value.ToString().ToLowerInvariant();
-                    var diagnostic = Diagnostic.Create(
-                        DiagnosticDescriptors.CaptiveDependency,
-                        invocation.GetLocation(),
-                        ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
-                        registration.ServiceType.Name, // Use ServiceType name for factories
-                        lifetimeName,
-                        dependencyType.Name);
-
-                context.ReportDiagnostic(diagnostic);
+            if (dependencyLifetime is null ||
+                !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+            {
+                continue;
             }
+
+            ReportDiagnostic(
+                context,
+                registration,
+                invocation.GetLocation(),
+                registration.ServiceType.Name,
+                dependencyType,
+                dependencyLifetime.Value,
+                key,
+                isKeyed,
+                reportedDiagnostics);
         }
     }
 
@@ -229,9 +309,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeConstructorRegistration(
         CompilationAnalysisContext context,
         ServiceRegistration registration,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
-        // Analyze the implementation type's constructor parameters
         var implementationType = registration.ImplementationType!;
         var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
 
@@ -252,19 +332,101 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 // Check for captive dependency: longer-lived service capturing shorter-lived dependency
                 if (IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
                 {
-                    var lifetimeName = dependencyLifetime.Value.ToString().ToLowerInvariant();
-                    var diagnostic = Diagnostic.Create(
-                        DiagnosticDescriptors.CaptiveDependency,
+                    ReportDiagnostic(
+                        context,
+                        registration,
                         registration.Location,
-                        ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
                         implementationType.Name,
-                        lifetimeName,
-                        parameterType.Name);
-
-                    context.ReportDiagnostic(diagnostic);
+                        parameterType,
+                        dependencyLifetime.Value,
+                        key,
+                        isKeyed,
+                        reportedDiagnostics);
                 }
             }
         }
+    }
+
+    private static void AnalyzeActivatorUtilitiesConstruction(
+        CompilationAnalysisContext context,
+        ServiceRegistration registration,
+        RegistrationCollector registrationCollector,
+        INamedTypeSymbol implementationType,
+        Location diagnosticLocation,
+        HashSet<ReportedDiagnosticKey> reportedDiagnostics)
+    {
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
+        foreach (var constructor in constructors)
+        {
+            foreach (var parameter in constructor.Parameters)
+            {
+                var (key, isKeyed) = GetServiceKey(parameter);
+                var dependencyLifetime = registrationCollector.GetLifetime(parameter.Type, key, isKeyed);
+                if (dependencyLifetime is null ||
+                    !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+                {
+                    continue;
+                }
+
+                ReportDiagnostic(
+                    context,
+                    registration,
+                    diagnosticLocation,
+                    registration.ServiceType.Name,
+                    parameter.Type,
+                    dependencyLifetime.Value,
+                    key,
+                    isKeyed,
+                    reportedDiagnostics);
+            }
+        }
+    }
+
+    private static void ReportDiagnostic(
+        CompilationAnalysisContext context,
+        ServiceRegistration registration,
+        Location location,
+        string consumerName,
+        ITypeSymbol dependencyType,
+        ServiceLifetime dependencyLifetime,
+        object? key,
+        bool isKeyed,
+        HashSet<ReportedDiagnosticKey> reportedDiagnostics)
+    {
+        var reportKey = new ReportedDiagnosticKey(
+            registration.Location.SourceSpan.Start,
+            dependencyType,
+            key,
+            isKeyed,
+            location.SourceSpan.Start);
+        if (!reportedDiagnostics.Add(reportKey))
+        {
+            return;
+        }
+
+        var lifetimeName = dependencyLifetime.ToString().ToLowerInvariant();
+        var properties = ImmutableDictionary<string, string?>.Empty
+            .Add(DependencyLifetimePropertyName, lifetimeName);
+        var diagnostic = Diagnostic.Create(
+            DiagnosticDescriptors.CaptiveDependency,
+            location,
+            additionalLocations: null,
+            properties: properties,
+            consumerName,
+            lifetimeName,
+            dependencyType.Name);
+
+        context.ReportDiagnostic(diagnostic);
+    }
+
+    private static SemanticModel GetSemanticModel(
+        SyntaxTree syntaxTree,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        #pragma warning disable RS1030
+        return semanticModelsByTree.GetOrAdd(syntaxTree, tree => compilation.GetSemanticModel(tree));
+        #pragma warning restore RS1030
     }
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
