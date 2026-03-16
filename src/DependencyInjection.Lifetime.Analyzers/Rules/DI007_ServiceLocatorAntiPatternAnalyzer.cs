@@ -57,7 +57,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         // Get the resolved service type
-        var resolvedType = GetResolvedServiceType(methodSymbol);
+        var resolvedType = GetResolvedServiceType(invocation, methodSymbol, context.SemanticModel);
         if (resolvedType is null)
         {
             return;
@@ -128,7 +128,10 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
                methodName is "GetKeyedService" or "GetRequiredKeyedService";
     }
 
-    private static ITypeSymbol? GetResolvedServiceType(IMethodSymbol method)
+    private static ITypeSymbol? GetResolvedServiceType(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel)
     {
         // For generic methods like GetService<T>, get T
         if (method.IsGenericMethod && method.TypeArguments.Length > 0)
@@ -136,9 +139,46 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
             return method.TypeArguments[0];
         }
 
-        // For non-generic methods, the type is passed as a parameter
-        // We can't easily determine the type in that case, so return a placeholder
-        return method.ReturnType;
+        var serviceTypeExpression = GetInvocationArgumentExpression(invocation, method, "serviceType");
+        if (serviceTypeExpression is TypeOfExpressionSyntax typeOfExpression)
+        {
+            return semanticModel.GetTypeInfo(typeOfExpression.Type).Type;
+        }
+
+        return null;
+    }
+
+    private static ExpressionSyntax? GetInvocationArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        string parameterName)
+    {
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.Text == parameterName)
+            {
+                return argument.Expression;
+            }
+        }
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        var isReducedExtension = methodSymbol.ReducedFrom is not null;
+
+        for (var i = 0; i < sourceMethod.Parameters.Length; i++)
+        {
+            if (sourceMethod.Parameters[i].Name != parameterName)
+            {
+                continue;
+            }
+
+            var argumentIndex = isReducedExtension ? i - 1 : i;
+            if (argumentIndex >= 0 && argumentIndex < invocation.ArgumentList.Arguments.Count)
+            {
+                return invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            }
+        }
+
+        return null;
     }
 
     private static bool IsAllowedContext(

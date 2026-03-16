@@ -179,6 +179,61 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                 .WithArguments("IMyService"));
     }
 
+    [Fact]
+    public async Task GetService_Typeof_InConstructor_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IMyService _service;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _service = (IMyService)provider.GetService(typeof(IMyService))!;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(11, 32, 11, 71)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_Typeof_InRegularMethod_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    var service = (IMyService)_provider.GetRequiredService(typeof(IMyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(16, 35, 16, 83)
+                .WithArguments("IMyService"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -380,8 +435,6 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     [Fact]
     public async Task GetService_NonGeneric_InConstructor_ReportsDiagnostic()
     {
-        // LIMITATION: Non-generic GetService(Type) returns 'Object' as service name
-        // because the analyzer cannot easily extract the type from the runtime argument
         var source = Usings + """
             public interface IMyService { }
 
@@ -401,7 +454,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
                 .WithSpan(11, 20, 11, 59)
-                .WithArguments("Object"));
+                .WithArguments("IMyService"));
     }
 
     #endregion
