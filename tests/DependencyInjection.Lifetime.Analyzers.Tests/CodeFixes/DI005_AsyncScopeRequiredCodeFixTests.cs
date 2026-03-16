@@ -221,4 +221,35 @@ public class DI005_AsyncScopeRequiredCodeFixTests
         await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource);
     }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForPlainAssignmentOutsideUsing()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 21, 15, 48)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI005_UseCreateAsyncScope");
+    }
 }

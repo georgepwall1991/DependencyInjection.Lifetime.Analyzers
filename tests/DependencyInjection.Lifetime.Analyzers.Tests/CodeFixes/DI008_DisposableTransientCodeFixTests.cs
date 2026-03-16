@@ -190,4 +190,62 @@ public class DI008_DisposableTransientCodeFixTests
         await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToScoped");
     }
+
+    [Fact]
+    public async Task CodeFix_UseFactoryNotOffered_WhenImplementationRequiresDependencies()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public DisposableService(IDependency dependency) { }
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient<IMyService, DisposableService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(14, 9, 14, 63)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI008_UseFactory");
+    }
+
+    [Fact]
+    public async Task CodeFix_UseFactoryNotOffered_ForTypeofRegistration()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient(typeof(IMyService), typeof(DisposableService));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(13, 9, 13, 77)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI008_UseFactory");
+    }
 }
