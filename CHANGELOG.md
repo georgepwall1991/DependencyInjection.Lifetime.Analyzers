@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-03-16
+
+### Changed
+
+- **False Positive Reduction**: Narrowed `DI003` to true singleton captive-dependency cases, allowed `DI011` infrastructure patterns such as hosted services and endpoint filter factories, and taught `DI014` to recognize explicit owner disposal in `Dispose`/`DisposeAsync`.
+- **Sharper Guidance**: Improved `DI007` so non-generic `GetService(typeof(...))` calls report the actual requested service type instead of degrading to `object`.
+- **Safer Code Fixes**: Hardened `DI005`, `DI006`, and `DI008` so fixes are only offered when they can be applied without breaking code or generating uncompilable output.
+- **Fixer Robustness**: Updated `DI003` and `DI009` code fixes to consume structured diagnostic metadata instead of parsing English diagnostic messages.
+- **Documentation and Samples**: Synced `README.md`, `docs/RULES.md`, and the sample app with the hardened analyzer behavior and current warning output.
+
 ## [2.1.2] - 2026-03-16
 
 ### Changed
