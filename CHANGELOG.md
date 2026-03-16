@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-03-16
+
+### Changed
+
+- **DI003 Factory Coverage**: Expanded captive-dependency analysis to cover high-confidence factory paths including method-group factories, local-function factories, keyed resolutions, `ActivatorUtilities.CreateInstance(...)`, and open-generic lifetime lookups.
+- **DI003 Signal Quality**: Added diagnostic deduplication for equivalent captive constructor findings and kept analysis conservative when dependency lifetimes or constructor activation paths are ambiguous.
+- **DI003 Code Fixes**: Extended safe lifetime rewrites beyond direct `AddSingleton` calls to include keyed registrations, non-generic `typeof(...)` registrations, and supported `ServiceDescriptor` forms while continuing to skip unsafe refactors.
+- **Shared Infrastructure**: Extracted reusable factory-invocation analysis so DI003 and DI015 stay aligned on method-group and helper-body traversal behavior.
+- **Regression Coverage and Docs**: Added targeted DI003 tests for new analyzer/fixer paths and updated `README.md` plus `docs/RULES.md` to reflect the broadened factory support and safe-fix scope.
+
 ## [2.1.3] - 2026-03-16
 
 ### Changed
