@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-03-16
+
+### Changed
+
+- **DI007 / DI011**: Lowered default severity from `Warning` to `Info` so broad service-location and `IServiceProvider`-injection guidance is still visible without warning-level noise by default.
+- **Severity Guardrails**: Added a descriptor severity regression test to lock the intended default confidence split between runtime-failure rules and softer design-smell rules.
+
 ## [2.1.1] - 2026-02-06
 
 ### Changed

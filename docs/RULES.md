@@ -17,11 +17,11 @@ For the latest full rule content, see:
 | [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | No |
 | [DI005](#di005-use-createasyncscope-in-async-methods) | Use `CreateAsyncScope` in async methods | Warning | Yes |
 | [DI006](#di006-static-iserviceprovider-cache) | Static `IServiceProvider` cache | Warning | Yes |
-| [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Warning | No |
+| [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Info | No |
 | [DI008](#di008-disposable-transient-service) | Disposable transient service | Warning | Yes |
 | [DI009](#di009-open-generic-captive-dependency) | Open generic captive dependency | Warning | Yes |
 | [DI010](#di010-constructor-over-injection) | Constructor over-injection | Info | No |
-| [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Warning | No |
+| [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Info | No |
 | [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | No |
 | [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |

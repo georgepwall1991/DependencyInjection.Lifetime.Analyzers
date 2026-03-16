@@ -92,7 +92,7 @@ public static class DiagnosticDescriptors
         title: "Avoid service locator anti-pattern",
         messageFormat: "Consider injecting '{0}' directly instead of resolving via IServiceProvider",
         category: Category,
-        defaultSeverity: DiagnosticSeverity.Warning,
+        defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
         description: "Resolving services via IServiceProvider hides dependencies and makes code harder to test. Prefer constructor injection. Service locator is acceptable in factories, middleware Invoke methods, and when using IServiceScopeFactory correctly.");
 
@@ -168,7 +168,7 @@ public static class DiagnosticDescriptors
         title: "Avoid injecting IServiceProvider or IServiceScopeFactory",
         messageFormat: "'{0}' injects {1} directly - prefer injecting specific dependencies",
         category: Category,
-        defaultSeverity: DiagnosticSeverity.Warning,
+        defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
         description: "Injecting IServiceProvider or IServiceScopeFactory hides dependencies and makes testing harder. Prefer injecting specific services directly. This pattern is acceptable in factories and middleware.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);

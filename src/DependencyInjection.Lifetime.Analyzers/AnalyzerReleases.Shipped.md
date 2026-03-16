@@ -41,3 +41,11 @@ DI015 | DependencyInjection | Warning | Registered service depends on unregister
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI016 | DependencyInjection | Warning | Avoid BuildServiceProvider() while composing service registrations (duplicate container risk)
+
+## Release 2.1.2
+
+### Changed Rules
+Rule ID | New Category | New Severity | Old Category | Old Severity | Notes
+--------|--------------|--------------|--------------|--------------|-------
+DI007 | DependencyInjection | Info | DependencyInjection | Warning | Defaulted to Info to keep broad service-locator guidance from becoming warning-level noise
+DI011 | DependencyInjection | Info | DependencyInjection | Warning | Defaulted to Info because IServiceProvider injection is a design smell rather than a definite runtime bug
