@@ -23,6 +23,18 @@ dotnet build
 dotnet test
 ```
 
+### Docs And Release Assets
+
+The searchable docs site, versioned install snippets, and curated release notes are generated from repo sources with a zero-dependency Node script:
+
+```bash
+node tools/generate-growth-assets.mjs sync-readme
+node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site
+node tools/generate-growth-assets.mjs release-notes --version 2.1.4 --output-dir ./artifacts/release-notes
+```
+
+GitHub Actions uses the same script for Pages publishing and release-note generation. If you change README install instructions, changelog structure, rule docs, or sample files, rerun the generator commands above.
+
 ## Project Structure
 
 ```

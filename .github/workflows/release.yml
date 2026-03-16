@@ -15,6 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Validate tag matches project version
         run: |
           PROJECT_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj)
@@ -35,6 +40,9 @@ jobs:
             8.0.x
             10.0.x
 
+      - name: Generate curated release notes
+        run: node tools/generate-growth-assets.mjs release-notes --version "${GITHUB_REF_NAME#v}" --output-dir ./artifacts/release-notes
+
       - name: Restore dependencies
         run: dotnet restore
 
@@ -48,7 +56,7 @@ jobs:
         run: rm -f ./artifacts/*.nupkg
 
       - name: Pack
-        run: dotnet pack src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj --no-build --configuration Release --output ./artifacts
+        run: dotnet pack src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj --no-build --configuration Release --output ./artifacts -p:CustomAfterMicrosoftCommonTargets=./artifacts/release-notes/package-release-notes.targets
 
       - name: Push to NuGet
         run: dotnet nuget push ./artifacts/DependencyInjection.Lifetime.Analyzers.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -57,4 +65,4 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: ./artifacts/DependencyInjection.Lifetime.Analyzers.*.nupkg
-          generate_release_notes: true
+          body_path: ./artifacts/release-notes/github-release.md

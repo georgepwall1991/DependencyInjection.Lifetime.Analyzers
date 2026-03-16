@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Packaging Metadata**: Expanded NuGet description, package tags, and release notes so search and package landing pages better describe DI lifetime, scope, and registration coverage.
 - **Adoption Docs**: Added `docs/ADOPTION.md` and linked it from `README.md` so teams evaluating the analyzer have a fast install and rollout path.
 - **Repository Intake**: Added GitHub issue-template routing to point users toward setup guidance and the full rule reference before they file issues.
+- **Growth Automation**: Added `tools/generate-growth-assets.mjs` to generate a searchable static docs site, problem-intent landing pages, version-synced README install snippets, and curated release notes from the repo source material.
+- **GitHub Pages**: Added automated Pages publishing plus CI verification for the generated docs site, sitemap, robots.txt, and search index.
+- **Release Surfaces**: Updated release automation to generate GitHub Release body content and package release-note input from `CHANGELOG.md` instead of relying on generic auto-generated notes.
 
 ## [2.1.4] - 2026-03-16
 

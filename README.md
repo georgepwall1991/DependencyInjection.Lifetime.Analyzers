@@ -14,6 +14,8 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, and
 [![CI](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml/badge.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
 [![Coverage](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/raw/master/.github/badges/coverage.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
 
+[Searchable docs site](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/) · [Rule index](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/rules/) · [Problem guides](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/problems/) · [NuGet package](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
+
 `DependencyInjection.Lifetime.Analyzers` is for teams using `Microsoft.Extensions.DependencyInjection` who want compile-time protection against DI lifetime mistakes that normally show up as runtime bugs, flaky tests, or production-only startup failures.
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
@@ -41,10 +43,11 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 
 ## Quickstart
 
+<!-- generated-install-snippets:start -->
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.1.4
 ```
 
 Or add a package reference directly:
@@ -54,6 +57,19 @@ Or add a package reference directly:
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
+
+For Central Package Management (`Directory.Packages.props`):
+
+```xml
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.1.4" />
+```
+
+Then reference it from the project file:
+
+```xml
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" PrivateAssets="all" />
+```
+<!-- generated-install-snippets:end -->
 
 Set useful severities in `.editorconfig`:
 

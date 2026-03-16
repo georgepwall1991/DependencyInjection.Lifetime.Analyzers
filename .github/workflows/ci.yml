@@ -17,12 +17,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
             8.0.x
             10.0.x
+
+      - name: Verify version-synced README install snippets
+        run: node tools/generate-growth-assets.mjs sync-readme --check
 
       - name: Restore dependencies
         run: dotnet restore
@@ -94,4 +102,14 @@ jobs:
         with:
           name: nuget-package
           path: ./artifacts/*.nupkg
+          retention-days: 7
+
+      - name: Generate docs site
+        run: node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site
+
+      - name: Upload docs site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: ./artifacts/site
           retention-days: 7
