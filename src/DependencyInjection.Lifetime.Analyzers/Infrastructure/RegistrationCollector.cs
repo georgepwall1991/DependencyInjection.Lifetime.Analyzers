@@ -243,8 +243,8 @@ public sealed class RegistrationCollector
 
         // Store registrations that can actually become effective at runtime. TryAdd* only
         // participates when no earlier effective registration exists for the same service/key.
-        // This intentionally follows analyzer-observed invocation order, which matches how these
-        // registration calls appear in source even when spread across multiple files.
+        // This uses analyzer discovery order as an approximation of source registration order;
+        // cross-file ordering remains a known limitation.
         var hasEffectiveRegistration = _registrations.ContainsKey(new ServiceIdentifier(serviceType, key, isKeyed));
         if (implementationType is not null || factoryExpression is not null)
         {

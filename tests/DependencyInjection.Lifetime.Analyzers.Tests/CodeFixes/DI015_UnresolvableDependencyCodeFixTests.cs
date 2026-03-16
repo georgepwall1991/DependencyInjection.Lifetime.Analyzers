@@ -66,6 +66,55 @@ public class DI015_UnresolvableDependencyCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_AddsScopedMissingSelfBinding_ForScopedRegistration()
+    {
+        var source = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<global::MissingDependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithLocation(15, 9)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_ForFactoryAnchoredDependency()
     {
         var source = Usings + """
@@ -270,6 +319,35 @@ public class DI015_UnresolvableDependencyCodeFixTests
             {
                 private MissingDependency() { }
             }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForDelegateDependency()
+    {
+        var source = Usings + """
+            public delegate void MissingDependency();
 
             public interface IMyService { }
             public sealed class MyService : IMyService

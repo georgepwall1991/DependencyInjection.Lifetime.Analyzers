@@ -133,6 +133,7 @@ internal sealed class DependencyResolutionEngine
         }
 
         if (namedType.TypeKind is TypeKind.Interface or TypeKind.TypeParameter ||
+            namedType.TypeKind == TypeKind.Delegate ||
             namedType.IsAbstract ||
             namedType.IsUnboundGenericType ||
             namedType.IsGenericType && namedType.TypeArguments.Any(argument => argument.TypeKind == TypeKind.TypeParameter))
