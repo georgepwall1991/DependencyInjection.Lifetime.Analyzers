@@ -38,6 +38,12 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
             return;
         }
 
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (semanticModel is null)
+        {
+            return;
+        }
+
         var diagnostic = context.Diagnostics[0];
         var diagnosticSpan = diagnostic.Location.SourceSpan;
 
@@ -46,7 +52,9 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
 
         // Check if it's a field declaration
         var fieldDeclaration = node.FirstAncestorOrSelf<FieldDeclarationSyntax>();
-        if (fieldDeclaration is not null && HasStaticModifier(fieldDeclaration.Modifiers))
+        if (fieldDeclaration is not null &&
+            HasStaticModifier(fieldDeclaration.Modifiers) &&
+            CanSafelyRemoveStatic(fieldDeclaration, semanticModel))
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -59,7 +67,9 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
 
         // Check if it's a property declaration
         var propertyDeclaration = node.FirstAncestorOrSelf<PropertyDeclarationSyntax>();
-        if (propertyDeclaration is not null && HasStaticModifier(propertyDeclaration.Modifiers))
+        if (propertyDeclaration is not null &&
+            HasStaticModifier(propertyDeclaration.Modifiers) &&
+            CanSafelyRemoveStatic(propertyDeclaration, semanticModel))
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -73,6 +83,74 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
     private static bool HasStaticModifier(SyntaxTokenList modifiers)
     {
         return modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+    }
+
+    private static bool CanSafelyRemoveStatic(MemberDeclarationSyntax declaration, SemanticModel semanticModel)
+    {
+        var declaredSymbol = declaration switch
+        {
+            FieldDeclarationSyntax fieldDeclaration when fieldDeclaration.Declaration.Variables.Count == 1 =>
+                semanticModel.GetDeclaredSymbol(fieldDeclaration.Declaration.Variables[0]),
+            PropertyDeclarationSyntax propertyDeclaration =>
+                semanticModel.GetDeclaredSymbol(propertyDeclaration),
+            _ => null
+        };
+
+        if (declaredSymbol is null)
+        {
+            return false;
+        }
+
+        var containingType = declaration.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+        if (containingType is null)
+        {
+            return false;
+        }
+
+        foreach (var identifier in containingType.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (declaration.Span.Contains(identifier.Span))
+            {
+                continue;
+            }
+
+            var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            if (!SymbolEqualityComparer.Default.Equals(symbol, declaredSymbol))
+            {
+                continue;
+            }
+
+            if (IsInStaticContext(identifier))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsInStaticContext(SyntaxNode node)
+    {
+        foreach (var ancestor in node.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case MemberDeclarationSyntax memberDeclaration when HasStaticModifier(memberDeclaration.GetModifiers()):
+                    return true;
+                case AccessorDeclarationSyntax accessorDeclaration:
+                {
+                    var accessorParent = accessorDeclaration.Parent?.Parent as MemberDeclarationSyntax;
+                    if (accessorParent is not null && HasStaticModifier(accessorParent.GetModifiers()))
+                    {
+                        return true;
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static async Task<Document> RemoveStaticFromFieldAsync(
@@ -136,4 +214,15 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
 
         return newModifiers;
     }
+}
+
+internal static class MemberDeclarationSyntaxExtensions
+{
+    public static SyntaxTokenList GetModifiers(this MemberDeclarationSyntax memberDeclaration) => memberDeclaration switch
+    {
+        BaseFieldDeclarationSyntax fieldDeclaration => fieldDeclaration.Modifiers,
+        BaseMethodDeclarationSyntax methodDeclaration => methodDeclaration.Modifiers,
+        BasePropertyDeclarationSyntax propertyDeclaration => propertyDeclaration.Modifiers,
+        _ => default
+    };
 }
