@@ -76,6 +76,12 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            // Skip infrastructure abstractions that are expected to resolve services dynamically.
+            if (IsHostedServiceClass(implementationType) || IsEndpointFilterFactoryClass(implementationType))
+            {
+                continue;
+            }
+
             var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
 
             foreach (var constructor in constructors)
@@ -136,5 +142,19 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
             .OfType<IMethodSymbol>()
             .Any(m => m.Name is "Invoke" or "InvokeAsync" &&
                       m.DeclaredAccessibility == Accessibility.Public);
+    }
+
+    private static bool IsHostedServiceClass(INamedTypeSymbol type)
+    {
+        return type.AllInterfaces.Any(i =>
+            i.Name == "IHostedService" &&
+            i.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.Hosting");
+    }
+
+    private static bool IsEndpointFilterFactoryClass(INamedTypeSymbol type)
+    {
+        return type.AllInterfaces.Any(i =>
+            i.Name == "IEndpointFilterFactory" &&
+            i.ContainingNamespace.ToDisplayString() == "Microsoft.AspNetCore.Http");
     }
 }
