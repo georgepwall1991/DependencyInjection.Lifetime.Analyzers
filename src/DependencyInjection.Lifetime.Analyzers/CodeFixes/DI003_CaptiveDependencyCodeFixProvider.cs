@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Composition;
 using System.Threading;
 using System.Threading.Tasks;
+using DependencyInjection.Lifetime.Analyzers.Rules;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
@@ -121,24 +122,12 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
 
     private static string GetDependencyLifetimeFromDiagnostic(Diagnostic diagnostic)
     {
-        // The diagnostic message is "Singleton '{0}' captures {1} dependency '{2}'"
-        // The message text contains the lifetime value directly
-        // We need to parse it from the formatted message
-        var message = diagnostic.GetMessage();
-
-        // Check for "transient" in the message
-        if (message.Contains("transient"))
+        if (diagnostic.Properties.TryGetValue(DI003_CaptiveDependencyAnalyzer.DependencyLifetimePropertyName, out var dependencyLifetime) &&
+            dependencyLifetime is not null)
         {
-            return "transient";
+            return dependencyLifetime;
         }
 
-        // Check for "scoped" in the message
-        if (message.Contains("scoped"))
-        {
-            return "scoped";
-        }
-
-        // Default to scoped (safer option)
         return "scoped";
     }
 

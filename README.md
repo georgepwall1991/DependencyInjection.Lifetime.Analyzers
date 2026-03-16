@@ -469,7 +469,7 @@ public sealed class MyService
 
 **Code Fix:** No.
 
-**Known exceptions in this rule:** factory-style types and middleware `Invoke`/`InvokeAsync` paths.
+**Known exceptions in this rule:** factory-style types, middleware `Invoke`/`InvokeAsync` paths, hosted services, and endpoint filter factories.
 
 ---
 

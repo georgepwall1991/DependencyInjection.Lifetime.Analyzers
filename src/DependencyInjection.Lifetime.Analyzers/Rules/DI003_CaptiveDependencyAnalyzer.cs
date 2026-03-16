@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Collections.Generic;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
@@ -14,6 +15,8 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 {
+    internal const string DependencyLifetimePropertyName = "DependencyLifetime";
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.CaptiveDependency);
@@ -116,15 +119,16 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             var dependencyLifetime = registrationCollector.GetLifetime(dependencyType, key, isKeyed);
             if (dependencyLifetime == null) continue;
 
-            if (IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
-            {
-                var lifetimeName = dependencyLifetime.Value.ToString().ToLowerInvariant();
-                var diagnostic = Diagnostic.Create(
-                    DiagnosticDescriptors.CaptiveDependency,
-                    invocation.GetLocation(),
-                    registration.ServiceType.Name, // Use ServiceType name for factories
-                    lifetimeName,
-                    dependencyType.Name);
+                if (IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+                {
+                    var lifetimeName = dependencyLifetime.Value.ToString().ToLowerInvariant();
+                    var diagnostic = Diagnostic.Create(
+                        DiagnosticDescriptors.CaptiveDependency,
+                        invocation.GetLocation(),
+                        ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
+                        registration.ServiceType.Name, // Use ServiceType name for factories
+                        lifetimeName,
+                        dependencyType.Name);
 
                 context.ReportDiagnostic(diagnostic);
             }
@@ -252,6 +256,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     var diagnostic = Diagnostic.Create(
                         DiagnosticDescriptors.CaptiveDependency,
                         registration.Location,
+                        ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
                         implementationType.Name,
                         lifetimeName,
                         parameterType.Name);
