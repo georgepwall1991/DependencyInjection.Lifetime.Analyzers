@@ -183,9 +183,11 @@ public class RegistrationCollectorTests
             collector.AnalyzeInvocation(invocation, semanticModel);
         }
 
-        // TryAdd doesn't go into main registrations dictionary
-        Assert.Empty(collector.Registrations);
-        // But it does go into ordered registrations
+        // Effective TryAdd registrations participate in the main registration graph.
+        Assert.Single(collector.Registrations);
+        Assert.Equal("IMyService", collector.Registrations.First().ServiceType.Name);
+
+        // Ordered registrations still retain TryAdd provenance for DI012.
         Assert.Single(collector.OrderedRegistrations);
         var orderedReg = collector.OrderedRegistrations.First();
         Assert.True(orderedReg.IsTryAdd);
@@ -220,6 +222,39 @@ public class RegistrationCollectorTests
         var orderedReg = collector.OrderedRegistrations.First();
         Assert.True(orderedReg.IsTryAdd);
         Assert.Equal(ServiceLifetime.Scoped, orderedReg.Lifetime);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_TryAddSingleton_WhenShadowed_DoesNotEnterMainRegistrations()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+            public interface IMyService { }
+            public class FirstService : IMyService { }
+            public class SecondService : IMyService { }
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, FirstService>();
+                    services.TryAddSingleton<IMyService, SecondService>();
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        Assert.Single(collector.Registrations);
+        Assert.Equal("FirstService", collector.Registrations.First().ImplementationType?.Name);
+
+        Assert.Equal(2, collector.OrderedRegistrations.Count());
+        Assert.Contains(collector.OrderedRegistrations, registration => registration.IsTryAdd);
     }
 
     #endregion

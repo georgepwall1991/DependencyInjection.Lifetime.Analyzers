@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Linq;
+using System.Globalization;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -20,42 +20,13 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
     private const string AssumeFrameworkServicesRegisteredOption =
         "dotnet_code_quality.DI015.assume_framework_services_registered";
 
-    private readonly struct ServiceLookupKey : IEquatable<ServiceLookupKey>
-    {
-        public ITypeSymbol Type { get; }
-        public object? Key { get; }
-        public bool IsKeyed { get; }
-
-        public ServiceLookupKey(ITypeSymbol type, object? key, bool isKeyed)
-        {
-            Type = type;
-            Key = key;
-            IsKeyed = isKeyed;
-        }
-
-        public bool Equals(ServiceLookupKey other)
-        {
-            return SymbolEqualityComparer.Default.Equals(Type, other.Type) &&
-                   Equals(Key, other.Key) &&
-                   IsKeyed == other.IsKeyed;
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is ServiceLookupKey other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                var hashCode = SymbolEqualityComparer.Default.GetHashCode(Type);
-                hashCode = (hashCode * 397) ^ (Key?.GetHashCode() ?? 0);
-                hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
-                return hashCode;
-            }
-        }
-    }
+    internal const string MissingDependencyTypeNamePropertyName = "MissingDependencyTypeName";
+    internal const string MissingDependencyCanSelfBindPropertyName = "MissingDependencyCanSelfBind";
+    internal const string MissingDependencyPathLengthPropertyName = "MissingDependencyPathLength";
+    internal const string MissingDependencyCountPropertyName = "MissingDependencyCount";
+    internal const string MissingDependencyIsKeyedPropertyName = "MissingDependencyIsKeyed";
+    internal const string RegistrationLifetimePropertyName = "RegistrationLifetime";
+    internal const string DependencySourceKindPropertyName = "DependencySourceKind";
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -76,6 +47,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             }
 
             var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
+            var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
             var assumeFrameworkServicesRegisteredResolver = CreateAssumeFrameworkServicesRegisteredResolver(
                 compilationContext.Options.AnalyzerConfigOptionsProvider);
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
@@ -98,6 +70,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                     endContext,
                     registrationCollector,
                     wellKnownTypes,
+                    resolutionEngine,
                     assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree));
         });
@@ -107,6 +80,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes,
+        DependencyResolutionEngine resolutionEngine,
         Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
@@ -114,78 +88,42 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         {
             if (registration.FactoryExpression is not null)
             {
-                // Factory registrations control activation, so constructor analysis would be duplicate/noisy.
                 AnalyzeFactoryRegistration(
                     context,
-                    registrationCollector,
                     registration,
                     wellKnownTypes,
+                    resolutionEngine,
                     assumeFrameworkServicesRegisteredResolver,
                     semanticModelsByTree);
-
                 continue;
             }
 
-            if (registration.ImplementationType is not null)
+            if (registration.ImplementationType is null)
             {
-                var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(
-                    registration.Location.SourceTree);
-                AnalyzeConstructorRegistration(
-                    context,
-                    registrationCollector,
-                    registration,
-                    wellKnownTypes,
-                    assumeFrameworkServicesRegistered);
+                continue;
             }
-        }
-    }
 
-    private static void AnalyzeConstructorRegistration(
-        CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector,
-        ServiceRegistration registration,
-        WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered)
-    {
-        if (!IsServiceImplementationCompatible(registration.ServiceType, registration.ImplementationType!))
-        {
-            // DI013 handles incompatible service/implementation pairs separately.
-            return;
-        }
+            var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(
+                registration.Location.SourceTree);
+            var resolutionResult = resolutionEngine.ResolveRegistration(
+                registration,
+                assumeFrameworkServicesRegistered);
 
-        var resolutionCache = new Dictionary<ServiceLookupKey, List<(ITypeSymbol Type, object? Key, bool IsKeyed)>?>();
-        var resolutionPath = new HashSet<ServiceLookupKey>();
-        resolutionPath.Add(new ServiceLookupKey(registration.ServiceType, registration.Key, registration.IsKeyed));
-
-        var bestMissingDependencies = GetBestMissingDependenciesForType(
-            registration.ImplementationType!,
-            registrationCollector,
-            wellKnownTypes,
-            assumeFrameworkServicesRegistered,
-            resolutionCache,
-            resolutionPath);
-        if (bestMissingDependencies is null)
-        {
-            return;
-        }
-
-        foreach (var missingDependency in bestMissingDependencies)
-        {
-            var diagnostic = Diagnostic.Create(
-                DiagnosticDescriptors.UnresolvableDependency,
+            ReportMissingDependencies(
+                context,
                 registration.Location,
                 registration.ServiceType.Name,
-                FormatDependencyName(missingDependency.Type, missingDependency.Key, missingDependency.IsKeyed));
-
-            context.ReportDiagnostic(diagnostic);
+                registration.Lifetime,
+                DependencySourceKind.ConstructorParameter,
+                resolutionResult);
         }
     }
 
     private static void AnalyzeFactoryRegistration(
         CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector,
         ServiceRegistration registration,
         WellKnownTypes? wellKnownTypes,
+        DependencyResolutionEngine resolutionEngine,
         Func<SyntaxTree?, bool> assumeFrameworkServicesRegisteredResolver,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
@@ -194,669 +132,79 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var invocations = FactoryAnalysis.GetFactoryInvocations(registration.FactoryExpression, semanticModel);
-        var resolutionCache = new Dictionary<ServiceLookupKey, List<(ITypeSymbol Type, object? Key, bool IsKeyed)>?>();
-        var rootLookupKey = new ServiceLookupKey(registration.ServiceType, registration.Key, registration.IsKeyed);
+        var requests = FactoryDependencyAnalysis.GetDependencyRequests(
+            registration.FactoryExpression,
+            semanticModel,
+            wellKnownTypes);
 
-        foreach (var invocation in invocations)
+        foreach (var request in requests)
         {
-            var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(invocation.SyntaxTree);
+            var assumeFrameworkServicesRegistered = assumeFrameworkServicesRegisteredResolver(
+                request.SourceLocation.SourceTree);
+            var resolutionResult = resolutionEngine.ResolveFactoryRequest(
+                registration,
+                request,
+                assumeFrameworkServicesRegistered);
 
-            if (!semanticModelsByTree.TryGetValue(invocation.SyntaxTree, out var invocationSemanticModel))
-            {
-                continue;
-            }
-
-            if (!TryGetRequiredResolutionInfo(
-                    invocation,
-                    invocationSemanticModel,
-                    wellKnownTypes,
-                    out var dependencyType,
-                    out var key,
-                    out var isKeyed))
-            {
-                if (!TryGetActivatorUtilitiesMissingDependencies(
-                        invocation,
-                        invocationSemanticModel,
-                        registrationCollector,
-                        wellKnownTypes,
-                        assumeFrameworkServicesRegistered,
-                        out var missingDependencies))
-                {
-                    continue;
-                }
-
-                foreach (var missingDependency in missingDependencies)
-                {
-                    var activatorDiagnostic = Diagnostic.Create(
-                        DiagnosticDescriptors.UnresolvableDependency,
-                        invocation.GetLocation(),
-                        registration.ServiceType.Name,
-                        FormatDependencyName(missingDependency.Type, missingDependency.Key, missingDependency.IsKeyed));
-
-                    context.ReportDiagnostic(activatorDiagnostic);
-                }
-
-                continue;
-            }
-
-            if (ShouldSkipDependencyCheck(
-                    dependencyType,
-                    parameter: null,
-                    wellKnownTypes,
-                    assumeFrameworkServicesRegistered))
-            {
-                continue;
-            }
-
-            if (TryResolveDependency(
-                    dependencyType,
-                    key,
-                    isKeyed,
-                    registrationCollector,
-                    wellKnownTypes,
-                    assumeFrameworkServicesRegistered,
-                    resolutionCache,
-                    new HashSet<ServiceLookupKey> { rootLookupKey },
-                    out var transitiveMissingDependencies))
-            {
-                continue;
-            }
-
-            foreach (var missingDependency in transitiveMissingDependencies)
-            {
-                var diagnostic = Diagnostic.Create(
-                    DiagnosticDescriptors.UnresolvableDependency,
-                    invocation.GetLocation(),
-                    registration.ServiceType.Name,
-                    FormatDependencyName(missingDependency.Type, missingDependency.Key, missingDependency.IsKeyed));
-
-                context.ReportDiagnostic(diagnostic);
-            }
+            ReportMissingDependencies(
+                context,
+                request.SourceLocation,
+                registration.ServiceType.Name,
+                registration.Lifetime,
+                request.SourceKind,
+                resolutionResult);
         }
     }
 
-    private static List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? GetBestMissingDependenciesForType(
-        INamedTypeSymbol implementationType,
-        RegistrationCollector registrationCollector,
-        WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered,
-        Dictionary<ServiceLookupKey, List<(ITypeSymbol Type, object? Key, bool IsKeyed)>?> resolutionCache,
-        HashSet<ServiceLookupKey> resolutionPath)
+    private static void ReportMissingDependencies(
+        CompilationAnalysisContext context,
+        Location location,
+        string serviceTypeName,
+        ServiceLifetime registrationLifetime,
+        DependencySourceKind sourceKind,
+        ResolutionResult resolutionResult)
     {
-        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType).ToArray();
-        if (constructors.Length == 0)
+        if (resolutionResult.IsResolvable ||
+            resolutionResult.Confidence != ResolutionConfidence.High ||
+            resolutionResult.MissingDependencies.IsDefaultOrEmpty)
         {
-            return null;
+            return;
         }
 
-        List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? bestMissingDependencies = null;
-        var bestMissingCount = int.MaxValue;
-        var bestParameterCount = -1;
+        var missingDependencyCount = resolutionResult.MissingDependencies.Length.ToString(CultureInfo.InvariantCulture);
 
-        foreach (var constructor in constructors)
+        foreach (var missingDependency in resolutionResult.MissingDependencies)
         {
-            var missingDependencies = new List<(ITypeSymbol Type, object? Key, bool IsKeyed)>();
-            var missingSet = new HashSet<ServiceLookupKey>();
+            var properties = ImmutableDictionary<string, string?>.Empty
+                .Add(
+                    MissingDependencyTypeNamePropertyName,
+                    DependencyResolutionEngine.GetGlobalTypeDisplayName(missingDependency.Type))
+                .Add(
+                    MissingDependencyCanSelfBindPropertyName,
+                    DependencyResolutionEngine.CanSelfBind(missingDependency.Type)
+                        .ToString(CultureInfo.InvariantCulture))
+                .Add(
+                    MissingDependencyPathLengthPropertyName,
+                    missingDependency.PathLength.ToString(CultureInfo.InvariantCulture))
+                .Add(MissingDependencyCountPropertyName, missingDependencyCount)
+                .Add(
+                    MissingDependencyIsKeyedPropertyName,
+                    missingDependency.IsKeyed.ToString(CultureInfo.InvariantCulture))
+                .Add(RegistrationLifetimePropertyName, registrationLifetime.ToString())
+                .Add(DependencySourceKindPropertyName, sourceKind.ToString());
 
-            foreach (var parameter in constructor.Parameters)
-            {
-                if (ShouldSkipDependencyCheck(
-                        parameter.Type,
-                        parameter,
-                        wellKnownTypes,
-                        assumeFrameworkServicesRegistered))
-                {
-                    continue;
-                }
+            var diagnostic = Diagnostic.Create(
+                DiagnosticDescriptors.UnresolvableDependency,
+                location,
+                properties,
+                serviceTypeName,
+                DependencyResolutionEngine.FormatDependencyName(
+                    missingDependency.Type,
+                    missingDependency.Key,
+                    missingDependency.IsKeyed));
 
-                var (key, isKeyed) = GetServiceKey(parameter);
-                if (TryResolveDependency(
-                        parameter.Type,
-                        key,
-                        isKeyed,
-                        registrationCollector,
-                        wellKnownTypes,
-                        assumeFrameworkServicesRegistered,
-                        resolutionCache,
-                        resolutionPath,
-                        out var parameterMissingDependencies))
-                {
-                    continue;
-                }
-
-                foreach (var missingDependency in parameterMissingDependencies)
-                {
-                    var missingKey = new ServiceLookupKey(
-                        missingDependency.Type,
-                        missingDependency.Key,
-                        missingDependency.IsKeyed);
-                    if (missingSet.Add(missingKey))
-                    {
-                        missingDependencies.Add(missingDependency);
-                    }
-                }
-            }
-
-            // If any constructor is fully resolvable, DI can activate the service.
-            if (missingDependencies.Count == 0)
-            {
-                return null;
-            }
-
-            if (missingDependencies.Count < bestMissingCount ||
-                (missingDependencies.Count == bestMissingCount &&
-                 constructor.Parameters.Length > bestParameterCount))
-            {
-                bestMissingDependencies = missingDependencies;
-                bestMissingCount = missingDependencies.Count;
-                bestParameterCount = constructor.Parameters.Length;
-            }
+            context.ReportDiagnostic(diagnostic);
         }
-
-        return bestMissingDependencies;
-    }
-
-    private static bool TryResolveDependency(
-        ITypeSymbol dependencyType,
-        object? key,
-        bool isKeyed,
-        RegistrationCollector registrationCollector,
-        WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered,
-        Dictionary<ServiceLookupKey, List<(ITypeSymbol Type, object? Key, bool IsKeyed)>?> resolutionCache,
-        HashSet<ServiceLookupKey> resolutionPath,
-        out List<(ITypeSymbol Type, object? Key, bool IsKeyed)> missingDependencies)
-    {
-        missingDependencies = null!;
-
-        if (ShouldSkipDependencyCheck(dependencyType, parameter: null, wellKnownTypes, assumeFrameworkServicesRegistered))
-        {
-            return true;
-        }
-
-        var lookupKey = new ServiceLookupKey(dependencyType, key, isKeyed);
-        if (resolutionCache.TryGetValue(lookupKey, out var cachedMissingDependencies))
-        {
-            if (cachedMissingDependencies is null)
-            {
-                return true;
-            }
-
-            missingDependencies = cachedMissingDependencies;
-            return false;
-        }
-
-        // Treat dependency cycles as resolvable to avoid speculative false positives.
-        if (!resolutionPath.Add(lookupKey))
-        {
-            resolutionCache[lookupKey] = null;
-            return true;
-        }
-
-        var candidates = GetCandidateRegistrations(
-            dependencyType,
-            key,
-            isKeyed,
-            registrationCollector).ToArray();
-
-        List<(ITypeSymbol Type, object? Key, bool IsKeyed)>? bestMissingDependencies = null;
-        var bestMissingCount = int.MaxValue;
-
-        foreach (var candidate in candidates)
-        {
-            // Factory registrations are analyzed separately and may be dynamic;
-            // avoid transitive assumptions here to keep diagnostics high-confidence.
-            if (candidate.FactoryExpression is not null)
-            {
-                resolutionPath.Remove(lookupKey);
-                resolutionCache[lookupKey] = null;
-                return true;
-            }
-
-            if (candidate.ImplementationType is null)
-            {
-                continue;
-            }
-
-            var implementationType = TryGetClosedImplementationTypeForDependency(
-                dependencyType,
-                candidate.ServiceType,
-                candidate.ImplementationType);
-            if (implementationType is null)
-            {
-                continue;
-            }
-
-            var candidateMissingDependencies = GetBestMissingDependenciesForType(
-                implementationType,
-                registrationCollector,
-                wellKnownTypes,
-                assumeFrameworkServicesRegistered,
-                resolutionCache,
-                resolutionPath);
-
-            if (candidateMissingDependencies is null)
-            {
-                resolutionPath.Remove(lookupKey);
-                resolutionCache[lookupKey] = null;
-                return true;
-            }
-
-            if (candidateMissingDependencies.Count < bestMissingCount)
-            {
-                bestMissingDependencies = candidateMissingDependencies;
-                bestMissingCount = candidateMissingDependencies.Count;
-            }
-        }
-
-        if (bestMissingDependencies is null)
-        {
-            bestMissingDependencies = [(dependencyType, key, isKeyed)];
-        }
-
-        resolutionPath.Remove(lookupKey);
-        resolutionCache[lookupKey] = bestMissingDependencies;
-        missingDependencies = bestMissingDependencies;
-        return false;
-    }
-
-    private static IEnumerable<ServiceRegistration> GetCandidateRegistrations(
-        ITypeSymbol dependencyType,
-        object? key,
-        bool isKeyed,
-        RegistrationCollector registrationCollector)
-    {
-        foreach (var registration in registrationCollector.AllRegistrations)
-        {
-            if (registration.IsKeyed != isKeyed ||
-                !Equals(registration.Key, key))
-            {
-                continue;
-            }
-
-            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, dependencyType))
-            {
-                yield return registration;
-                continue;
-            }
-
-            if (dependencyType is not INamedTypeSymbol namedDependencyType ||
-                !namedDependencyType.IsGenericType ||
-                namedDependencyType.IsUnboundGenericType)
-            {
-                continue;
-            }
-
-            var openDependencyType = namedDependencyType.ConstructUnboundGenericType();
-            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, openDependencyType))
-            {
-                yield return registration;
-            }
-        }
-    }
-
-    private static INamedTypeSymbol? TryGetClosedImplementationTypeForDependency(
-        ITypeSymbol dependencyType,
-        INamedTypeSymbol serviceType,
-        INamedTypeSymbol implementationType)
-    {
-        if (!implementationType.IsUnboundGenericType)
-        {
-            return implementationType;
-        }
-
-        if (dependencyType is not INamedTypeSymbol namedDependencyType ||
-            !namedDependencyType.IsGenericType ||
-            namedDependencyType.IsUnboundGenericType ||
-            !serviceType.IsUnboundGenericType)
-        {
-            return null;
-        }
-
-        var implementationDefinition = implementationType.OriginalDefinition;
-        if (implementationDefinition.Arity != namedDependencyType.Arity)
-        {
-            return null;
-        }
-
-        try
-        {
-            return implementationDefinition.Construct(namedDependencyType.TypeArguments.ToArray());
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-    }
-
-    private static bool TryGetActivatorUtilitiesMissingDependencies(
-        InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel,
-        RegistrationCollector registrationCollector,
-        WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered,
-        out List<(ITypeSymbol Type, object? Key, bool IsKeyed)> missingDependencies)
-    {
-        missingDependencies = null!;
-
-        if (!FactoryAnalysis.TryGetActivatorUtilitiesImplementationType(
-                invocation,
-                semanticModel,
-                out var implementationType,
-                out var hasExplicitConstructorArguments))
-        {
-            return false;
-        }
-
-        if (hasExplicitConstructorArguments)
-        {
-            return false;
-        }
-
-        var bestMissingDependencies = GetBestMissingDependenciesForType(
-            implementationType,
-            registrationCollector,
-            wellKnownTypes,
-            assumeFrameworkServicesRegistered,
-            new Dictionary<ServiceLookupKey, List<(ITypeSymbol Type, object? Key, bool IsKeyed)>?>(),
-            new HashSet<ServiceLookupKey>());
-        if (bestMissingDependencies is null || bestMissingDependencies.Count == 0)
-        {
-            return false;
-        }
-
-        missingDependencies = bestMissingDependencies;
-        return true;
-    }
-
-    private static bool TryGetRequiredResolutionInfo(
-        InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel,
-        WellKnownTypes? wellKnownTypes,
-        out ITypeSymbol dependencyType,
-        out object? key,
-        out bool isKeyed)
-    {
-        dependencyType = null!;
-        key = null;
-        isKeyed = false;
-
-        var symbolInfo = semanticModel.GetSymbolInfo(invocation);
-        if (symbolInfo.Symbol is not IMethodSymbol methodSymbol)
-        {
-            return false;
-        }
-
-        if (!IsRequiredResolutionMethod(methodSymbol, wellKnownTypes))
-        {
-            return false;
-        }
-
-        if (!TryGetResolvedDependencyType(invocation, methodSymbol, semanticModel, out dependencyType))
-        {
-            return false;
-        }
-
-        isKeyed = IsKeyedRequiredResolutionMethod(methodSymbol);
-        if (!isKeyed)
-        {
-            return true;
-        }
-
-        return TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, out key);
-    }
-
-    private static bool IsRequiredResolutionMethod(
-        IMethodSymbol methodSymbol,
-        WellKnownTypes? wellKnownTypes)
-    {
-        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
-        if (sourceMethod.Name is not ("GetRequiredService" or "GetRequiredKeyedService"))
-        {
-            return false;
-        }
-
-        if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
-        {
-            var receiverType = sourceMethod.Parameters[0].Type;
-            if (wellKnownTypes?.IServiceProvider is not null &&
-                SymbolEqualityComparer.Default.Equals(receiverType, wellKnownTypes.IServiceProvider))
-            {
-                return true;
-            }
-
-            if (wellKnownTypes?.IKeyedServiceProvider is not null &&
-                SymbolEqualityComparer.Default.Equals(receiverType, wellKnownTypes.IKeyedServiceProvider))
-            {
-                return true;
-            }
-
-            // Fallback for reduced test stubs when well-known symbols are unavailable.
-            if (wellKnownTypes is null &&
-                receiverType.Name is "IServiceProvider" or "IKeyedServiceProvider")
-            {
-                return true;
-            }
-        }
-
-        if (wellKnownTypes?.IKeyedServiceProvider is not null &&
-            SymbolEqualityComparer.Default.Equals(sourceMethod.ContainingType, wellKnownTypes.IKeyedServiceProvider) &&
-            sourceMethod.Name == "GetRequiredKeyedService")
-        {
-            return true;
-        }
-
-        if (wellKnownTypes is null &&
-            sourceMethod.ContainingType?.Name == "IKeyedServiceProvider" &&
-            sourceMethod.Name == "GetRequiredKeyedService")
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsKeyedRequiredResolutionMethod(IMethodSymbol methodSymbol)
-    {
-        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
-        return sourceMethod.Name == "GetRequiredKeyedService";
-    }
-
-    private static bool TryGetResolvedDependencyType(
-        InvocationExpressionSyntax invocation,
-        IMethodSymbol methodSymbol,
-        SemanticModel semanticModel,
-        out ITypeSymbol dependencyType)
-    {
-        dependencyType = null!;
-
-        if (methodSymbol.IsGenericMethod && methodSymbol.TypeArguments.Length > 0)
-        {
-            dependencyType = methodSymbol.TypeArguments[0];
-            return true;
-        }
-
-        var typeExpression =
-            GetInvocationArgumentExpression(invocation, methodSymbol, "serviceType") ??
-            GetInvocationArgumentExpression(invocation, methodSymbol, "type");
-
-        if (typeExpression is null && invocation.ArgumentList.Arguments.Count > 0)
-        {
-            typeExpression = invocation.ArgumentList.Arguments[0].Expression;
-        }
-
-        if (typeExpression is not TypeOfExpressionSyntax typeOfExpression)
-        {
-            return false;
-        }
-
-        var typeInfo = semanticModel.GetTypeInfo(typeOfExpression.Type);
-        if (typeInfo.Type is null)
-        {
-            return false;
-        }
-
-        dependencyType = typeInfo.Type;
-        return true;
-    }
-
-    private static ExpressionSyntax? GetInvocationArgumentExpression(
-        InvocationExpressionSyntax invocation,
-        IMethodSymbol methodSymbol,
-        string parameterName)
-    {
-        foreach (var argument in invocation.ArgumentList.Arguments)
-        {
-            if (argument.NameColon?.Name.Identifier.Text == parameterName)
-            {
-                return argument.Expression;
-            }
-        }
-
-        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
-        var isReducedExtension = methodSymbol.ReducedFrom is not null;
-
-        for (var i = 0; i < sourceMethod.Parameters.Length; i++)
-        {
-            if (sourceMethod.Parameters[i].Name != parameterName)
-            {
-                continue;
-            }
-
-            var argumentIndex = isReducedExtension ? i - 1 : i;
-            if (argumentIndex >= 0 && argumentIndex < invocation.ArgumentList.Arguments.Count)
-            {
-                return invocation.ArgumentList.Arguments[argumentIndex].Expression;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool TryExtractKeyFromResolution(
-        InvocationExpressionSyntax invocation,
-        IMethodSymbol methodSymbol,
-        SemanticModel semanticModel,
-        out object? key)
-    {
-        key = null;
-
-        var keyExpression =
-            GetInvocationArgumentExpression(invocation, methodSymbol, "serviceKey") ??
-            GetInvocationArgumentExpression(invocation, methodSymbol, "key");
-
-        if (keyExpression is null && invocation.ArgumentList.Arguments.Count >= 2)
-        {
-            keyExpression = invocation.ArgumentList.Arguments[1].Expression;
-        }
-
-        if (keyExpression is null)
-        {
-            return false;
-        }
-
-        var constantValue = semanticModel.GetConstantValue(keyExpression);
-        if (!constantValue.HasValue)
-        {
-            return false;
-        }
-
-        key = constantValue.Value;
-        return true;
-    }
-
-    private static bool ShouldSkipDependencyCheck(
-        ITypeSymbol dependencyType,
-        IParameterSymbol? parameter,
-        WellKnownTypes? wellKnownTypes,
-        bool assumeFrameworkServicesRegistered)
-    {
-        if (parameter?.HasExplicitDefaultValue == true)
-        {
-            return true;
-        }
-
-        if (wellKnownTypes is not null &&
-            wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType))
-        {
-            return true;
-        }
-
-        if (IsContainerProvidedDependency(dependencyType))
-        {
-            return true;
-        }
-
-        return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType);
-    }
-
-    private static bool IsContainerProvidedDependency(ITypeSymbol dependencyType)
-    {
-        if (dependencyType is not INamedTypeSymbol namedType)
-        {
-            return false;
-        }
-
-        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-        if (namedType.Name == "IEnumerable" &&
-            namespaceName == "System.Collections.Generic" &&
-            namedType.IsGenericType)
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
-    {
-        if (dependencyType is not INamedTypeSymbol namedType)
-        {
-            return false;
-        }
-
-        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-
-        if (namedType.Name == "IConfiguration" &&
-            namespaceName == "Microsoft.Extensions.Configuration")
-        {
-            return true;
-        }
-
-        if (namedType.Name == "ILoggerFactory" &&
-            namespaceName == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.Name is "IHostEnvironment" or "IWebHostEnvironment" &&
-            (namespaceName == "Microsoft.Extensions.Hosting" ||
-             namespaceName == "Microsoft.AspNetCore.Hosting"))
-        {
-            return true;
-        }
-
-        if (namedType.Name == "ILogger" &&
-            namespaceName == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.IsGenericType &&
-            namedType.ConstructedFrom.Name == "ILogger" &&
-            namedType.ConstructedFrom.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.Name is "IOptions" or "IOptionsSnapshot" or "IOptionsMonitor" &&
-            namespaceName == "Microsoft.Extensions.Options")
-        {
-            return true;
-        }
-
-        return false;
     }
 
     private static Func<SyntaxTree?, bool> CreateAssumeFrameworkServicesRegisteredResolver(
@@ -915,99 +263,5 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
             default:
                 return false;
         }
-    }
-
-    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
-    {
-        foreach (var attribute in parameter.GetAttributes())
-        {
-            if (attribute.AttributeClass?.Name == "FromKeyedServicesAttribute" &&
-                attribute.AttributeClass.ContainingNamespace.ToDisplayString() ==
-                "Microsoft.Extensions.DependencyInjection")
-            {
-                return (attribute.ConstructorArguments.Length > 0
-                    ? attribute.ConstructorArguments[0].Value
-                    : null, true);
-            }
-        }
-
-        return (null, false);
-    }
-
-    private static string FormatDependencyName(ITypeSymbol dependencyType, object? key, bool isKeyed)
-    {
-        var typeName = dependencyType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-        if (!isKeyed)
-        {
-            return typeName;
-        }
-
-        return $"{typeName} (key: {key ?? "null"})";
-    }
-
-    private static bool IsServiceImplementationCompatible(
-        INamedTypeSymbol serviceType,
-        INamedTypeSymbol implementationType)
-    {
-        if (SymbolEqualityComparer.Default.Equals(serviceType, implementationType))
-        {
-            return true;
-        }
-
-        if (serviceType.IsUnboundGenericType)
-        {
-            if (!implementationType.IsGenericType)
-            {
-                return false;
-            }
-
-            var originalService = serviceType.OriginalDefinition;
-            if (SymbolEqualityComparer.Default.Equals(implementationType.OriginalDefinition, originalService))
-            {
-                return true;
-            }
-
-            foreach (var iface in implementationType.OriginalDefinition.AllInterfaces)
-            {
-                if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService))
-                {
-                    return true;
-                }
-            }
-
-            var currentBaseType = implementationType.OriginalDefinition.BaseType;
-            while (currentBaseType is not null)
-            {
-                if (SymbolEqualityComparer.Default.Equals(currentBaseType.OriginalDefinition, originalService))
-                {
-                    return true;
-                }
-
-                currentBaseType = currentBaseType.BaseType;
-            }
-
-            return false;
-        }
-
-        foreach (var iface in implementationType.AllInterfaces)
-        {
-            if (SymbolEqualityComparer.Default.Equals(iface, serviceType))
-            {
-                return true;
-            }
-        }
-
-        var baseType = implementationType.BaseType;
-        while (baseType is not null)
-        {
-            if (SymbolEqualityComparer.Default.Equals(baseType, serviceType))
-            {
-                return true;
-            }
-
-            baseType = baseType.BaseType;
-        }
-
-        return false;
     }
 }

@@ -14,14 +14,14 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>2.1.4</Version>
+    <Version>2.2.0</Version>
     <Authors>George Wall</Authors>
     <Description>Roslyn analyzers for Microsoft.Extensions.DependencyInjection that catch captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, and unresolvable services at compile time in ASP.NET Core and .NET applications.</Description>
     <PackageTags>dependency-injection;di;ioc;dotnet;csharp;aspnetcore;aspnet-core;roslyn;roslyn-analyzer;analyzers;static-analysis;service-locator;iserviceprovider;iservicescope;buildserviceprovider;activatorutilities;captive-dependency;memory-leaks;microsoft-extensions-dependencyinjection;compile-time</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>Compile-time DI diagnostics for captive dependencies, scope leaks, BuildServiceProvider misuse, and unresolvable services. Includes code fixes for safe lifetime and disposal issues.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Compile-time DI diagnostics for captive dependencies, scope leaks, BuildServiceProvider misuse, and unresolvable services. Includes code fixes for safe lifetime and disposal issues.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

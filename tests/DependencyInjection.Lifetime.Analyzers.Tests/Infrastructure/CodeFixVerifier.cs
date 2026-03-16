@@ -125,9 +125,9 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
         test.FixedState.ExpectedDiagnostics.AddRange(fixedStateDiagnostics);
         // Skip the FixAll check which applies fixes iteratively
-        test.CodeFixTestBehaviors = CodeFixTestBehaviors.SkipFixAllInDocumentCheck
-                                    | CodeFixTestBehaviors.SkipFixAllInProjectCheck
-                                    | CodeFixTestBehaviors.SkipFixAllInSolutionCheck;
+        test.CodeFixTestBehaviors |= CodeFixTestBehaviors.SkipFixAllInDocumentCheck
+                                     | CodeFixTestBehaviors.SkipFixAllInProjectCheck
+                                     | CodeFixTestBehaviors.SkipFixAllInSolutionCheck;
         // Set iterations to explicit 1 to prevent re-application
         test.NumberOfFixAllIterations = 0;
         test.NumberOfIncrementalIterations = 1;

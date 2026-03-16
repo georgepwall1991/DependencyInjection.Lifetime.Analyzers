@@ -138,4 +138,12 @@ internal static class Resources
     /// </summary>
     internal static string DI009_FixTitle_UpgradeDependency =>
         ResourceManager.GetString("DI009_FixTitle_UpgradeDependency", Culture) ?? "Change dependency to Singleton";
+
+    // DI015: Unresolvable Dependency
+
+    /// <summary>
+    /// Looks up a localized string: Add missing registration
+    /// </summary>
+    internal static string DI015_FixTitle_AddMissingRegistration =>
+        ResourceManager.GetString("DI015_FixTitle_AddMissingRegistration", Culture) ?? "Add missing registration";
 }

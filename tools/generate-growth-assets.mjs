@@ -386,11 +386,8 @@ async function generateReleaseNotes({ version, outputDir }) {
 
   const body = buildGitHubReleaseBody(metadata, release);
   const packageReleaseNotes = buildPackageReleaseNotes(release);
-  const packageReleaseNotesTargets = buildPackageReleaseNotesTargets(packageReleaseNotes);
-
   await writeOutput(outputDir, "github-release.md", body);
   await writeOutput(outputDir, "package-release-notes.txt", `${packageReleaseNotes}\n`);
-  await writeOutput(outputDir, "package-release-notes.targets", packageReleaseNotesTargets);
   await writeOutput(
     outputDir,
     "release-summary.json",
@@ -768,18 +765,6 @@ function buildGitHubReleaseBody(metadata, release) {
 function buildPackageReleaseNotes(release) {
   const bullets = release.sections.flatMap((section) => section.items).slice(0, 4);
   return bullets.join(" | ");
-}
-
-function buildPackageReleaseNotesTargets(packageReleaseNotes) {
-  return normalizeNewlines(`
-    <Project>
-      <Target Name="InjectGeneratedPackageReleaseNotes" BeforeTargets="GenerateNuspec">
-        <PropertyGroup>
-          <PackageReleaseNotes>${escapeXml(packageReleaseNotes)}</PackageReleaseNotes>
-        </PropertyGroup>
-      </Target>
-    </Project>
-  `).trimStart();
 }
 
 function renderIndexPage(site) {

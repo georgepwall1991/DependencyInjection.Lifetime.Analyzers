@@ -30,7 +30,7 @@ The searchable docs site, versioned install snippets, and curated release notes 
 ```bash
 node tools/generate-growth-assets.mjs sync-readme
 node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site
-node tools/generate-growth-assets.mjs release-notes --version 2.1.4 --output-dir ./artifacts/release-notes
+node tools/generate-growth-assets.mjs release-notes --version 2.2.0 --output-dir ./artifacts/release-notes
 ```
 
 GitHub Actions uses the same script for Pages publishing and release-note generation. If you change README install instructions, changelog structure, rule docs, or sample files, rerun the generator commands above.

@@ -118,4 +118,9 @@
     <value>Change dependency to Singleton</value>
   </data>
 
+  <!-- DI015: Unresolvable Dependency -->
+  <data name="DI015_FixTitle_AddMissingRegistration" xml:space="preserve">
+    <value>Add missing registration</value>
+  </data>
+
 </root>
