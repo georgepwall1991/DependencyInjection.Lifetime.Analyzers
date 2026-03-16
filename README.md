@@ -47,13 +47,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.2.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.2.1
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.1">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -61,7 +61,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.1" />
 ```
 
 Then reference it from the project file:
@@ -584,7 +584,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid `typeof` service/implementation pairs that compile but fail at runtime.
+**What it catches:** invalid service registrations where the implementation type or self-registration cannot actually be used to satisfy the service at runtime.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 
@@ -597,6 +597,7 @@ public interface IRepository { }
 public sealed class WrongType { }
 
 services.AddSingleton(typeof(IRepository), typeof(WrongType));
+services.AddSingleton(typeof(IRepository)); // self-registration of an interface
 ```
 
 **Better pattern:**
@@ -604,6 +605,7 @@ services.AddSingleton(typeof(IRepository), typeof(WrongType));
 ```csharp
 public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
+services.AddSingleton(typeof(SqlRepository));
 ```
 
 **Code Fix:** No.

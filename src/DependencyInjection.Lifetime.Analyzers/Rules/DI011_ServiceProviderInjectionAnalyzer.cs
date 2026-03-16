@@ -59,7 +59,7 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             var implementationType = registration.ImplementationType;
-            if (implementationType is null)
+            if (registration.HasImplementationInstance || implementationType is null)
             {
                 continue;
             }

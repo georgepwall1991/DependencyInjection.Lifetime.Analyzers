@@ -121,7 +121,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     semanticModelsByTree,
                     reportedDiagnostics);
             }
-            else if (registration.ImplementationType != null)
+            else if (registration.ImplementationType != null && !registration.HasImplementationInstance)
             {
                 AnalyzeConstructorRegistration(
                     context,

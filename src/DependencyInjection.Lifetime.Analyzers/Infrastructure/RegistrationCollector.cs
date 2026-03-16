@@ -203,19 +203,21 @@ public sealed class RegistrationCollector
         INamedTypeSymbol? serviceType;
         INamedTypeSymbol? implementationType;
         ExpressionSyntax? factoryExpression;
+        bool hasImplementationInstance;
         object? key = null;
         bool isKeyed = IsKeyedMethod(methodName);
 
         if (lifetime.HasValue)
         {
             // Extract service, implementation types, factory expression, and key from standard methods
-            (serviceType, implementationType, factoryExpression, key) = ExtractTypes(methodSymbol, invocation, semanticModel);
+            (serviceType, implementationType, hasImplementationInstance, factoryExpression, key) =
+                ExtractTypes(methodSymbol, invocation, semanticModel);
         }
         else if ((methodName == "Add" || methodName == "TryAdd") && 
                  (isExtension || isAddMethod))
         {
             // Handle Add(ServiceDescriptor)
-            (serviceType, implementationType, factoryExpression, lifetime, key, isKeyed) =
+            (serviceType, implementationType, hasImplementationInstance, factoryExpression, lifetime, key, isKeyed) =
                 ExtractFromServiceDescriptor(invocation, semanticModel);
         }
         else
@@ -246,7 +248,7 @@ public sealed class RegistrationCollector
         // This uses analyzer discovery order as an approximation of source registration order;
         // cross-file ordering remains a known limitation.
         var hasEffectiveRegistration = _registrations.ContainsKey(new ServiceIdentifier(serviceType, key, isKeyed));
-        if (implementationType is not null || factoryExpression is not null)
+        if (implementationType is not null || factoryExpression is not null || hasImplementationInstance)
         {
             if (isTryAdd && hasEffectiveRegistration)
             {
@@ -256,6 +258,7 @@ public sealed class RegistrationCollector
             var registration = new ServiceRegistration(
                 serviceType,
                 implementationType,
+                hasImplementationInstance,
                 factoryExpression,
                 key,
                 isKeyed,
@@ -390,7 +393,7 @@ public sealed class RegistrationCollector
         return methodName.StartsWith("TryAdd");
     }
 
-    private (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptor(
+    private (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, bool hasImplementationInstance, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptor(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel)
     {
@@ -399,11 +402,11 @@ public sealed class RegistrationCollector
         {
             if (arg.Expression is ObjectCreationExpressionSyntax creation)
             {
-                var typeSymbol = semanticModel.GetTypeInfo(creation).Type;
-                if (IsServiceDescriptorType(typeSymbol))
-                {
-                    return ExtractFromServiceDescriptorArguments(creation.ArgumentList, semanticModel);
-                }
+                    var typeSymbol = semanticModel.GetTypeInfo(creation).Type;
+                    if (IsServiceDescriptorType(typeSymbol))
+                    {
+                        return ExtractFromServiceDescriptorArguments(creation.ArgumentList, semanticModel);
+                    }
             }
             else if (arg.Expression is InvocationExpressionSyntax describeInvocation)
             {
@@ -419,29 +422,37 @@ public sealed class RegistrationCollector
                     var lifetime = GetLifetimeFromServiceDescriptorFactoryMethod(methodSymbol.Name);
                     if (lifetime.HasValue)
                     {
-                        var (serviceType, implementationType, factoryExpression, key) =
+                        var (serviceType, implementationType, hasImplementationInstance, factoryExpression, key) =
                             ExtractTypes(methodSymbol, describeInvocation, semanticModel);
-                        return (serviceType, implementationType, factoryExpression, lifetime, key, IsKeyedMethod(methodSymbol.Name));
+                        return (
+                            serviceType,
+                            implementationType,
+                            hasImplementationInstance,
+                            factoryExpression,
+                            lifetime,
+                            key,
+                            IsKeyedMethod(methodSymbol.Name));
                     }
                 }
             }
         }
 
-        return (null, null, null, null, null, false);
+        return (null, null, false, null, null, null, false);
     }
 
-    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptorArguments(
+    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, bool hasImplementationInstance, ExpressionSyntax? factoryExpression, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptorArguments(
         ArgumentListSyntax? argumentList,
         SemanticModel semanticModel)
     {
         var args = argumentList?.Arguments;
         if (args is null || args.Value.Count < 2)
         {
-            return (null, null, null, null, null, false);
+            return (null, null, false, null, null, null, false);
         }
 
         INamedTypeSymbol? serviceType = null;
         INamedTypeSymbol? implementationType = null;
+        bool hasImplementationInstance = false;
         ExpressionSyntax? factoryExpression = null;
         ServiceLifetime? lifetime = null;
         object? key = null;
@@ -501,12 +512,12 @@ public sealed class RegistrationCollector
             }
 
             // 6. Instance (Argument "instance")
-            if (argName == "instance")
+            if (argName is "instance" or "implementationInstance")
             {
-                 if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType &&
-                     instanceType.SpecialType == SpecialType.None)
+                hasImplementationInstance = true;
+                if (TryGetKnownImplementationInstanceType(expr, semanticModel, out var instanceType))
                 {
-                     implementationType = instanceType;
+                    implementationType = instanceType;
                 }
                 continue;
             }
@@ -527,17 +538,17 @@ public sealed class RegistrationCollector
                     }
                     else
                     {
-                         // Check if it's a key (constant) or instance
+                        // Check if it's a key (constant) or instance
                         var val = ExtractConstantValue(expr, semanticModel);
                         if (val != null)
                         {
                             key = val;
                             isKeyed = true;
                         }
-                        else if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType &&
-                                 instanceType.SpecialType == SpecialType.None)
+                        else if (TryGetKnownImplementationInstanceType(expr, semanticModel, out var instanceType))
                         {
-                             implementationType = instanceType;
+                            hasImplementationInstance = true;
+                            implementationType = instanceType;
                         }
                     }
                 }
@@ -555,6 +566,11 @@ public sealed class RegistrationCollector
                         {
                             factoryExpression = expr;
                         }
+                        else if (TryGetKnownImplementationInstanceType(expr, semanticModel, out var instanceType))
+                        {
+                            hasImplementationInstance = true;
+                            implementationType = instanceType;
+                        }
                     }
                     else if (lifetime == null)
                     {
@@ -564,7 +580,7 @@ public sealed class RegistrationCollector
             }
         }
 
-        return (serviceType, implementationType, factoryExpression, lifetime, key, isKeyed);
+        return (serviceType, implementationType, hasImplementationInstance, factoryExpression, lifetime, key, isKeyed);
     }
 
     private static bool IsServiceLifetimeExpression(ExpressionSyntax expr, SemanticModel semanticModel)
@@ -634,19 +650,29 @@ public sealed class RegistrationCollector
         return null;
     }
 
-    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, object? key) ExtractTypes(
+    private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, bool hasImplementationInstance, ExpressionSyntax? factoryExpression, object? key) ExtractTypes(
         IMethodSymbol method,
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel)
     {
         INamedTypeSymbol? serviceType = null;
         INamedTypeSymbol? implementationType = null;
+        bool hasImplementationInstance = false;
         ExpressionSyntax? factoryExpression = null;
         object? key = null;
 
         if (TryGetFactoryArgumentExpression(method, invocation, semanticModel, out var factoryArgumentExpression))
         {
             factoryExpression = factoryArgumentExpression;
+        }
+
+        if (TryGetImplementationInstanceArgumentExpression(method, invocation, semanticModel, out var implementationInstanceExpression))
+        {
+            hasImplementationInstance = true;
+            TryGetKnownImplementationInstanceType(
+                implementationInstanceExpression,
+                semanticModel,
+                out implementationType);
         }
 
         bool isKeyed = IsKeyedMethod(method.Name);
@@ -661,10 +687,10 @@ public sealed class RegistrationCollector
             {
                 implementationType = method.TypeArguments[1] as INamedTypeSymbol;
             }
-            else if (factoryExpression is null)
+            else if (factoryExpression is null && !hasImplementationInstance)
             {
                 // Only default to serviceType if NO factory is present.
-                // If factory is present, implementation is unknown (null).
+                // If a factory or implementation instance is present, implementation is unknown (null).
                 implementationType = serviceType;
             }
             
@@ -675,7 +701,7 @@ public sealed class RegistrationCollector
                  key = ExtractConstantValue(arguments[0].Expression, semanticModel);
             }
 
-            return (serviceType, implementationType, factoryExpression, key);
+            return (serviceType, implementationType, hasImplementationInstance, factoryExpression, key);
         }
 
         // Pattern 2: Non-generic with Type parameters AddXxx(typeof(TService)) or AddXxx(typeof(TService), typeof(TImpl))
@@ -709,16 +735,16 @@ public sealed class RegistrationCollector
             {
                 implementationType = typeofArgs[1];
             }
-            else if (factoryExpression is null)
+            else if (factoryExpression is null && !hasImplementationInstance)
             {
-                 // Only default to serviceType if NO factory is present
+                // Only default to serviceType if no factory or implementation instance is present.
                 implementationType = serviceType;
             }
             
-            return (serviceType, implementationType, factoryExpression, key);
+            return (serviceType, implementationType, hasImplementationInstance, factoryExpression, key);
         }
 
-        return (null, null, null, key);
+        return (null, implementationType, hasImplementationInstance, null, key);
     }
 
     private static bool TryGetFactoryArgumentExpression(
@@ -784,6 +810,127 @@ public sealed class RegistrationCollector
         }
 
         return false;
+    }
+
+    private static bool TryGetImplementationInstanceArgumentExpression(
+        IMethodSymbol method,
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out ExpressionSyntax implementationInstanceExpression)
+    {
+        implementationInstanceExpression = null!;
+
+        if (semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation)
+        {
+            foreach (var argument in invocationOperation.Arguments)
+            {
+                if (!IsImplementationInstanceParameter(argument.Parameter) ||
+                    argument.Value.Syntax is not ExpressionSyntax argumentExpression)
+                {
+                    continue;
+                }
+
+                implementationInstanceExpression = argumentExpression;
+                return true;
+            }
+        }
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        var isReducedExtension = method.ReducedFrom is not null;
+
+        for (var parameterIndex = 0; parameterIndex < sourceMethod.Parameters.Length; parameterIndex++)
+        {
+            var parameter = sourceMethod.Parameters[parameterIndex];
+            if (!IsImplementationInstanceParameter(parameter))
+            {
+                continue;
+            }
+
+            foreach (var argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.NameColon?.Name.Identifier.Text != parameter.Name)
+                {
+                    continue;
+                }
+
+                implementationInstanceExpression = argument.Expression;
+                return true;
+            }
+
+            var argumentIndex = isReducedExtension ? parameterIndex - 1 : parameterIndex;
+            if (argumentIndex < 0 || argumentIndex >= invocation.ArgumentList.Arguments.Count)
+            {
+                continue;
+            }
+
+            implementationInstanceExpression = invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsImplementationInstanceParameter(IParameterSymbol? parameter)
+    {
+        return parameter?.Name is "implementationInstance" or "instance";
+    }
+
+    private static bool TryGetKnownImplementationInstanceType(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        out INamedTypeSymbol? implementationType)
+    {
+        implementationType = null;
+
+        if (TryGetExactImplementationInstanceType(semanticModel.GetOperation(expression), out implementationType))
+        {
+            return true;
+        }
+
+        if (semanticModel.GetTypeInfo(expression).Type is INamedTypeSymbol expressionType &&
+            IsDefinitelyExactRuntimeType(expressionType))
+        {
+            implementationType = expressionType;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetExactImplementationInstanceType(
+        IOperation? operation,
+        out INamedTypeSymbol? implementationType)
+    {
+        implementationType = null;
+
+        while (operation is IConversionOperation conversionOperation)
+        {
+            operation = conversionOperation.Operand;
+        }
+
+        return operation switch
+        {
+            IObjectCreationOperation { Type: INamedTypeSymbol createdType } =>
+                AssignImplementationType(createdType, out implementationType),
+            ILiteralOperation { Type: INamedTypeSymbol literalType } =>
+                AssignImplementationType(literalType, out implementationType),
+            _ => false
+        };
+    }
+
+    private static bool IsDefinitelyExactRuntimeType(INamedTypeSymbol type)
+    {
+        return type.IsValueType ||
+               type.SpecialType == SpecialType.System_String ||
+               type.IsSealed;
+    }
+
+    private static bool AssignImplementationType(
+        INamedTypeSymbol type,
+        out INamedTypeSymbol? implementationType)
+    {
+        implementationType = type;
+        return true;
     }
 
     private bool IsKnownServiceCollectionExtensionsType(INamedTypeSymbol type)

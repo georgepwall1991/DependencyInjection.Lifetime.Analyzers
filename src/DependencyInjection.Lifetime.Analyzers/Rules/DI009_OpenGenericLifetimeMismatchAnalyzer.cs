@@ -62,7 +62,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 continue;
             }
 
-            if (registration.ImplementationType is null)
+            if (registration.HasImplementationInstance || registration.ImplementationType is null)
             {
                 continue;
             }
