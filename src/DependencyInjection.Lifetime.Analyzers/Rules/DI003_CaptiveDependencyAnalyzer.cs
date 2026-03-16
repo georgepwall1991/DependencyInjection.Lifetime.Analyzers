@@ -51,8 +51,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     {
         foreach (var registration in registrationCollector.AllRegistrations)
         {
-            // Only check singletons and scoped services for captive dependencies
-            if (registration.Lifetime == ServiceLifetime.Transient)
+            // Limit DI003 to singleton consumers. Scoped -> transient is common and generally safe,
+            // so warning on it creates more noise than signal.
+            if (registration.Lifetime != ServiceLifetime.Singleton)
             {
                 continue;
             }
@@ -279,8 +280,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
     private static bool IsCaptiveDependency(ServiceLifetime consumerLifetime, ServiceLifetime dependencyLifetime)
     {
-        // A captive dependency occurs when a longer-lived service captures a shorter-lived one
-        // Lifetime order: Singleton (longest) > Scoped > Transient (shortest)
-        return consumerLifetime < dependencyLifetime;
+        return consumerLifetime == ServiceLifetime.Singleton &&
+               dependencyLifetime is ServiceLifetime.Scoped or ServiceLifetime.Transient;
     }
 }

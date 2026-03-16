@@ -99,7 +99,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** longer-lived services (especially singleton) capturing shorter-lived dependencies (scoped/transient).
+**What it catches:** singleton services capturing scoped or transient dependencies.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 

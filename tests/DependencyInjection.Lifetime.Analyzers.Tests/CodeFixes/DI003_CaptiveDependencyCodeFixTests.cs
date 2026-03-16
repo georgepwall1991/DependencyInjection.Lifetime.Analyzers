@@ -133,14 +133,8 @@ public class DI003_CaptiveDependencyCodeFixTests
             .WithSpan(21, 9, 21, 69)
             .WithArguments("SingletonService", "transient", "ITransientService");
 
-        // After changing to Scoped, there's still a captive dependency (Scoped capturing Transient)
-        var remainingDiagnostic = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
-            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
-            .WithSpan(21, 9, 21, 66)
-            .WithArguments("SingletonService", "transient", "ITransientService");
-
         await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
-            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped", remainingDiagnostic);
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
     }
 
     [Fact]
@@ -198,66 +192,6 @@ public class DI003_CaptiveDependencyCodeFixTests
             .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
             .WithSpan(21, 9, 21, 69)
             .WithArguments("SingletonService", "transient", "ITransientService");
-
-        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
-            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToTransient");
-    }
-
-    [Fact]
-    public async Task CodeFix_ScopedCapturingTransient_ChangesToTransient()
-    {
-        var source = Usings + """
-            public interface ITransientService { }
-            public class TransientService : ITransientService { }
-
-            public interface IScopedService { }
-            public class ScopedService : IScopedService
-            {
-                private readonly ITransientService _transient;
-                public ScopedService(ITransientService transient)
-                {
-                    _transient = transient;
-                }
-            }
-
-            public class Startup
-            {
-                public void ConfigureServices(IServiceCollection services)
-                {
-                    services.AddTransient<ITransientService, TransientService>();
-                    services.AddScoped<IScopedService, ScopedService>();
-                }
-            }
-            """;
-
-        var fixedSource = Usings + """
-            public interface ITransientService { }
-            public class TransientService : ITransientService { }
-
-            public interface IScopedService { }
-            public class ScopedService : IScopedService
-            {
-                private readonly ITransientService _transient;
-                public ScopedService(ITransientService transient)
-                {
-                    _transient = transient;
-                }
-            }
-
-            public class Startup
-            {
-                public void ConfigureServices(IServiceCollection services)
-                {
-                    services.AddTransient<ITransientService, TransientService>();
-                    services.AddTransient<IScopedService, ScopedService>();
-                }
-            }
-            """;
-
-        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
-            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
-            .WithSpan(21, 9, 21, 60)
-            .WithArguments("ScopedService", "transient", "ITransientService");
 
         await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToTransient");
