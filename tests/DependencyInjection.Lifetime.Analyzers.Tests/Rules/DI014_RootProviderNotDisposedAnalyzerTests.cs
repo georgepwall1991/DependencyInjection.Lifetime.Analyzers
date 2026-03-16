@@ -80,6 +80,54 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedInDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        _provider?.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToProperty_DisposedInDisposeAsync_NoDiagnostic()
+    {
+        var source = @"
+using Microsoft.Extensions.DependencyInjection;
+using System;
+using System.Threading.Tasks;
+
+public class Program : IAsyncDisposable
+{
+    private ServiceProvider Provider { get; set; }
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        Provider = services.BuildServiceProvider();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        return Provider.DisposeAsync();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_Returned_NoDiagnostic()
     {
         var source = Usings + @"
@@ -130,6 +178,32 @@ public class Program
             AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
                 .WithSpan(10, 24, 10, 55));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedInOtherMethod_StillReported()
+    {
+        var source = Usings + @"
+public class Program
+{
+    private ServiceProvider? _provider;
+
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Stop()
+    {
+        _provider?.Dispose();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(12, 21));
     }
 
     [Fact]
