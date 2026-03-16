@@ -19,6 +19,11 @@ public sealed class ServiceRegistration
     public INamedTypeSymbol? ImplementationType { get; }
 
     /// <summary>
+    /// Gets whether this registration supplies a pre-built implementation instance.
+    /// </summary>
+    public bool HasImplementationInstance { get; }
+
+    /// <summary>
     /// Gets the factory expression if this is a factory registration.
     /// </summary>
     public ExpressionSyntax? FactoryExpression { get; }
@@ -49,6 +54,7 @@ public sealed class ServiceRegistration
     public ServiceRegistration(
         INamedTypeSymbol serviceType,
         INamedTypeSymbol? implementationType,
+        bool hasImplementationInstance,
         ExpressionSyntax? factoryExpression,
         object? key,
         bool isKeyed,
@@ -57,6 +63,7 @@ public sealed class ServiceRegistration
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
+        HasImplementationInstance = hasImplementationInstance;
         FactoryExpression = factoryExpression;
         Key = key;
         IsKeyed = isKeyed;

@@ -461,7 +461,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid `typeof` service/implementation pairs that compile but fail at runtime.
+**What it catches:** invalid service registrations where the implementation type or self-registration cannot actually be used to satisfy the service at runtime.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 
@@ -474,6 +474,7 @@ public interface IRepository { }
 public sealed class WrongType { }
 
 services.AddSingleton(typeof(IRepository), typeof(WrongType));
+services.AddSingleton(typeof(IRepository)); // self-registration of an interface
 ```
 
 **Better pattern:**
@@ -481,6 +482,7 @@ services.AddSingleton(typeof(IRepository), typeof(WrongType));
 ```csharp
 public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
+services.AddSingleton(typeof(SqlRepository));
 ```
 
 **Code Fix:** No.

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -33,17 +34,15 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
     {
         foreach (var registration in collector.AllRegistrations)
         {
-            if (registration.ImplementationType == null) continue;
-
-            // Skip self-registrations where Impl == Service (e.g. AddSingleton<Service>())
-            // RegistrationCollector sets ImplementationType = ServiceType for these.
-            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, registration.ImplementationType))
+            if (registration.ImplementationType is null)
             {
                 continue;
             }
 
-            // Check compatibility
-            if (!IsCompatible(registration.ServiceType, registration.ImplementationType))
+            if (!IsCompatible(
+                    registration.ServiceType,
+                    registration.ImplementationType,
+                    registration.HasImplementationInstance))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     DiagnosticDescriptors.ImplementationTypeMismatch,
@@ -54,54 +53,146 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
         }
     }
 
-    private static bool IsCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
+    private static bool IsCompatible(
+        INamedTypeSymbol service,
+        INamedTypeSymbol implementation,
+        bool hasImplementationInstance)
     {
-        // Handle Open Generics (unbound)
-        if (service.IsUnboundGenericType)
+        if (service.IsUnboundGenericType || implementation.IsUnboundGenericType)
         {
-            // Implementation must also be generic
-            if (!implementation.IsGenericType) return false;
+            return !hasImplementationInstance &&
+                   IsCompatibleOpenGenericRegistration(service, implementation);
+        }
 
-            var originalService = service.OriginalDefinition;
-
-            // Check if implementation (definition) implements service (definition)
-            
-            // 1. Check direct identity (e.g. Add(typeof(Repo<>), typeof(Repo<>))) - usually caught by self-reg check but good for safety
-            if (SymbolEqualityComparer.Default.Equals(implementation.OriginalDefinition, originalService)) return true;
-
-            // 2. Check interfaces
-            foreach (var iface in implementation.OriginalDefinition.AllInterfaces)
-            {
-                if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService)) return true;
-            }
-
-            // 3. Check base classes
-            var current = implementation.OriginalDefinition.BaseType;
-            while (current != null)
-            {
-                if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, originalService)) return true;
-                current = current.BaseType;
-            }
-
+        if (!IsClosedServiceAssignableFromImplementation(service, implementation))
+        {
             return false;
         }
 
-        // Standard check for closed types
-        
-        // 1. Check interfaces
-        foreach (var iface in implementation.AllInterfaces)
+        return hasImplementationInstance ||
+               IsClosedImplementationActivatable(implementation);
+    }
+
+    private static bool IsCompatibleOpenGenericRegistration(
+        INamedTypeSymbol service,
+        INamedTypeSymbol implementation)
+    {
+        if (!service.IsUnboundGenericType ||
+            !implementation.IsUnboundGenericType)
         {
-            if (SymbolEqualityComparer.Default.Equals(iface, service)) return true;
+            return false;
         }
 
-        // 2. Check base classes
-        var baseType = implementation.BaseType;
-        while (baseType != null)
+        var serviceDefinition = service.OriginalDefinition;
+        var implementationDefinition = implementation.OriginalDefinition;
+
+        if (implementationDefinition.IsAbstract ||
+            implementationDefinition.TypeKind is TypeKind.Interface or TypeKind.TypeParameter or TypeKind.Delegate ||
+            implementationDefinition.Arity != serviceDefinition.Arity ||
+            !HasUsableOpenGenericConstructors(implementationDefinition))
         {
-            if (SymbolEqualityComparer.Default.Equals(baseType, service)) return true;
-            baseType = baseType.BaseType;
+            return false;
+        }
+
+        return GetOpenGenericProjections(implementationDefinition)
+            .Any(projection =>
+                SymbolEqualityComparer.Default.Equals(projection.OriginalDefinition, serviceDefinition) &&
+                HasExactTypeParameterProjection(projection, implementationDefinition.TypeParameters));
+    }
+
+    private static bool IsClosedServiceAssignableFromImplementation(
+        INamedTypeSymbol service,
+        INamedTypeSymbol implementation)
+    {
+        if (SymbolEqualityComparer.Default.Equals(service, implementation))
+        {
+            return true;
+        }
+
+        foreach (var iface in implementation.AllInterfaces)
+        {
+            if (SymbolEqualityComparer.Default.Equals(iface, service))
+            {
+                return true;
+            }
+        }
+
+        for (var current = implementation.BaseType; current is not null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, service))
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private static bool IsClosedImplementationActivatable(INamedTypeSymbol implementation)
+    {
+        if (implementation.IsAbstract ||
+            implementation.TypeKind is TypeKind.Interface or TypeKind.TypeParameter or TypeKind.Delegate ||
+            implementation.IsUnboundGenericType ||
+            implementation.IsGenericType && implementation.TypeArguments.Any(argument => argument.TypeKind == TypeKind.TypeParameter))
+        {
+            return false;
+        }
+
+        if (implementation.TypeKind == TypeKind.Struct)
+        {
+            return true;
+        }
+
+        if (implementation.TypeKind != TypeKind.Class)
+        {
+            return false;
+        }
+
+        return implementation.InstanceConstructors.Any(constructor => constructor.DeclaredAccessibility == Accessibility.Public);
+    }
+
+    private static bool HasUsableOpenGenericConstructors(INamedTypeSymbol implementationDefinition)
+    {
+        return implementationDefinition.TypeKind == TypeKind.Struct ||
+               implementationDefinition.InstanceConstructors.Any(constructor => constructor.DeclaredAccessibility == Accessibility.Public);
+    }
+
+    private static bool HasExactTypeParameterProjection(
+        INamedTypeSymbol projection,
+        ImmutableArray<ITypeParameterSymbol> implementationTypeParameters)
+    {
+        if (projection.TypeArguments.Length != implementationTypeParameters.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < projection.TypeArguments.Length; index++)
+        {
+            if (projection.TypeArguments[index] is not ITypeParameterSymbol typeParameter ||
+                !SymbolEqualityComparer.Default.Equals(typeParameter, implementationTypeParameters[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ImmutableArray<INamedTypeSymbol> GetOpenGenericProjections(INamedTypeSymbol implementationDefinition)
+    {
+        var builder = ImmutableArray.CreateBuilder<INamedTypeSymbol>();
+        builder.Add(implementationDefinition);
+
+        foreach (var iface in implementationDefinition.AllInterfaces)
+        {
+            builder.Add(iface);
+        }
+
+        for (var current = implementationDefinition.BaseType; current is not null; current = current.BaseType)
+        {
+            builder.Add(current);
+        }
+
+        return builder.ToImmutable();
     }
 }

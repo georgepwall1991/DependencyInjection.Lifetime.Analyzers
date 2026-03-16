@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-03-16
+
+### Changed
+
+- **DI013 Compatibility Hardening**: Expanded implementation-type validation beyond simple `typeof(service), typeof(implementation)` assignability checks so DI013 now also reports deterministic-invalid self-registrations, abstract/interface implementations, private-constructor implementations, and invalid implementation instances when their exact runtime type is known.
+- **DI013 Open Generic Precision**: Reworked open-generic validation to require exact generic-parameter projection compatibility, rejecting arity mismatches, reordered parameters, transformed generic arguments, and other registrations that compile but cannot be activated by the built-in container.
+- **Collector and Engine Support**: Extended registration collection to recognize non-factory implementation-instance overloads, keyed registrations, and equivalent `ServiceDescriptor` forms while keeping factory registrations out of DI013 scope and preventing constructor-based analyzers from treating pre-built instances like activatable implementation types.
+- **Regression Coverage and Docs**: Expanded DI013 tests across valid/invalid closed, open-generic, keyed, `TryAdd*`, `ServiceDescriptor`, and implementation-instance scenarios, and updated `README.md`, `docs/RULES.md`, the sample app, and descriptor wording to match the hardened behavior.
+
 ## [2.2.0] - 2026-03-16
 
 ### Changed

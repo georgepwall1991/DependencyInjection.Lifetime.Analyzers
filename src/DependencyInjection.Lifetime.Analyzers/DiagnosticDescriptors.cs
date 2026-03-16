@@ -174,7 +174,7 @@ public static class DiagnosticDescriptors
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>
-    /// DI013: Implementation type mismatch (implementation does not implement service type).
+    /// DI013: Implementation registration is invalid for the requested service type.
     /// </summary>
     public static readonly DiagnosticDescriptor ImplementationTypeMismatch = new(
         id: DiagnosticIds.ImplementationTypeMismatch,
@@ -183,7 +183,7 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
-        description: "The implementation type provided in a 'typeof' registration must implement or inherit from the service type. This will cause a runtime exception if not corrected.",
+        description: "The implementation supplied for a service registration must be assignable to the service type and activatable by the container. Incompatible, abstract, interface, or otherwise non-activatable registrations will fail at runtime.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>
