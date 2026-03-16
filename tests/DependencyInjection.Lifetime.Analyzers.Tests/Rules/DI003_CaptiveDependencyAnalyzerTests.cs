@@ -86,7 +86,7 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
-    public async Task ScopedCapturingTransient_ViaConstructor_ReportsDiagnostic()
+    public async Task ScopedCapturingTransient_ViaConstructor_NoDiagnostic()
     {
         var source = Usings + """
             public interface ITransientService { }
@@ -112,13 +112,7 @@ public class DI003_CaptiveDependencyAnalyzerTests
             }
             """;
 
-        // Scoped capturing transient is also a captive dependency
-        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
-            source,
-            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
-                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
-                .WithSpan(21, 9, 21, 60)
-                .WithArguments("ScopedService", "transient", "ITransientService"));
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Composition;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -51,6 +52,12 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
             return;
         }
 
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (semanticModel is null)
+        {
+            return;
+        }
+
         // Verify this is an AddTransient call
         if (!IsAddTransientInvocation(invocation))
         {
@@ -73,14 +80,15 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
                 equivalenceKey: ChangeToSingletonEquivalenceKey),
             diagnostic);
 
-        // Offer to use factory registration
-        // This is more complex as we need to transform the call
-        context.RegisterCodeFix(
-            CodeAction.Create(
-                title: Resources.DI008_FixTitle_UseFactory,
-                createChangedDocument: c => UseFactoryRegistrationAsync(context.Document, invocation, c),
-                equivalenceKey: UseFactoryEquivalenceKey),
-            diagnostic);
+        if (CanSafelyConvertToFactoryRegistration(invocation, semanticModel))
+        {
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: Resources.DI008_FixTitle_UseFactory,
+                    createChangedDocument: c => UseFactoryRegistrationAsync(context.Document, invocation, c),
+                    equivalenceKey: UseFactoryEquivalenceKey),
+                diagnostic);
+        }
     }
 
     private static bool IsAddTransientInvocation(InvocationExpressionSyntax invocation)
@@ -168,7 +176,7 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
 
         // Transform: services.AddTransient<IService, ServiceImpl>()
         // To:        services.AddTransient<IService>(sp => new ServiceImpl())
-        var newInvocation = TransformToFactoryRegistration(invocation, semanticModel);
+        var newInvocation = TransformToFactoryRegistration(invocation);
         if (newInvocation is null)
         {
             return document;
@@ -178,8 +186,7 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
     }
 
     private static InvocationExpressionSyntax? TransformToFactoryRegistration(
-        InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel)
+        InvocationExpressionSyntax invocation)
     {
         if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
         {
@@ -237,5 +244,47 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
         return invocation
             .WithExpression(newMemberAccess)
             .WithArgumentList(newArguments);
+    }
+
+    private static bool CanSafelyConvertToFactoryRegistration(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        if (invocation.ArgumentList.Arguments.Count != 0 ||
+            invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
+            memberAccess.Name is not GenericNameSyntax genericName)
+        {
+            return false;
+        }
+
+        if (genericName.TypeArgumentList.Arguments.Count is < 1 or > 2)
+        {
+            return false;
+        }
+
+        var implementationTypeSyntax = genericName.TypeArgumentList.Arguments[genericName.TypeArgumentList.Arguments.Count - 1];
+        var implementationType = semanticModel.GetTypeInfo(implementationTypeSyntax).Type as INamedTypeSymbol;
+        return HasSafeParameterlessConstructor(implementationType);
+    }
+
+    private static bool HasSafeParameterlessConstructor(INamedTypeSymbol? implementationType)
+    {
+        if (implementationType is null ||
+            implementationType.TypeKind != TypeKind.Class ||
+            implementationType.IsAbstract ||
+            implementationType.IsStatic)
+        {
+            return false;
+        }
+
+        if (!implementationType.InstanceConstructors.Any())
+        {
+            return implementationType.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal;
+        }
+
+        return implementationType.InstanceConstructors.Any(ctor =>
+            !ctor.IsStatic &&
+            ctor.Parameters.Length == 0 &&
+            ctor.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal);
     }
 }

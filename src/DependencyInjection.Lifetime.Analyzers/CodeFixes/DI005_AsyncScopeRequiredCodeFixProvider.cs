@@ -49,6 +49,11 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
             return;
         }
 
+        if (!CanSafelyTransform(invocation))
+        {
+            return;
+        }
+
         context.RegisterCodeFix(
             CodeAction.Create(
                 title: Resources.DI005_FixTitle,
@@ -84,9 +89,21 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
             return document.WithSyntaxRoot(root.ReplaceNode(usingStatement, newUsingStatement));
         }
 
-        // Just replace the invocation if not in a using context
-        var newInvocation = ReplaceCreateScopeWithCreateAsyncScope(invocation);
-        return document.WithSyntaxRoot(root.ReplaceNode(invocation, newInvocation));
+        return document;
+    }
+
+    private static bool CanSafelyTransform(InvocationExpressionSyntax invocation)
+    {
+        var localDeclaration = invocation.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>();
+        if (localDeclaration is not null &&
+            localDeclaration.UsingKeyword != default &&
+            localDeclaration.AwaitKeyword == default)
+        {
+            return true;
+        }
+
+        var usingStatement = invocation.FirstAncestorOrSelf<UsingStatementSyntax>();
+        return usingStatement is not null && usingStatement.AwaitKeyword == default;
     }
 
     private static LocalDeclarationStatementSyntax TransformUsingVarDeclaration(

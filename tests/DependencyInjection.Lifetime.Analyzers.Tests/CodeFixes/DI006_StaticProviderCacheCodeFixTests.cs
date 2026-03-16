@@ -120,4 +120,52 @@ public class DI006_StaticProviderCacheCodeFixTests
         await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource);
     }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromStaticMethod()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+
+                public static object? Resolve()
+                {
+                    return _provider?.GetService(typeof(object));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticPropertyIsUsedFromStaticMethod()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                public static IServiceProvider Provider { get; set; }
+
+                public static object? Resolve()
+                {
+                    return Provider?.GetService(typeof(object));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 36, 5, 44)
+            .WithArguments("IServiceProvider", "Provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
 }

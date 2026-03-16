@@ -1,9 +1,16 @@
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Testing;
+using Xunit;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
@@ -141,6 +148,39 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     }
 
     /// <summary>
+    /// Verifies that a specific code fix equivalence key is not offered for the given diagnostic.
+    /// </summary>
+    public static async Task VerifyCodeFixNotOfferedAsync(
+        string source,
+        DiagnosticResult expected,
+        string codeActionEquivalenceKey)
+    {
+        var document = CreateDocument(source);
+        var compilation = await document.Project.GetCompilationAsync();
+        Assert.NotNull(compilation);
+
+        var analyzer = new TAnalyzer();
+        var diagnostics = await compilation!
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(analyzer))
+            .GetAnalyzerDiagnosticsAsync();
+
+        var diagnostic = diagnostics.FirstOrDefault(d => d.Id == expected.Id);
+        Assert.NotNull(diagnostic);
+
+        var actions = new List<CodeAction>();
+        var codeFix = new TCodeFix();
+        var context = new CodeFixContext(
+            document,
+            diagnostic!,
+            (action, _) => actions.Add(action),
+            default);
+
+        await codeFix.RegisterCodeFixesAsync(context);
+
+        Assert.DoesNotContain(actions, action => action.EquivalenceKey == codeActionEquivalenceKey);
+    }
+
+    /// <summary>
     /// Creates a diagnostic result for the given descriptor.
     /// </summary>
     public static DiagnosticResult Diagnostic(DiagnosticDescriptor descriptor)
@@ -175,5 +215,39 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         test.CodeFixTestBehaviors |= CodeFixTestBehaviors.SkipLocalDiagnosticCheck;
 
         return test;
+    }
+
+    private static Document CreateDocument(string source)
+    {
+        var workspace = new AdhocWorkspace();
+        var projectId = ProjectId.CreateNewId();
+
+        var projectInfo = ProjectInfo.Create(
+            projectId,
+            VersionStamp.Create(),
+            "TestProject",
+            "TestProject",
+            LanguageNames.CSharp,
+            metadataReferences: GetMetadataReferences(),
+            compilationOptions: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
+            parseOptions: new CSharpParseOptions(LanguageVersion.Latest));
+
+        var solution = workspace.CurrentSolution.AddProject(projectInfo);
+        var documentId = DocumentId.CreateNewId(projectId);
+        solution = solution.AddDocument(documentId, "Test.cs", source);
+
+        return solution.GetDocument(documentId)!;
+    }
+
+    private static IEnumerable<MetadataReference> GetMetadataReferences()
+    {
+        var trustedPlatformAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))?
+            .Split(System.IO.Path.PathSeparator)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .ToList() ?? [];
+
+        trustedPlatformAssemblies.Add(MetadataReference.CreateFromFile(typeof(IServiceCollection).Assembly.Location));
+        return trustedPlatformAssemblies;
     }
 }

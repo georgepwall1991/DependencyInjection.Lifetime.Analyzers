@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Composition;
 using System.Threading;
 using System.Threading.Tasks;
+using DependencyInjection.Lifetime.Analyzers.Rules;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
@@ -106,17 +107,10 @@ public sealed class DI009_OpenGenericLifetimeMismatchCodeFixProvider : CodeFixPr
 
     private static string GetDependencyLifetimeFromDiagnostic(Diagnostic diagnostic)
     {
-        // The diagnostic message is "Open generic singleton '{0}' captures {1} dependency '{2}'"
-        var message = diagnostic.GetMessage();
-
-        if (message.Contains("transient"))
+        if (diagnostic.Properties.TryGetValue(DI009_OpenGenericLifetimeMismatchAnalyzer.DependencyLifetimePropertyName, out var dependencyLifetime) &&
+            dependencyLifetime is not null)
         {
-            return "transient";
-        }
-
-        if (message.Contains("scoped"))
-        {
-            return "scoped";
+            return dependencyLifetime;
         }
 
         return "scoped";

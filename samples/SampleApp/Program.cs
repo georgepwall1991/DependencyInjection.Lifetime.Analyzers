@@ -30,7 +30,7 @@ Console.WriteLine();
 Console.WriteLine("Expected warnings in Diagnostics/ folder:");
 Console.WriteLine("  - DI001/: Scope not disposed");
 Console.WriteLine("  - DI002/: Service escapes scope (return and field)");
-Console.WriteLine("  - DI003/: Captive dependencies (2 warnings)");
+Console.WriteLine("  - DI003/: Captive dependencies (3 warnings)");
 Console.WriteLine("  - DI004/: Use after dispose");
 Console.WriteLine("  - DI005/: CreateScope in async method");
 Console.WriteLine("  - DI006/: Static provider cache (3 warnings)");

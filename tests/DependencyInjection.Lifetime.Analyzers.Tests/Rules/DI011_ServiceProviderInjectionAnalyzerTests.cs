@@ -288,6 +288,87 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task HostedService_NoDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading;
+            using System.Threading.Tasks;
+
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostedService
+                {
+                    Task StartAsync(CancellationToken cancellationToken);
+                    Task StopAsync(CancellationToken cancellationToken);
+                }
+            }
+
+            public class Worker : Microsoft.Extensions.Hosting.IHostedService
+            {
+                private readonly IServiceProvider _provider;
+
+                public Worker(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+                public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Worker>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task EndpointFilterFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Http
+            {
+                public delegate object EndpointFilterFactoryContext();
+                public delegate object EndpointFilterDelegate();
+
+                public interface IEndpointFilterFactory
+                {
+                    object CreateInstance(IServiceProvider serviceProvider, EndpointFilterFactoryContext context, EndpointFilterDelegate next);
+                }
+            }
+
+            public class MyFilterFactory : Microsoft.AspNetCore.Http.IEndpointFilterFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyFilterFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public object CreateInstance(IServiceProvider serviceProvider, Microsoft.AspNetCore.Http.EndpointFilterFactoryContext context, Microsoft.AspNetCore.Http.EndpointFilterDelegate next)
+                    => new object();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyFilterFactory>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task Constructor_WithOtherDependencies_NoDiagnostic()
     {
         var source = Usings + """

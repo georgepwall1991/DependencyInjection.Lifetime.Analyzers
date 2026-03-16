@@ -179,30 +179,31 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
 
     private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
-        var syntax = invocation.Syntax;
-
-        if (syntax.Parent is not EqualsValueClauseSyntax equalsValue)
+        var assignmentTarget = GetAssignmentTarget(invocation.Syntax, semanticModel);
+        if (assignmentTarget is null)
         {
             return false;
         }
 
-        if (equalsValue.Parent is not VariableDeclaratorSyntax declarator)
+        var (targetSymbol, containingType) = assignmentTarget.Value;
+        if (targetSymbol is ILocalSymbol localSymbol)
         {
-            return false;
+            var containingBlock = GetContainingBlock(invocation.Syntax);
+            if (containingBlock is null)
+            {
+                return false;
+            }
+
+            return HasDisposeCallInBlock(containingBlock, invocation.Syntax, localSymbol, semanticModel);
         }
 
-        if (semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol variableSymbol)
+        if (targetSymbol is IFieldSymbol or IPropertySymbol)
         {
-            return false;
+            return containingType is not null &&
+                   HasDisposeCallInOwnerType(containingType, targetSymbol, semanticModel);
         }
 
-        var containingBlock = GetContainingBlock(syntax);
-        if (containingBlock is null)
-        {
-            return false;
-        }
-
-        return HasDisposeCall(containingBlock, syntax, variableSymbol, semanticModel);
+        return false;
     }
 
     private static SyntaxNode? GetContainingBlock(SyntaxNode node)
@@ -219,22 +220,21 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return null;
     }
 
-    private static bool HasDisposeCall(
+    private static bool HasDisposeCallInBlock(
         SyntaxNode block,
         SyntaxNode creationSyntax,
-        ILocalSymbol variableSymbol,
+        ISymbol variableSymbol,
         SemanticModel semanticModel)
     {
         foreach (var descendant in block.DescendantNodes())
         {
             if (descendant is not InvocationExpressionSyntax invocationSyntax ||
-                invocationSyntax.SpanStart <= creationSyntax.SpanStart ||
-                invocationSyntax.Expression is not MemberAccessExpressionSyntax memberAccess)
+                invocationSyntax.SpanStart <= creationSyntax.SpanStart)
             {
                 continue;
             }
 
-            if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            if (!TryGetDisposedTargetSymbol(invocationSyntax, semanticModel, out var targetSymbol))
             {
                 continue;
             }
@@ -244,11 +244,132 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
             if (SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool HasDisposeCallInOwnerType(
+        TypeDeclarationSyntax containingType,
+        ISymbol targetSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var member in containingType.Members)
+        {
+            if (member is not BaseMethodDeclarationSyntax method)
+            {
+                continue;
+            }
+
+            if (!IsDisposeMethod(method, semanticModel))
+            {
+                continue;
+            }
+
+            if (HasDisposeCallForTarget(method, targetSymbol, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasDisposeCallForTarget(
+        SyntaxNode node,
+        ISymbol targetSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in node.DescendantNodes())
+        {
+            if (descendant is not InvocationExpressionSyntax invocationSyntax ||
+                !TryGetDisposedTargetSymbol(invocationSyntax, semanticModel, out var disposedSymbol))
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(disposedSymbol, targetSymbol))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDisposeMethod(BaseMethodDeclarationSyntax method, SemanticModel semanticModel)
+    {
+        if (method is DestructorDeclarationSyntax)
+        {
+            return false;
+        }
+
+        if (method.ParameterList.Parameters.Count != 0)
+        {
+            return false;
+        }
+
+        if (semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol methodSymbol)
+        {
+            return false;
+        }
+
+        return methodSymbol.Name is "Dispose" or "DisposeAsync";
+    }
+
+    private static (ISymbol targetSymbol, TypeDeclarationSyntax? containingType)? GetAssignmentTarget(
+        SyntaxNode creationSyntax,
+        SemanticModel semanticModel)
+    {
+        if (creationSyntax.Parent is EqualsValueClauseSyntax equalsValue &&
+            equalsValue.Parent is VariableDeclaratorSyntax declarator)
+        {
+            var declaredSymbol = semanticModel.GetDeclaredSymbol(declarator);
+            return declaredSymbol is null
+                ? null
+                : (declaredSymbol, declarator.FirstAncestorOrSelf<TypeDeclarationSyntax>());
+        }
+
+        if (creationSyntax.Parent is AssignmentExpressionSyntax assignment &&
+            assignment.Right == creationSyntax)
+        {
+            var targetSymbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+            return targetSymbol is null
+                ? null
+                : (targetSymbol, assignment.FirstAncestorOrSelf<TypeDeclarationSyntax>());
+        }
+
+        return null;
+    }
+
+    private static bool TryGetDisposedTargetSymbol(
+        InvocationExpressionSyntax invocationSyntax,
+        SemanticModel semanticModel,
+        out ISymbol? targetSymbol)
+    {
+        targetSymbol = null;
+
+        if (invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            {
+                return false;
+            }
+
+            targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
+            return targetSymbol is not null;
+        }
+
+        if (invocationSyntax.Expression is MemberBindingExpressionSyntax memberBinding &&
+            memberBinding.Name.Identifier.Text is "Dispose" or "DisposeAsync" &&
+            invocationSyntax.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            targetSymbol = semanticModel.GetSymbolInfo(conditionalAccess.Expression).Symbol;
+            return targetSymbol is not null;
         }
 
         return false;

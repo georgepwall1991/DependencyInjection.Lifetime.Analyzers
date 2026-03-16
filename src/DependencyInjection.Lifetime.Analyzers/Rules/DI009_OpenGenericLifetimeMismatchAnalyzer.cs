@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Collections.Generic;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
@@ -16,6 +17,8 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyzer
 {
+    internal const string DependencyLifetimePropertyName = "DependencyLifetime";
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.OpenGenericLifetimeMismatch);
@@ -100,6 +103,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                         var diagnostic = Diagnostic.Create(
                             DiagnosticDescriptors.OpenGenericLifetimeMismatch,
                             registration.Location,
+                            ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
                             registration.ImplementationType.Name,
                             lifetimeName,
                             parameterType.Name);
