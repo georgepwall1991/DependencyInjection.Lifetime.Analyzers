@@ -140,6 +140,17 @@ public sealed class RegistrationCollector
             return registration.Lifetime;
         }
 
+        if (serviceType is INamedTypeSymbol closedGenericType &&
+            closedGenericType.IsGenericType &&
+            !closedGenericType.IsUnboundGenericType)
+        {
+            var openGenericType = closedGenericType.ConstructUnboundGenericType();
+            if (_registrations.TryGetValue(new ServiceIdentifier(openGenericType, key, isKeyed), out registration))
+            {
+                return registration.Lifetime;
+            }
+        }
+
         return null;
     }
 
@@ -389,10 +400,21 @@ public sealed class RegistrationCollector
             else if (arg.Expression is InvocationExpressionSyntax describeInvocation)
             {
                 var methodSymbol = semanticModel.GetSymbolInfo(describeInvocation).Symbol as IMethodSymbol;
-                if (methodSymbol?.Name == "Describe" &&
+                if (methodSymbol is not null &&
                     IsServiceDescriptorType(methodSymbol.ContainingType))
                 {
-                    return ExtractFromServiceDescriptorArguments(describeInvocation.ArgumentList, semanticModel);
+                    if (methodSymbol.Name == "Describe")
+                    {
+                        return ExtractFromServiceDescriptorArguments(describeInvocation.ArgumentList, semanticModel);
+                    }
+
+                    var lifetime = GetLifetimeFromServiceDescriptorFactoryMethod(methodSymbol.Name);
+                    if (lifetime.HasValue)
+                    {
+                        var (serviceType, implementationType, factoryExpression, key) =
+                            ExtractTypes(methodSymbol, describeInvocation, semanticModel);
+                        return (serviceType, implementationType, factoryExpression, lifetime, key, IsKeyedMethod(methodSymbol.Name));
+                    }
                 }
             }
         }
@@ -569,6 +591,26 @@ public sealed class RegistrationCollector
                      return (ServiceLifetime)intValue;
                  }
             }
+        }
+
+        return null;
+    }
+
+    private static ServiceLifetime? GetLifetimeFromServiceDescriptorFactoryMethod(string methodName)
+    {
+        if (methodName.EndsWith("Singleton"))
+        {
+            return ServiceLifetime.Singleton;
+        }
+
+        if (methodName.EndsWith("Scoped"))
+        {
+            return ServiceLifetime.Scoped;
+        }
+
+        if (methodName.EndsWith("Transient"))
+        {
+            return ServiceLifetime.Transient;
         }
 
         return null;
