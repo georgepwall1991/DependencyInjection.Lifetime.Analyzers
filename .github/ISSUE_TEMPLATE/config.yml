@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Adoption and setup guide
+    url: https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/master/docs/ADOPTION.md
+    about: Start here for installation, rollout, and severity guidance.
+  - name: Full rule reference
+    url: https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/master/docs/RULES.md
+    about: Review rule coverage and intended analyzer behavior before opening an issue.

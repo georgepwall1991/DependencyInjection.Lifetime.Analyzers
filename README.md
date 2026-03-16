@@ -4,15 +4,21 @@
 
 # DependencyInjection.Lifetime.Analyzers
 
-**A Roslyn dependency injection analyser package for C# and ASP.NET Core lifetime bugs.**
+**A Roslyn dependency injection analyzer/analyser package for C# and ASP.NET Core lifetime bugs.**
 
-Catch DI scope leaks, captive dependencies, and unresolvable services at compile time with zero runtime overhead.
+Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, and unresolvable services at compile time with zero runtime overhead.
 
 [![NuGet](https://img.shields.io/nuget/v/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml/badge.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
 [![Coverage](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/raw/master/.github/badges/coverage.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
+
+`DependencyInjection.Lifetime.Analyzers` is for teams using `Microsoft.Extensions.DependencyInjection` who want compile-time protection against DI lifetime mistakes that normally show up as runtime bugs, flaky tests, or production-only startup failures.
+
+- Works in Rider, Visual Studio, and `dotnet build` / CI.
+- Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
+- Ships 16 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
@@ -26,12 +32,27 @@ Catch DI scope leaks, captive dependencies, and unresolvable services at compile
 
 This analyser package is designed for **ASP.NET Core**, **worker services**, **console apps**, and **CI pipelines** that need dependable dependency injection rules.
 
+## Why Teams Install It
+
+- Find captive dependencies before they become stale-state or thread-safety bugs.
+- Catch scope leaks before they become `ObjectDisposedException` incidents or memory leaks.
+- Detect missing registrations and implementation mismatches before startup or background-job activation fails in production.
+- Push DI architecture rules into CI instead of relying on code review memory.
+
 ## Quickstart
 
 Install from NuGet:
 
 ```bash
 dotnet add package DependencyInjection.Lifetime.Analyzers
+```
+
+Or add a package reference directly:
+
+```xml
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.1.4">
+  <PrivateAssets>all</PrivateAssets>
+</PackageReference>
 ```
 
 Set useful severities in `.editorconfig`:
@@ -46,10 +67,32 @@ dotnet_diagnostic.DI011.severity = suggestion
 
 By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`, while broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` to reduce noisy diagnostics.
 
+For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](docs/ADOPTION.md).
+
+## Who This Is For
+
+- Teams using `Microsoft.Extensions.DependencyInjection` in ASP.NET Core or generic-host applications.
+- Libraries and internal platforms that want DI usage guarded in CI, not just at runtime.
+- Codebases using factories, keyed services, `ActivatorUtilities`, or manual scopes.
+- Maintainers trying to reduce `IServiceProvider`-driven service locator drift over time.
+
+## What It Catches
+
+| Problem Area | Example Rules |
+|--------------|---------------|
+| Scope disposal and leaks | `DI001`, `DI004`, `DI005`, `DI014` |
+| Lifetime mismatches | `DI003`, `DI009` |
+| Service location and architectural drift | `DI006`, `DI007`, `DI011` |
+| Registration correctness | `DI012`, `DI013`, `DI015`, `DI016` |
+| Constructor and composition smell detection | `DI010` |
+
 ## Table of Contents
 
 - [Why This DI Lifetime Analyser](#why-this-di-lifetime-analyser)
+- [Why Teams Install It](#why-teams-install-it)
 - [Quickstart](#quickstart)
+- [Who This Is For](#who-this-is-for)
+- [What It Catches](#what-it-catches)
 - [Rule Index](#rule-index)
 - [DI001: Service Scope Not Disposed](#di001-service-scope-not-disposed)
 - [DI002: Scoped Service Escapes Scope](#di002-scoped-service-escapes-scope)
@@ -68,6 +111,7 @@ By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`
 - [DI015: Unresolvable Dependency](#di015-unresolvable-dependency)
 - [DI016: BuildServiceProvider Misuse](#di016-buildserviceprovider-misuse)
 - [Configuration](#configuration)
+- [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
 
 ## Rule Index
@@ -664,6 +708,11 @@ Or in `.editorconfig`:
 [*.cs]
 dotnet_diagnostic.DI007.severity = none
 ```
+
+## Adoption Guide
+
+- Start with [docs/ADOPTION.md](docs/ADOPTION.md) if you are evaluating the package for a team or shared platform.
+- Use [docs/RULES.md](docs/RULES.md) if you want a rule-by-rule reference you can link from issues, pull requests, or internal docs.
 
 ## Requirements
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Packaging Metadata**: Expanded NuGet description, package tags, and release notes so search and package landing pages better describe DI lifetime, scope, and registration coverage.
+- **Adoption Docs**: Added `docs/ADOPTION.md` and linked it from `README.md` so teams evaluating the analyzer have a fast install and rollout path.
+- **Repository Intake**: Added GitHub issue-template routing to point users toward setup guidance and the full rule reference before they file issues.
+
 ## [2.1.4] - 2026-03-16
 
 ### Changed

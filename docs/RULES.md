@@ -3,7 +3,7 @@
 This document mirrors the full rule guidance in the repository README so the same guidance is available in both places.
 
 For the latest full rule content, see:
-- `/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/README.md`
+- [README.md](../README.md)
 
 ---
 
