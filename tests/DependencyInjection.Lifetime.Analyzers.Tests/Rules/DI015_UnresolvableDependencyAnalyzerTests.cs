@@ -692,6 +692,45 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMyDependency (key: blue)"));
     }
 
+    [Fact]
+    public async Task DuplicateRegistrations_WithOpaqueFactoryCandidate_OnlyReportsInnerDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IInnerService { }
+            public class MissingInnerService : IInnerService
+            {
+                public MissingInnerService(IMissingDependency dependency) { }
+            }
+
+            public class SafeInnerService : IInnerService { }
+
+            public interface IRootService { }
+            public class RootService : IRootService
+            {
+                public RootService(IInnerService inner) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IInnerService>(_ => new SafeInnerService());
+                    services.AddSingleton<IInnerService, MissingInnerService>();
+                    services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(63, 9)
+                .WithArguments("IInnerService", "IMissingDependency"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -1341,45 +1380,6 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
-    }
-
-    [Fact]
-    public async Task DuplicateRegistrations_WithOpaqueFactoryCandidate_DoesNotReportRootDiagnostic()
-    {
-        var source = Usings + """
-            public interface IMissingDependency { }
-
-            public interface IInnerService { }
-            public class MissingInnerService : IInnerService
-            {
-                public MissingInnerService(IMissingDependency dependency) { }
-            }
-
-            public class SafeInnerService : IInnerService { }
-
-            public interface IRootService { }
-            public class RootService : IRootService
-            {
-                public RootService(IInnerService inner) { }
-            }
-
-            public class Startup
-            {
-                public void ConfigureServices(IServiceCollection services)
-                {
-                    services.AddSingleton<IInnerService>(_ => new SafeInnerService());
-                    services.AddSingleton<IInnerService, MissingInnerService>();
-                    services.AddSingleton<IRootService, RootService>();
-                }
-            }
-            """;
-
-        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
-            source,
-            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
-                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-                .WithLocation(63, 9)
-                .WithArguments("IInnerService", "IMissingDependency"));
     }
 
     #endregion

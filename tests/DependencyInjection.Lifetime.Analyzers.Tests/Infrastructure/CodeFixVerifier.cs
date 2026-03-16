@@ -155,6 +155,20 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         DiagnosticResult expected,
         string codeActionEquivalenceKey)
     {
+        await VerifyCodeFixNotOfferedAsync(
+            source,
+            diagnostic => diagnostic.Id == expected.Id,
+            codeActionEquivalenceKey);
+    }
+
+    /// <summary>
+    /// Verifies that a specific code fix equivalence key is not offered for the selected diagnostic.
+    /// </summary>
+    public static async Task VerifyCodeFixNotOfferedAsync(
+        string source,
+        Func<Diagnostic, bool> diagnosticSelector,
+        string codeActionEquivalenceKey)
+    {
         var document = CreateDocument(source);
         var compilation = await document.Project.GetCompilationAsync();
         Assert.NotNull(compilation);
@@ -164,7 +178,7 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
             .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(analyzer))
             .GetAnalyzerDiagnosticsAsync();
 
-        var diagnostic = diagnostics.FirstOrDefault(d => d.Id == expected.Id);
+        var diagnostic = diagnostics.FirstOrDefault(diagnosticSelector);
         Assert.NotNull(diagnostic);
 
         var actions = new List<CodeAction>();

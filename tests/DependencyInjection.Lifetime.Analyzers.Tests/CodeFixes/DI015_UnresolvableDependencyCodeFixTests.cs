@@ -221,4 +221,76 @@ public class DI015_UnresolvableDependencyCodeFixTests
         await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
     }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForTransitiveOnlyMissingDependency()
+    {
+        var source = Usings + """
+            public sealed class MissingLeaf { }
+
+            public interface IInnerService { }
+            public sealed class InnerService : IInnerService
+            {
+                public InnerService(MissingLeaf leaf) { }
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IInnerService inner) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                    services.AddSingleton<IInnerService, InnerService>();
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                diagnostic =>
+                    diagnostic.Id == DiagnosticIds.UnresolvableDependency &&
+                    diagnostic.Properties.TryGetValue(
+                        "MissingDependencyPathLength",
+                        out var pathLength) &&
+                    pathLength == "2",
+                AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForDependencyWithoutPublicConstructor()
+    {
+        var source = Usings + """
+            public sealed class MissingDependency
+            {
+                private MissingDependency() { }
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
+    }
 }

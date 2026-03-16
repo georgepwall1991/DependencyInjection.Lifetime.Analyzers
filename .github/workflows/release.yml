@@ -57,7 +57,11 @@ jobs:
 
       - name: Pack
         run: |
-          node -e 'const fs=require("fs"); const cp=require("child_process"); const notes=fs.readFileSync("./artifacts/release-notes/package-release-notes.txt","utf8").trim().replace(/"/g, "\\\""); const result=cp.spawnSync("dotnet", ["pack", "src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj", "--configuration", "Release", "--output", "./artifacts", `-p:PackageReleaseNotes=\"${notes}\"`], { stdio: "inherit" }); process.exit(result.status ?? 1);'
+          node tools/pack-package-with-release-notes.mjs \
+            --project src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj \
+            --configuration Release \
+            --output ./artifacts \
+            --release-notes-file ./artifacts/release-notes/package-release-notes.txt
 
       - name: Push to NuGet
         run: dotnet nuget push ./artifacts/DependencyInjection.Lifetime.Analyzers.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

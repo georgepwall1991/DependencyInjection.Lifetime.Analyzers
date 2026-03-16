@@ -140,7 +140,17 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        return true;
+        if (namedType.TypeKind == TypeKind.Struct)
+        {
+            return true;
+        }
+
+        if (namedType.TypeKind != TypeKind.Class)
+        {
+            return false;
+        }
+
+        return namedType.InstanceConstructors.Any(constructor => constructor.DeclaredAccessibility == Accessibility.Public);
     }
 
     private ResolutionResult ResolveImplementationType(

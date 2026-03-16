@@ -50,7 +50,7 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
         ImmutableArray.Create(DiagnosticIds.UnresolvableDependency);
 
     /// <inheritdoc />
-    public override FixAllProvider GetFixAllProvider() => null!;
+    public override FixAllProvider? GetFixAllProvider() => null;
 
     /// <inheritdoc />
     public override async Task RegisterCodeFixesAsync(CodeFixContext context)
