@@ -50,15 +50,19 @@ internal sealed class DependencyResolutionEngine
         }
     }
 
-    private readonly RegistrationCollector _registrationCollector;
+    private readonly ImmutableArray<ServiceRegistration> _availableRegistrations;
     private readonly WellKnownTypes? _wellKnownTypes;
 
     public DependencyResolutionEngine(
         RegistrationCollector registrationCollector,
-        WellKnownTypes? wellKnownTypes)
+        WellKnownTypes? wellKnownTypes,
+        Func<ServiceRegistration, bool>? isRegistrationAvailable = null)
     {
-        _registrationCollector = registrationCollector;
         _wellKnownTypes = wellKnownTypes;
+        var registrationFilter = isRegistrationAvailable ?? (_ => true);
+        _availableRegistrations = registrationCollector.AllRegistrations
+            .Where(registrationFilter)
+            .ToImmutableArray();
     }
 
     public ResolutionResult ResolveRegistration(
@@ -327,7 +331,7 @@ internal sealed class DependencyResolutionEngine
         object? key,
         bool isKeyed)
     {
-        foreach (var registration in _registrationCollector.AllRegistrations)
+        foreach (var registration in _availableRegistrations)
         {
             if (registration.IsKeyed != isKeyed ||
                 !Equals(registration.Key, key))
