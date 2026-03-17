@@ -47,13 +47,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.2.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.2.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -61,7 +61,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.2.2" />
 ```
 
 Then reference it from the project file:
@@ -682,9 +682,11 @@ dotnet_code_quality.DI015.assume_framework_services_registered = false
 
 DI015 is intentionally conservative to keep false positives low:
 
+- Source-visible `IServiceCollection` wrappers are expanded before DI015 reports missing registrations.
 - Dependency cycles are treated as resolvable.
 - Factory registrations without inspectable dependency paths are treated as resolvable.
 - `GetService(...)` and dynamic keyed resolutions are treated as optional/unknown.
+- If an earlier opaque or external wrapper could have registered services on the same `IServiceCollection` flow, DI015 stays silent instead of speculating.
 - If any effective candidate registration is backed by an opaque factory, DI015 stays silent instead of speculating.
 
 ---

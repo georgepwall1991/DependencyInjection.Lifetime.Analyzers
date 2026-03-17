@@ -559,9 +559,11 @@ dotnet_code_quality.DI015.assume_framework_services_registered = false
 
 DI015 is intentionally conservative to keep false positives low:
 
+- Source-visible `IServiceCollection` wrappers are expanded before DI015 reports missing registrations.
 - Dependency cycles are treated as resolvable.
 - Factory registrations without inspectable dependency paths are treated as resolvable.
 - `GetService(...)` and dynamic keyed resolutions are treated as optional/unknown.
+- If an earlier opaque or external wrapper could have registered services on the same `IServiceCollection` flow, DI015 stays silent instead of speculating.
 - If any effective candidate registration is backed by an opaque factory, DI015 stays silent instead of speculating.
 
 ---

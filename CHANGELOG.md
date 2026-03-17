@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-03-17
+
+### Changed
+
+- **DI015 Wrapper Reachability**: DI015 now expands source-visible `IServiceCollection` wrapper extensions from real invocation sites instead of treating registrations inside uncalled wrappers as globally available.
+- **DI015 Opaque Wrapper Suppression**: Earlier opaque or external wrappers on the same `IServiceCollection` flow now suppress DI015 when registration state is uncertain, reducing false positives in layered registration modules.
+- **DI015 Ordering and Flow Isolation**: Wrapper-aware resolution now respects call order and per-collection flow, so wrappers invoked on a different `IServiceCollection` instance or after a registration do not hide genuine missing-dependency diagnostics.
+- **DI015 Regression Coverage**: Added should-report and should-not-report guardrails for invoked vs uninvoked wrappers, nested wrapper chains, cyclic wrappers, keyed mismatches, opaque external wrappers, same-method flow isolation, and registration ordering.
+- **Release Metadata Sync**: Backfilled the missing `2.2.1` changelog entry and resynced package metadata so the tagged release train and project version history are aligned again.
+
+## [2.2.1] - 2026-03-16
+
+### Changed
+
+- **DI013 Compatibility Hardening**: Expanded implementation-type validation beyond simple `typeof(service), typeof(implementation)` assignability checks so DI013 now also reports deterministic-invalid self-registrations, abstract/interface implementations, private-constructor implementations, and invalid implementation instances when their exact runtime type is known.
+- **DI013 Open Generic Precision**: Reworked open-generic validation to require exact generic-parameter projection compatibility, rejecting arity mismatches, reordered parameters, transformed generic arguments, and other registrations that compile but cannot be activated by the built-in container.
+- **Collector and Engine Support**: Extended registration collection to recognize non-factory implementation-instance overloads, keyed registrations, and equivalent `ServiceDescriptor` forms while keeping factory registrations out of DI013 scope and preventing constructor-based analyzers from treating pre-built instances like activatable implementation types.
+- **Regression Coverage and Docs**: Expanded DI013 tests across valid/invalid closed, open-generic, keyed, `TryAdd*`, `ServiceDescriptor`, and implementation-instance scenarios, and updated `README.md`, `docs/RULES.md`, the sample app, and descriptor wording to match the hardened behavior.
+
 ## [2.2.0] - 2026-03-16
 
 ### Changed
