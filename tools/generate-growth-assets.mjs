@@ -274,6 +274,11 @@ async function main() {
     return;
   }
 
+  if (command === "check-freshness") {
+    await checkFreshness();
+    return;
+  }
+
   printUsage();
 }
 
@@ -284,6 +289,7 @@ function printUsage() {
       "  node tools/generate-growth-assets.mjs sync-readme [--check]",
       "  node tools/generate-growth-assets.mjs site [--output-dir <path>]",
       "  node tools/generate-growth-assets.mjs release-notes --version <x.y.z> [--output-dir <path>]",
+      "  node tools/generate-growth-assets.mjs check-freshness",
     ].join("\n"),
   );
   process.exitCode = 1;
@@ -340,6 +346,123 @@ async function syncReadme({ check }) {
 
   await fs.writeFile(paths.readme, nextReadme, "utf8");
   console.log("Updated README install snippets.");
+}
+
+/**
+ * Validates that the sample/docs wiring is fresh and consistent:
+ *
+ * 1. Every configured rule-page snippet (symbol or marker) can still be extracted
+ *    from its mapped sample file. Missing snippets fail loudly instead of being
+ *    silently dropped. (VAL-SAMPLES-004)
+ *
+ * 2. The set of rule IDs in ruleSampleConfig matches the set of rule-sample
+ *    directories under samples/SampleApp/Diagnostics/, except for explicitly
+ *    approved aliases or omissions. (VAL-SAMPLES-005)
+ *
+ * 3. Every configured sample file actually exists on disk. (VAL-SAMPLES-003)
+ */
+async function checkFreshness() {
+  const failures = [];
+
+  // --- VAL-SAMPLES-005: parity between ruleSampleConfig keys and sample dirs ---
+
+  const sampleDiagnosticsDir = path.join(repoRoot, "samples", "SampleApp", "Diagnostics");
+  let sampleDirs = [];
+
+  try {
+    const entries = await fs.readdir(sampleDiagnosticsDir);
+    sampleDirs = entries.filter((e) => /^DI\d+$/.test(e)).sort();
+  } catch (error) {
+    failures.push(`Cannot read sample diagnostics directory '${sampleDiagnosticsDir}': ${error.message}`);
+  }
+
+  const configuredIds = Object.keys(ruleSampleConfig).sort();
+  const configuredSet = new Set(configuredIds);
+  const sampleDirSet = new Set(sampleDirs);
+
+  // Rule IDs in sample dirs but not in ruleSampleConfig
+  for (const dir of sampleDirs) {
+    if (!configuredSet.has(dir)) {
+      failures.push(
+        `[VAL-SAMPLES-005] Sample directory 'samples/SampleApp/Diagnostics/${dir}/' exists but '${dir}' is not` +
+          ` in ruleSampleConfig. Add it to the mapping or add it to an approved omissions list.`,
+      );
+    }
+  }
+
+  // Rule IDs in ruleSampleConfig but not in sample dirs
+  for (const id of configuredIds) {
+    if (!sampleDirSet.has(id)) {
+      failures.push(
+        `[VAL-SAMPLES-005] Rule '${id}' is in ruleSampleConfig but no corresponding directory` +
+          ` 'samples/SampleApp/Diagnostics/${id}/' was found. Create the directory or remove the stale mapping.`,
+      );
+    }
+  }
+
+  // --- VAL-SAMPLES-003 / VAL-SAMPLES-004: snippet extraction freshness ---
+
+  for (const [ruleId, config] of Object.entries(ruleSampleConfig)) {
+    const samplePath = path.join(repoRoot, config.samplePath);
+
+    // Check that the sample file itself exists
+    let contents;
+
+    try {
+      contents = normalizeNewlines(readFileSyncSafe(samplePath));
+    } catch (error) {
+      failures.push(
+        `[VAL-SAMPLES-003] Rule ${ruleId}: sample file '${config.samplePath}' cannot be read: ${error.message}`,
+      );
+      continue;
+    }
+
+    // Check every highlight
+    for (const highlight of config.highlights) {
+      if (highlight.symbol) {
+        const code = extractSymbolSnippet(contents, highlight.symbol);
+
+        if (!code) {
+          failures.push(
+            `[VAL-SAMPLES-004] Rule ${ruleId}: symbol '${highlight.symbol}' (label: "${highlight.label}")` +
+              ` could not be extracted from '${config.samplePath}'.` +
+              ` Rename the symbol in the sample file or update the mapping in ruleSampleConfig.`,
+          );
+        }
+      } else if (highlight.marker) {
+        const code = extractMarkerSnippet(contents, highlight.marker);
+
+        if (!code) {
+          failures.push(
+            `[VAL-SAMPLES-004] Rule ${ruleId}: marker '${highlight.marker}' (label: "${highlight.label}")` +
+              ` could not be extracted from '${config.samplePath}'.` +
+              ` Update the marker comment in the sample file or update the mapping in ruleSampleConfig.`,
+          );
+        }
+      } else {
+        failures.push(
+          `[VAL-SAMPLES-004] Rule ${ruleId}: highlight entry (label: "${highlight.label}") has neither` +
+            ` a 'symbol' nor a 'marker' field. Each highlight must specify exactly one.`,
+        );
+      }
+    }
+  }
+
+  if (failures.length === 0) {
+    console.log(
+      `Sample/docs freshness check passed. ${configuredIds.length} rule(s) verified across` +
+        ` ${configuredIds.reduce((sum, id) => sum + (ruleSampleConfig[id]?.highlights?.length ?? 0), 0)} highlight(s).`,
+    );
+    return;
+  }
+
+  console.error(`Sample/docs freshness check FAILED (${failures.length} issue(s)):`);
+
+  for (const failure of failures) {
+    console.error(`  - ${failure}`);
+  }
+
+  process.exitCode = 1;
 }
 
 async function generateSite(outputDir) {

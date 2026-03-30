@@ -1,8 +1,13 @@
 commands:
   install: dotnet restore "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln"
   build: dotnet build "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln" --no-restore --configuration Release
+  # test includes sample diagnostics verification (SampleDiagnosticsVerifierTests) and
+  # sample/docs freshness checks (SampleDocsFreshnessVerifierTests) via the test suite.
   test: dotnet test "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln" --no-build --configuration Release --verbosity normal
   lint: node "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs" sync-readme --check
+  # freshness_check: standalone freshness check for rule-page snippet extraction and
+  # sample-dir/mapping parity. Also exercised by SampleDocsFreshnessVerifierTests inside 'test'.
+  freshness_check: node "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs" check-freshness
   sample_build: TMPDIR=$(mktemp -d) && dotnet build "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/SampleApp/SampleApp.csproj" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog="$TMPDIR/SampleApp.sarif"
 
 services: {}
