@@ -519,7 +519,7 @@
       "claims": [
         {
           "filePathContains": "DI017/CircularDependencyExamples.cs",
-          "anchor": "services.AddScoped<IPaymentService, BadPaymentService>();",
+          "anchor": "services.AddScoped<IOrderService, BadOrderService>();",
           "ruleId": "DI017",
           "severity": "warning"
         }

@@ -245,7 +245,7 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
-    public async Task ClassWithInternalConstructor_DoesNotReport()
+    public async Task ClassWithInternalConstructor_Reports()
     {
         var source = Usings + """
             public interface IMyService { }
@@ -263,8 +263,13 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
             }
             """;
 
-        // Internal constructors are accessible to the DI container
-        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        // DI container requires public constructors for activation
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(13, 9)
+                .WithArguments("InternalCtorService", "IMyService", "type has no accessible constructors"));
     }
 
     #endregion

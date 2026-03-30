@@ -100,13 +100,14 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
             return "type is abstract";
         }
 
-        // No accessible constructors (public or internal)
+        // No public constructors — matches CanSelfBind in DependencyResolutionEngine
+        // which requires public constructors for activation.
         // Skip unbound generics — Roslyn reports their constructors differently
         // when type parameters are involved, leading to false positives.
         if (!type.IsUnboundGenericType &&
             type.TypeKind == TypeKind.Class &&
             !type.InstanceConstructors.Any(c =>
-                c.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal))
+                c.DeclaredAccessibility == Accessibility.Public))
         {
             return "type has no accessible constructors";
         }

@@ -43,14 +43,13 @@ public class DI017_CircularDependencyAnalyzerTests
             }
             """;
 
-        // The cycle is reported once (deduplication). The exact entry point depends
-        // on registration processing order, so we accept either entry point.
+        // Reported on the canonical (lexicographically smallest) registration in the cycle
         await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
             source,
             AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.CircularDependency)
-                .WithSpan(22, 9, 22, 50)
-                .WithArguments("ServiceB", "IServiceB -> IServiceA -> IServiceB"));
+                .WithSpan(21, 9, 21, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
     }
 
     [Fact]
@@ -91,8 +90,8 @@ public class DI017_CircularDependencyAnalyzerTests
             source,
             AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.CircularDependency)
-                .WithSpan(29, 9, 29, 50)
-                .WithArguments("ServiceC", "IServiceC -> IServiceA -> IServiceB -> IServiceC"));
+                .WithSpan(27, 9, 27, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceC -> IServiceA"));
     }
 
     [Fact]
