@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-03-30
+
+### Changed
+
+- **DI008 Keyed Registration Fixes**: `AddKeyedTransient(...)` is now fully supported by the DI008 code fix provider, including keyed lifetime rewrites to `AddKeyedScoped` / `AddKeyedSingleton` and keyed factory rewrites that preserve the original key argument and generate the correct two-parameter factory lambda shape.
+- **DI008 Factory Detection Hardening**: Disposable-transient analysis now exercises both delegate-variable and method-group factory registrations for keyed and non-keyed DI paths, keeping DI008 conservative when registrations already use caller-owned factory delegates.
+- **DI008 Regression Coverage**: Added DI 8 keyed-service analyzer/code-fix tests, guardrails for no-fix `typeof(...)` factory conversions, and named-key preservation checks so the highest-risk keyed paths are locked by executable coverage instead of code inspection alone.
+
 ## [2.3.1] - 2026-03-30
 
 ### Changed

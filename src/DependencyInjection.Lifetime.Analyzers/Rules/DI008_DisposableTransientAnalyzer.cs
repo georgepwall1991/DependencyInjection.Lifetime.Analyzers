@@ -56,7 +56,7 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         // Check if this is a factory registration (has lambda parameter)
-        if (IsFactoryRegistration(methodSymbol, invocation))
+        if (IsFactoryRegistration(methodSymbol, invocation, context.SemanticModel))
         {
             return;
         }
@@ -119,30 +119,56 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         return wellKnownTypes.IsServiceCollection(firstParam.Type);
     }
 
-    private static bool IsFactoryRegistration(IMethodSymbol method, InvocationExpressionSyntax invocation)
+    private static bool IsFactoryRegistration(IMethodSymbol method, InvocationExpressionSyntax invocation, SemanticModel semanticModel)
     {
-        // Check if any argument is a lambda or method group
-        foreach (var argument in invocation.ArgumentList.Arguments)
+        // Use the reduced method to get the parameter list as seen by the caller.
+        // For extension methods, ReducedFrom gives the full signature including 'this',
+        // but the invocation arguments align with the reduced form (without 'this').
+        var reducedMethod = method.ReducedFrom ?? method;
+        var args = invocation.ArgumentList.Arguments;
+
+        // For extension methods, the invocation arguments map to parameters starting
+        // at index 1 (index 0 is the 'this' parameter).
+        var paramOffset = method.IsExtensionMethod && method.ReducedFrom is not null ? 1 : 0;
+
+        for (int i = 0; i < args.Count; i++)
         {
-            switch (argument.Expression)
+            var paramIndex = i + paramOffset;
+            if (paramIndex >= reducedMethod.Parameters.Length)
             {
-                case LambdaExpressionSyntax:
-                case AnonymousMethodExpressionSyntax:
-                case IdentifierNameSyntax: // Could be a method group
-                case MemberAccessExpressionSyntax: // Could be a static method group, e.g. Factory.Create
-                    // Check if the method signature accepts a factory delegate
-                    var originalMethod = method.ReducedFrom ?? method;
-                    foreach (var param in originalMethod.Parameters)
-                    {
-                        // Factory parameters are typically Func<IServiceProvider, T>
-                        if (param.Type is INamedTypeSymbol namedType &&
-                            namedType.Name == "Func" &&
-                            namedType.TypeArguments.Length >= 1)
-                        {
-                            return true;
-                        }
-                    }
-                    break;
+                break;
+            }
+
+            var param = reducedMethod.Parameters[paramIndex];
+
+            // Check if the parameter type is a delegate (Func<...>)
+            if (param.Type is not INamedTypeSymbol paramNamed ||
+                paramNamed.TypeKind != TypeKind.Delegate)
+            {
+                continue;
+            }
+
+            var argExpr = args[i].Expression;
+
+            // Lambda or anonymous method — always a factory
+            if (argExpr is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+            {
+                return true;
+            }
+
+            // Check if the argument binds to a delegate type (lambda, method group, etc.)
+            var argType = semanticModel.GetTypeInfo(argExpr).ConvertedType;
+            if (argType is INamedTypeSymbol namedType &&
+                namedType.DelegateInvokeMethod is not null)
+            {
+                return true;
+            }
+
+            // Fallback: if the argument is an identifier or member access and the
+            // parameter is delegate-typed, treat it as a factory (method group)
+            if (argExpr is IdentifierNameSyntax or MemberAccessExpressionSyntax)
+            {
+                return true;
             }
         }
 

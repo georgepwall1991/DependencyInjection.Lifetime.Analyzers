@@ -248,4 +248,326 @@ public class DI008_DisposableTransientCodeFixTests
         await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, "DI008_UseFactory");
     }
+
+    #region Keyed Services (DI 8.0.0)
+
+    [Fact]
+    public async Task CodeFix_Keyed_ChangesToKeyedScoped()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(14, 9, 14, 75)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixWithReferencesAsync(source, expected, fixedSource, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_ChangesToKeyedScoped_PreservesNamedKeyArgument()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var key = "myKey";
+                    services.AddKeyedTransient<IMyService, DisposableService>(serviceKey: key);
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var key = "myKey";
+                    services.AddKeyedScoped<IMyService, DisposableService>(serviceKey: key);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(15, 9, 15, 83)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixWithReferencesAsync(source, expected, fixedSource, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_ChangesToKeyedSingleton()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedSingleton<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(14, 9, 14, 75)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixWithReferencesAsync(source, expected, fixedSource, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_ChangeToSingleton");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_UsesFactory()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<IMyService>("myKey", (sp, _) => new DisposableService());
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(14, 9, 14, 75)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixWithReferencesAsync(source, expected, fixedSource, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_UseFactory");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_UsesFactory_PreservesNamedKeyArgument()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var key = "myKey";
+                    services.AddKeyedTransient<IMyService, DisposableService>(serviceKey: key);
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var key = "myKey";
+                    services.AddKeyedTransient<IMyService>(serviceKey: key, (sp, _) => new DisposableService());
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(15, 9, 15, 83)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixWithReferencesAsync(source, expected, fixedSource, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_UseFactory");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_UseFactoryNotOffered_WhenImplementationRequiresDependencies()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IDependency { }
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public DisposableService(IDependency dependency) { }
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<IMyService, DisposableService>("myKey");
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(15, 9, 15, 75)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixNotOfferedWithReferencesAsync(source, expected, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_UseFactory");
+    }
+
+    [Fact]
+    public async Task CodeFix_Keyed_UseFactoryNotOffered_ForTypeofRegistration()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient(typeof(IMyService), "myKey", typeof(DisposableService));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(14, 9, 14, 91)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixNotOfferedWithReferencesAsync(source, expected, CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>.ReferenceAssembliesWithKeyedDi, "DI008_UseFactory");
+    }
+
+    #endregion
 }
