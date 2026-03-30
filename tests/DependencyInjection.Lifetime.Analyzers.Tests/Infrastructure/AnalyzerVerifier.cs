@@ -23,6 +23,16 @@ public static class AnalyzerVerifier<TAnalyzer>
             ]);
 
     /// <summary>
+    /// Reference assemblies with DI 8.0.0 for keyed service support.
+    /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithKeyedDi { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0")
+            ]);
+
+    /// <summary>
     /// Verifies that the analyzer produces no diagnostics for the given source.
     /// </summary>
     public static async Task VerifyNoDiagnosticsAsync(string source)
@@ -67,6 +77,33 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = CreateTest(sources);
         test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    /// <summary>
+    /// Verifies diagnostics using custom reference assemblies (e.g., keyed DI 8.0.0).
+    /// </summary>
+    public static async Task VerifyDiagnosticsWithReferencesAsync(string source, ReferenceAssemblies references, params DiagnosticResult[] expected)
+    {
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = references,
+        };
+        test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    /// <summary>
+    /// Verifies no diagnostics using custom reference assemblies (e.g., keyed DI 8.0.0).
+    /// </summary>
+    public static async Task VerifyNoDiagnosticsWithReferencesAsync(string source, ReferenceAssemblies references)
+    {
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = references,
+        };
         await test.RunAsync();
     }
 

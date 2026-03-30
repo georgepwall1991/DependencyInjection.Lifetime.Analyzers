@@ -32,6 +32,16 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
             ]);
 
     /// <summary>
+    /// Reference assemblies with DI 8.0.0 for keyed service support.
+    /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithKeyedDi { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0")
+            ]);
+
+    /// <summary>
     /// Verifies that the code fix transforms the source code as expected.
     /// </summary>
     /// <param name="source">The source code with the diagnostic.</param>
@@ -162,6 +172,40 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     }
 
     /// <summary>
+    /// Verifies that a specific code fix equivalence key is not offered using custom reference assemblies.
+    /// </summary>
+    public static async Task VerifyCodeFixNotOfferedWithReferencesAsync(
+        string source,
+        DiagnosticResult expected,
+        ReferenceAssemblies references,
+        string codeActionEquivalenceKey)
+    {
+        var document = CreateDocument(source, references);
+        var compilation = await document.Project.GetCompilationAsync();
+        Assert.NotNull(compilation);
+
+        var analyzer = new TAnalyzer();
+        var diagnostics = await compilation!
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(analyzer))
+            .GetAnalyzerDiagnosticsAsync();
+
+        var diagnostic = diagnostics.FirstOrDefault(d => d.Id == expected.Id);
+        Assert.NotNull(diagnostic);
+
+        var actions = new List<CodeAction>();
+        var codeFix = new TCodeFix();
+        var context = new CodeFixContext(
+            document,
+            diagnostic!,
+            (action, _) => actions.Add(action),
+            default);
+
+        await codeFix.RegisterCodeFixesAsync(context);
+
+        Assert.DoesNotContain(actions, action => action.EquivalenceKey == codeActionEquivalenceKey);
+    }
+
+    /// <summary>
     /// Verifies that a specific code fix equivalence key is not offered for the selected diagnostic.
     /// </summary>
     public static async Task VerifyCodeFixNotOfferedAsync(
@@ -231,7 +275,47 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         return test;
     }
 
+    private static CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier> CreateTest(string source, string fixedSource, ReferenceAssemblies references)
+    {
+        var test = new CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier>
+        {
+            TestCode = source,
+            FixedCode = fixedSource,
+            ReferenceAssemblies = references,
+        };
+
+        test.CodeFixTestBehaviors |= CodeFixTestBehaviors.SkipLocalDiagnosticCheck;
+
+        return test;
+    }
+
+    /// <summary>
+    /// Verifies a code fix using custom reference assemblies (e.g., keyed DI 8.0.0).
+    /// </summary>
+    public static async Task VerifyCodeFixWithReferencesAsync(
+        string source,
+        DiagnosticResult expected,
+        string fixedSource,
+        ReferenceAssemblies references,
+        string codeActionEquivalenceKey)
+    {
+        var test = CreateTest(source, fixedSource, references);
+        test.ExpectedDiagnostics.Add(expected);
+        test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
+        await test.RunAsync();
+    }
+
     private static Document CreateDocument(string source)
+    {
+        return CreateDocument(source, GetMetadataReferences());
+    }
+
+    private static Document CreateDocument(string source, ReferenceAssemblies references)
+    {
+        return CreateDocument(source, references.ResolveAsync(LanguageNames.CSharp, default).GetAwaiter().GetResult());
+    }
+
+    private static Document CreateDocument(string source, IEnumerable<MetadataReference> metadataReferences)
     {
         var workspace = new AdhocWorkspace();
         var projectId = ProjectId.CreateNewId();
@@ -242,7 +326,7 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
             "TestProject",
             "TestProject",
             LanguageNames.CSharp,
-            metadataReferences: GetMetadataReferences(),
+            metadataReferences: metadataReferences,
             compilationOptions: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
             parseOptions: new CSharpParseOptions(LanguageVersion.Latest));
 
