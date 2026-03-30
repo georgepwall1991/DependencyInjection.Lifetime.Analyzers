@@ -11,7 +11,36 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI001/ScopeNotDisposedExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI001/ScopeNotDisposedExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        },
+        {
+          "filePathContains": "DI001/ScopeNotDisposedExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 3
+        },
+        {
+          "filePathContains": "DI001/ScopeNotDisposedExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 4
+        }
+      ]
     },
     {
       "folder": "DI002",
@@ -30,7 +59,34 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "return scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "_capturedService = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        }
+      ]
     },
     {
       "folder": "DI003",
@@ -55,7 +111,14 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI003/CaptiveDependencyExamples.cs",
+          "anchor": "var scopedService = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI004",
@@ -81,7 +144,47 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "scoped = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "transient = scope.ServiceProvider.GetRequiredService<ITransientService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 3
+        }
+      ]
     },
     {
       "folder": "DI005",
@@ -102,7 +205,43 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI005/AsyncScopeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI005/AsyncScopeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        },
+        {
+          "filePathContains": "DI005/AsyncScopeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 3
+        },
+        {
+          "filePathContains": "DI005/AsyncScopeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 4
+        },
+        {
+          "filePathContains": "DI005/AsyncScopeExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 5
+        }
+      ]
     },
     {
       "folder": "DI006",
@@ -127,7 +266,20 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI006/StaticProviderExamples.cs",
+          "anchor": "return _provider?.GetService<T>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI006/StaticProviderExamples.cs",
+          "anchor": "return _provider.GetRequiredService<T>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI007",
@@ -147,6 +299,18 @@
         }
       ],
       "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI007/ServiceLocatorExamples.cs",
+          "anchor": "services.AddSingleton<ISingletonService, SingletonService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI007/ServiceLocatorExamples.cs",
+          "anchor": "services.AddScoped<IScopedService, ScopedService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        },
         {
           "filePathContains": "DI007/ServiceLocatorExamples.cs",
           "anchor": "services.AddScoped<BadServiceLocatorInConstructor>();",
@@ -178,7 +342,14 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI008/DisposableTransientExamples.cs",
+          "anchor": "services.AddTransient<IDisposableService>(sp =>",
+          "ruleId": "DI012b",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI009",
@@ -197,7 +368,26 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.AddSingleton<ISingletonService, SingletonService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.AddScoped<IScopedService, ScopedService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.AddTransient<ITransientService, TransientService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI010",
@@ -223,7 +413,14 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI011/ServiceProviderInjectionExamples.cs",
+          "anchor": "var service = _provider.GetService<ITransientService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI012",
@@ -236,7 +433,15 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI012/ConditionalRegistrationExamples.cs",
+          "anchor": "services.AddScoped<ServiceA>();",
+          "ruleId": "DI012b",
+          "severity": "note",
+          "occurrence": 2
+        }
+      ]
     },
     {
       "folder": "DI013",
@@ -255,7 +460,20 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI013/ImplementationTypeMismatchExamples.cs",
+          "anchor": "services.AddSingleton(typeof(IRepository), typeof(WrongType));",
+          "ruleId": "DI012b",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI013/ImplementationTypeMismatchExamples.cs",
+          "anchor": "services.AddScoped(typeof(IRepository), typeof(string));",
+          "ruleId": "DI012b",
+          "severity": "note"
+        }
+      ]
     },
     {
       "folder": "DI014",
@@ -269,7 +487,22 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": []
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI014/RootProviderDisposalExamples.cs",
+          "anchor": "var service = provider.GetService<IServiceScopeFactory>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI014/RootProviderDisposalExamples.cs",
+          "anchor": "var service = provider.GetService<IServiceScopeFactory>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        }
+      ]
     },
     {
       "folder": "DI015",

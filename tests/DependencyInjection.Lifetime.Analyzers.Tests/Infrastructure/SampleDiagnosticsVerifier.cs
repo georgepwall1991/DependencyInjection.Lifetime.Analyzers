@@ -196,11 +196,9 @@ public static class SampleDiagnosticsVerifier
 
         var failures = new List<string>();
         var matched = new HashSet<int>();
-        var allowedSignatures = new HashSet<(string RuleId, string Severity)>(StringTupleComparer.OrdinalIgnoreCase);
 
         foreach (var claim in folderClaim.Claims)
         {
-            allowedSignatures.Add((claim.RuleId, claim.Severity));
             MatchAndRecordClaim(
                 folderResults,
                 claim,
@@ -212,7 +210,6 @@ public static class SampleDiagnosticsVerifier
 
         foreach (var secondary in folderClaim.ApprovedSecondaryDiagnostics)
         {
-            allowedSignatures.Add((secondary.RuleId, secondary.Severity));
             MatchAndRecordClaim(
                 folderResults,
                 secondary,
@@ -225,7 +222,7 @@ public static class SampleDiagnosticsVerifier
 
         foreach (var result in folderResults)
         {
-            if (!allowedSignatures.Contains((result.RuleId, result.Level)))
+            if (!IsPublicSampleDiagnostic(result.RuleId))
                 continue;
 
             if (!matched.Contains(result.Index))
@@ -424,6 +421,11 @@ public static class SampleDiagnosticsVerifier
 
     private static string FormatDiagnostic(SarifResult diagnostic) =>
         $"{diagnostic.RuleId} ({diagnostic.Level}) at line {diagnostic.StartLine}: \"{diagnostic.Message}\"";
+
+    private static bool IsPublicSampleDiagnostic(string ruleId) =>
+        ruleId.Length >= 3 &&
+        ruleId.StartsWith("DI", StringComparison.OrdinalIgnoreCase) &&
+        char.IsDigit(ruleId[2]);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

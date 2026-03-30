@@ -101,6 +101,120 @@ public class SampleDiagnosticsVerifierContractTests
         Assert.Contains("Claim severity changed", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void UnexpectedSecondaryDiagnosticInClaimedFolderFailsVerification()
+    {
+        using var temp = new TemporaryDirectory();
+        var sample = CreateSampleFile(temp.Path);
+
+        var sarif = new List<SarifResult>
+        {
+            new(
+                0,
+                "DI999",
+                "warning",
+                "Claimed diagnostic",
+                new Uri(sample.SourcePath).AbsoluteUri,
+                sample.BrokenLine),
+            new(
+                1,
+                "DI998",
+                "warning",
+                "Unexpected secondary diagnostic",
+                new Uri(sample.SourcePath).AbsoluteUri,
+                sample.SurpriseLine)
+        };
+
+        var contract = new SampleContract
+        {
+            FolderClaims =
+            [
+                new FolderClaim
+                {
+                    Folder = "DI999",
+                    RuleId = "DI999",
+                    Claims =
+                    [
+                        new DiagnosticClaim
+                        {
+                            FilePathContains = "Diagnostics/DI999/Sample.cs",
+                            Anchor = "var broken = 1;",
+                            RuleId = "DI999",
+                            Severity = "warning"
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var result = SampleDiagnosticsVerifier.VerifyContract(sarif, contract, "Synthetic");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("DI998", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Unexpected", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ApprovedSecondaryDiagnosticStillPasses()
+    {
+        using var temp = new TemporaryDirectory();
+        var sample = CreateSampleFile(temp.Path);
+
+        var sarif = new List<SarifResult>
+        {
+            new(
+                0,
+                "DI999",
+                "warning",
+                "Claimed diagnostic",
+                new Uri(sample.SourcePath).AbsoluteUri,
+                sample.BrokenLine),
+            new(
+                1,
+                "DI998",
+                "warning",
+                "Approved secondary diagnostic",
+                new Uri(sample.SourcePath).AbsoluteUri,
+                sample.SurpriseLine)
+        };
+
+        var contract = new SampleContract
+        {
+            FolderClaims =
+            [
+                new FolderClaim
+                {
+                    Folder = "DI999",
+                    RuleId = "DI999",
+                    Claims =
+                    [
+                        new DiagnosticClaim
+                        {
+                            FilePathContains = "Diagnostics/DI999/Sample.cs",
+                            Anchor = "var broken = 1;",
+                            RuleId = "DI999",
+                            Severity = "warning"
+                        }
+                    ],
+                    ApprovedSecondaryDiagnostics =
+                    [
+                        new DiagnosticClaim
+                        {
+                            FilePathContains = "Diagnostics/DI999/Sample.cs",
+                            Anchor = "var surprise = 3;",
+                            RuleId = "DI998",
+                            Severity = "warning"
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var result = SampleDiagnosticsVerifier.VerifyContract(sarif, contract, "Synthetic");
+
+        Assert.True(result.IsSuccess, result.Message);
+    }
+
     private static SampleSource CreateSampleFile(string root)
     {
         var sourcePath = Path.Combine(root, "Diagnostics", "DI999", "Sample.cs");
@@ -117,6 +231,7 @@ public static class Sample
     {
         var broken = 1;
         var safe = 2;
+        var surprise = 3;
     }
 }
 """);
@@ -124,11 +239,12 @@ public static class Sample
         var lines = File.ReadAllLines(sourcePath);
         var brokenLine = Array.FindIndex(lines, line => line.Contains("var broken = 1;", StringComparison.Ordinal)) + 1;
         var safeLine = Array.FindIndex(lines, line => line.Contains("var safe = 2;", StringComparison.Ordinal)) + 1;
+        var surpriseLine = Array.FindIndex(lines, line => line.Contains("var surprise = 3;", StringComparison.Ordinal)) + 1;
 
-        return new SampleSource(sourcePath, brokenLine, safeLine);
+        return new SampleSource(sourcePath, brokenLine, safeLine, surpriseLine);
     }
 
-    private sealed record SampleSource(string SourcePath, int BrokenLine, int SafeLine);
+    private sealed record SampleSource(string SourcePath, int BrokenLine, int SafeLine, int SurpriseLine);
 
     private sealed class TemporaryDirectory : IDisposable
     {
