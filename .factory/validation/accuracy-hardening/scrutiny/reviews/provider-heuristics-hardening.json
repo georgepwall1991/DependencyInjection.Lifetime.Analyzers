@@ -1,0 +1,28 @@
+{
+  "featureId": "provider-heuristics-hardening",
+  "reviewedAt": "2026-03-30T18:54:14.499817Z",
+  "commitId": "1e2dbe40ee8c5a6c665482208538796f84fd89d8",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "I reviewed the feature metadata, handoff, transcript skeleton, commit diff, and current analyzer/test state. DI011 and DI016 hardening look aligned with the contract, but DI007 still leaves a broad method-name escape hatch that suppresses ordinary application logic whenever the enclosing method starts with Create or Build, so the feature does not fully meet the stated goal of warning in ordinary app logic while keeping only documented factory/infrastructure boundaries clean.",
+    "issues": [
+      {
+        "file": "src/DependencyInjection.Lifetime.Analyzers/Rules/DI007_ServiceLocatorAntiPatternAnalyzer.cs",
+        "line": 267,
+        "severity": "blocking",
+        "description": "DI007 still treats any method whose name starts with Create or Build as an allowed context. That means ordinary helper/application methods such as BuildReport(), BuildModel(), or CreateOrder() can resolve services via IServiceProvider without any DI007 diagnostic even though the feature contract requires ordinary application logic to report and only documented factory/infrastructure escape hatches to stay clean. The new regression suite codifies this broad exemption in GetRequiredService_InBuildMethod_NoDiagnostic, so the hardening remains under-scoped rather than limited to actual factory-style boundaries."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The repo documentation describes DI007 exceptions only at a high level (\"factories\" and middleware Invoke methods), but the actual heuristic/test surface exempts any Create*/Build* method by name. That boundary is underspecified in shared state, which makes it hard to tell whether future DI007 changes should preserve or narrow this behavior.",
+      "evidence": "src/DependencyInjection.Lifetime.Analyzers/DiagnosticDescriptors.cs:97 says service locator is acceptable in factories and middleware Invoke methods, while src/DependencyInjection.Lifetime.Analyzers/Rules/DI007_ServiceLocatorAntiPatternAnalyzer.cs:266-269 exempts every Create*/Build* method and tests/DependencyInjection.Lifetime.Analyzers.Tests/Rules/DI007_ServiceLocatorAntiPatternAnalyzerTests.cs:453-470 locks in that broader behavior."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed provider-heuristics-hardening via its handoff, transcript skeleton, commit 1e2dbe40ee8c5a6c665482208538796f84fd89d8, and current repo state. The DI011 selected-constructor and DI016 provider-factory work looks sound, but I found a blocking DI007 gap: ordinary application methods named Create*/Build* are still silently exempted, so the feature does not fully satisfy its ordinary-app-logic reporting contract."
+}

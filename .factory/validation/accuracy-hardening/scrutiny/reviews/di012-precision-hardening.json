@@ -1,0 +1,28 @@
+{
+  "featureId": "di012-precision-hardening",
+  "reviewedAt": "2026-03-30T18:52:40Z",
+  "commitId": "9cb6520937654b7ddb30ec5f782f8151bd325aa5",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature improves DI012 coverage for keyed/null-key and supported registration shapes, but the new same-flow filter only keys registrations by the immediate receiver symbol. That means registrations made on the same IServiceCollection through invoked wrapper/helper methods no longer compare with each other, so DI012 now misses real ignored-TryAdd/duplicate cases that still belong to one analyzed registration flow.",
+    "issues": [
+      {
+        "file": "src/DependencyInjection.Lifetime.Analyzers/Infrastructure/RegistrationCollector.cs",
+        "line": 233,
+        "severity": "blocking",
+        "description": "DI012's flow scoping is currently derived from `ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(...)`, and the analyzer later groups only on that raw `FlowKey` (`src/DependencyInjection.Lifetime.Analyzers/Rules/DI012_ConditionalRegistrationMisuseAnalyzer.cs:61`). `GetServiceCollectionReceiverKey` is just receiver-symbol identity (`src/DependencyInjection.Lifetime.Analyzers/Infrastructure/ServiceCollectionReachabilityAnalyzer.cs:460-535`), so the same IServiceCollection passed through source-defined wrapper methods or helper methods gets different flow keys in each method. As a result, a real same-flow sequence such as `services.AddFeatureDependencies(); services.TryAddSingleton<IMyService, Impl>();` with `AddFeatureDependencies(this IServiceCollection services)` performing the earlier `AddSingleton` will no longer report DI012 even though it is one analyzed registration flow. The repo already treats invoked wrappers as part of the same flow for DI reasoning (see `tests/DependencyInjection.Lifetime.Analyzers.Tests/Rules/DI015_UnresolvableDependencyAnalyzerTests.cs:1395-1510`), so this narrowing regresses the feature's required same-flow behavior instead of just removing false positives."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The `analyzer-worker` skill's required final-validator list still stops at `build`, `test`, and `lint`, even though this mission's AGENTS guidance makes `site` part of the required final validation set for analyzer changes.",
+      "evidence": "`.factory/skills/analyzer-worker/SKILL.md:42-45` lists only `build`, `test`, and `lint`, while `/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/AGENTS.md:41-45` requires `build`, `test`, `lint`, and `site`."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the handoff, transcript skeleton, analyzer-worker skill guidance, commit `9cb6520937654b7ddb30ec5f782f8151bd325aa5`, and current repo state for `di012-precision-hardening`. I marked the review as fail because the implementation's new flow keying only tracks the immediate receiver symbol, which suppresses DI012 for real same-flow registrations that are composed through invoked IServiceCollection wrapper/helper methods."
+}
