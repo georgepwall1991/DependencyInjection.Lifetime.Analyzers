@@ -1,6 +1,6 @@
 {
   "milestone": "sample-truth",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -21,38 +21,28 @@
   },
   "reviewsSummary": {
     "total": 2,
-    "passed": 0,
-    "failed": 2,
+    "passed": 1,
+    "failed": 1,
     "failedFeatures": [
-      "sample-diagnostics-verifier-core",
-      "sample-docs-freshness-gate"
+      "sample-diagnostics-claim-contract-hardening"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "sample-diagnostics-verifier-core",
+      "featureId": "sample-diagnostics-claim-contract-hardening",
       "severity": "blocking",
-      "description": "SampleApp verification matches claims only at the '/Diagnostics/{rule}/' folder level plus aggregate counts, so diagnostics can move from intentionally broken examples onto safe examples in the same folder without failing the verifier."
-    },
-    {
-      "featureId": "sample-diagnostics-verifier-core",
-      "severity": "blocking",
-      "description": "The sample diagnostics verifier does not model or validate diagnostic severity, so rule severity drift can pass unnoticed despite the contract requiring rule ID, severity, and stable anchor matching."
-    },
-    {
-      "featureId": "sample-docs-freshness-gate",
-      "severity": "blocking",
-      "description": "The freshness check compares only configured sample mappings against SampleApp diagnostic directories and does not verify parity against the public diagnostic inventory, so future outward-facing diagnostics can drift without tripping the gate."
+      "description": "Folder verification ignores unexpected secondary diagnostics whose (ruleId, severity) pair is absent from the contract, so new unapproved secondary diagnostics can pass sample verification silently instead of failing as non-allowlisted behavior."
     }
   ],
-  "appliedUpdates": [
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
     {
-      "target": "services.yaml",
-      "description": "Added a repo-declared `site` command for generated docs-site validation to mirror the CI docs-surface workflow locally.",
-      "sourceFeature": "sample-docs-freshness-gate"
+      "target": "repo-tooling-worker skill",
+      "suggestion": "Tighten procedure reporting or review guidance so handoffs do not mark followedProcedure=true when transcript order shows failing verification was added only after implementation edits.",
+      "evidence": "The review for sample-diagnostics-claim-contract-hardening found transcript edits to verifier/contract files before the later regression-test addition, even though the skill requires writing failing verification first and the handoff reported followedProcedure=true.",
+      "isSystemic": false
     }
   ],
-  "suggestedGuidanceUpdates": [],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/synthesis.round1.json"
 }

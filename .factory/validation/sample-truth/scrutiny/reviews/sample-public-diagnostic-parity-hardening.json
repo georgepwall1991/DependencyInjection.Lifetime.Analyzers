@@ -1,0 +1,15 @@
+{
+  "featureId": "sample-public-diagnostic-parity-hardening",
+  "reviewedAt": "2026-03-30T16:34:21Z",
+  "commitId": "17d02cdf3ac9359479e8642b796b564d6af834f1",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix directly addresses the prior blocking gap. `tools/generate-growth-assets.mjs` now loads a repo-owned public diagnostic inventory from `src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs`, normalizes approved alias/omission entries, and compares that canonical set against both `samples/SampleApp/Diagnostics/*` and `ruleSampleConfig`. The canonical test path was also extended with `PublicDiagnosticInventory_IsIncludedInFreshnessParitySummary`, so the root validation gate now exercises the three-way parity check the prior review required.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/reviews/sample-docs-freshness-gate.json",
+  "summary": "Reviewed the prior failed feature diff (`fbb036cec794be52a2564839fad83fb3267bff67`), the fix diff (`17d02cdf3ac9359479e8642b796b564d6af834f1`), the fix handoff, and the fix transcript skeleton. I found no remaining high-confidence correctness issues in the parity hardening: the original blocking issue about missing public-inventory parity is addressed, and the fix feature passes review."
+}
