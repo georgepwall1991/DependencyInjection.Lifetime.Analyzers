@@ -116,9 +116,10 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         while (parent is not null)
         {
             // using var scope = CreateScope();
+            // await using var scope = CreateAsyncScope();
             if (parent is VariableDeclarationSyntax varDecl &&
                 varDecl.Parent is LocalDeclarationStatementSyntax localDecl &&
-                localDecl.UsingKeyword != default)
+                (localDecl.UsingKeyword != default || localDecl.AwaitKeyword != default))
             {
                 return true;
             }
@@ -126,14 +127,6 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             // using (var scope = CreateScope()) { } OR using (CreateScope()) { }
             if (parent is UsingStatementSyntax usingStatement &&
                 IsUsingStatementResource(syntax, usingStatement))
-            {
-                return true;
-            }
-
-            // await using var scope = CreateAsyncScope();
-            if (parent is VariableDeclarationSyntax varDecl2 &&
-                varDecl2.Parent is LocalDeclarationStatementSyntax localDecl2 &&
-                localDecl2.AwaitKeyword != default)
             {
                 return true;
             }
@@ -198,33 +191,35 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
-        // Find the variable this scope is assigned to
         var syntax = invocation.Syntax;
+        ILocalSymbol? variableSymbol = null;
 
-        // Look for pattern: var scope = CreateScope();
-        if (syntax.Parent is not EqualsValueClauseSyntax equalsValue)
+        // Pattern 1: var scope = CreateScope();
+        if (syntax.Parent is EqualsValueClauseSyntax equalsValue &&
+            equalsValue.Parent is VariableDeclaratorSyntax declarator &&
+            semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol1)
+        {
+            variableSymbol = localSymbol1;
+        }
+        // Pattern 2: scope = CreateScope(); (reassignment to existing local)
+        else if (syntax.Parent is AssignmentExpressionSyntax assignment &&
+            assignment.Left is IdentifierNameSyntax identifierName &&
+            semanticModel.GetSymbolInfo(identifierName).Symbol is ILocalSymbol localSymbol2)
+        {
+            variableSymbol = localSymbol2;
+        }
+
+        if (variableSymbol is null)
         {
             return false;
         }
 
-        if (equalsValue.Parent is not VariableDeclaratorSyntax declarator)
-        {
-            return false;
-        }
-
-        if (semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol variableSymbol)
-        {
-            return false;
-        }
-
-        // Find the containing method/block
         var containingBlock = GetContainingBlock(syntax);
         if (containingBlock is null)
         {
             return false;
         }
 
-        // Look for scope.Dispose() call in the same block or try-finally
         return HasDisposeCall(containingBlock, syntax, variableSymbol, semanticModel);
     }
 
@@ -248,17 +243,15 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         ILocalSymbol variableSymbol,
         SemanticModel semanticModel)
     {
-        // Look for variable.Dispose() in statements after the variable was assigned.
         foreach (var descendant in block.DescendantNodes())
         {
             if (descendant is not InvocationExpressionSyntax invocationSyntax ||
-                invocationSyntax.SpanStart <= creationSyntax.SpanStart ||
-                invocationSyntax.Expression is not MemberAccessExpressionSyntax memberAccess)
+                invocationSyntax.SpanStart <= creationSyntax.SpanStart)
             {
                 continue;
             }
 
-            if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            if (!IsDisposeInvocation(invocationSyntax))
             {
                 continue;
             }
@@ -268,14 +261,103 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
-            if (SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+            var targetSymbol = GetDisposeTargetSymbol(invocationSyntax, semanticModel);
+            if (targetSymbol is null)
             {
-                return true;
+                continue;
             }
+
+            if (!SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+            {
+                continue;
+            }
+
+            // Ensure no intervening reassignment between creation and dispose
+            if (HasInterveningReassignment(creationSyntax, invocationSyntax, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            return true;
         }
 
         return false;
+    }
+
+    private static bool HasInterveningReassignment(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in creationSyntax.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(creationSyntax.Span.End, disposeSyntax.SpanStart)))
+        {
+            if (descendant is not AssignmentExpressionSyntax assignment ||
+                assignment.Left is not IdentifierNameSyntax identifierName)
+            {
+                continue;
+            }
+
+            if (semanticModel.GetSymbolInfo(identifierName).Symbol is not ILocalSymbol assignedLocal ||
+                !SymbolEqualityComparer.Default.Equals(assignedLocal, variableSymbol))
+            {
+                continue;
+            }
+
+            // Only count reassignments in the same executable boundary.
+            // A reassignment inside a lambda may never execute.
+            if (!SharesExecutableBoundary(assignment, creationSyntax))
+            {
+                continue;
+            }
+
+            // Any reassignment to the same local between creation and dispose
+            // means the original scope is lost — the dispose call proves the
+            // reassigned value was disposed, not the original.
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsDisposeInvocation(InvocationExpressionSyntax invocationSyntax)
+    {
+        // scope.Dispose() or scope.DisposeAsync()
+        if (invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess &&
+            memberAccess.Name.Identifier.Text is ("Dispose" or "DisposeAsync"))
+        {
+            return true;
+        }
+
+        // scope?.Dispose() or scope?.DisposeAsync()
+        // Parsed as: InvocationExpression { Expression: MemberBindingExpressionSyntax }
+        //   parent: ConditionalAccessExpressionSyntax { Expression: scope }
+        if (invocationSyntax.Expression is MemberBindingExpressionSyntax memberBinding &&
+            memberBinding.Name.Identifier.Text is ("Dispose" or "DisposeAsync") &&
+            invocationSyntax.Parent is ConditionalAccessExpressionSyntax)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ISymbol? GetDisposeTargetSymbol(InvocationExpressionSyntax invocationSyntax, SemanticModel semanticModel)
+    {
+        // scope.Dispose() — target is the expression before the dot
+        if (invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            return semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
+        }
+
+        // scope?.Dispose() — target is the expression before the ?
+        if (invocationSyntax.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            return semanticModel.GetSymbolInfo(conditionalAccess.Expression).Symbol;
+        }
+
+        return null;
     }
 
     private static bool SharesExecutableBoundary(SyntaxNode candidateSyntax, SyntaxNode creationSyntax)
