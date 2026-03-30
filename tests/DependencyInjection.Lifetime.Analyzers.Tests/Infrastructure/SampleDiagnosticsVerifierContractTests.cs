@@ -1,12 +1,183 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
 public class SampleDiagnosticsVerifierContractTests
 {
+    private static readonly string RepoRoot =
+        Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", ".."));
+
+    /// <summary>
+    /// Every public diagnostic ID (DI001-DI016) must have at least one folder claim
+    /// in the SampleApp contract with at least one concrete claim anchor. This prevents
+    /// a new diagnostic from being added without corresponding sample coverage, and
+    /// catches mislabelled or empty folder claims that would satisfy a weaker check.
+    /// </summary>
+    [Fact]
+    public void EveryPublicDiagnosticId_HasFolderClaimWithAnchorsInContract()
+    {
+        var publicIds = GetPublicDiagnosticIds();
+        var contract = ReadSampleAppContract();
+
+        // A folder claim counts as coverage only if it has at least one concrete
+        // claim with a matching rule ID and a non-empty anchor.
+        var coveredIds = contract.FolderClaims
+            .Where(fc => fc.Claims.Any(c =>
+                string.Equals(c.RuleId, fc.RuleId, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(c.Anchor)))
+            .Select(fc => fc.RuleId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var missing = publicIds.Where(id => !coveredIds.Contains(id)).ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            $"The following public diagnostic IDs have no folder claim with concrete anchors in " +
+            $"sample-diagnostics-contract.json: {string.Join(", ", missing)}. " +
+            $"Add sample coverage and a contract entry for each.");
+    }
+
+    /// <summary>
+    /// Every folder claim in the contract must reference an existing sample directory
+    /// under samples/SampleApp/Diagnostics/. This detects stale folder claims that
+    /// reference removed or renamed sample directories.
+    /// </summary>
+    [Fact]
+    public void ContractFolderClaims_ReferenceExistingSampleDirectories()
+    {
+        var contract = ReadSampleAppContract();
+        var diagnosticsDir = Path.Combine(RepoRoot, "samples", "SampleApp", "Diagnostics");
+
+        var missing = new List<string>();
+        foreach (var folder in contract.FolderClaims.Select(fc => fc.Folder))
+        {
+            var dirPath = Path.Combine(diagnosticsDir, folder);
+            if (!Directory.Exists(dirPath))
+                missing.Add(folder);
+        }
+
+        Assert.True(
+            missing.Count == 0,
+            $"Contract folder claims reference non-existent sample directories: " +
+            $"{string.Join(", ", missing)}. Update the contract or create the missing directories.");
+    }
+
+    /// <summary>
+    /// Every rule ID referenced in contract claims must exist in the public diagnostic
+    /// inventory (DiagnosticIds). This prevents the contract from referencing
+    /// non-existent or mistyped rule IDs.
+    /// </summary>
+    [Fact]
+    public void AllClaimedDiagnosticIds_ExistInPublicInventory()
+    {
+        var publicIds = GetAllDiagnosticIdValues();
+        var contract = ReadSampleAppContract();
+
+        var claimedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fc in contract.FolderClaims)
+        {
+            claimedIds.Add(fc.RuleId);
+            foreach (var claim in fc.Claims)
+                claimedIds.Add(claim.RuleId);
+            foreach (var sec in fc.ApprovedSecondaryDiagnostics)
+                claimedIds.Add(sec.RuleId);
+        }
+        foreach (var fc in contract.FileClaims)
+            claimedIds.Add(fc.RuleId);
+        foreach (var ac in contract.AbsenceClaims)
+            claimedIds.Add(ac.RuleId);
+
+        var unknown = claimedIds.Where(id => !publicIds.Contains(id)).ToList();
+
+        Assert.True(
+            unknown.Count == 0,
+            $"Contract references diagnostic IDs not found in DiagnosticIds: " +
+            $"{string.Join(", ", unknown)}. Fix the contract or add the missing ID constants.");
+    }
+
+    /// <summary>
+    /// When a claim references a file path that cannot be resolved at all,
+    /// verification should fail with a clear stale-claim message. Uses a
+    /// GUID-based synthetic path to prevent accidental collision with real files.
+    /// </summary>
+    [Fact]
+    public void ContractClaim_WithDeletedSampleFile_FailsVerification()
+    {
+        var sarif = new List<SarifResult>();
+
+        var contract = new SampleContract
+        {
+            FolderClaims =
+            [
+                new FolderClaim
+                {
+                    Folder = "SYNTHETIC_DELETED_00000000",
+                    RuleId = "DI999",
+                    Claims =
+                    [
+                        new DiagnosticClaim
+                        {
+                            FilePathContains = "SYNTHETIC_DELETED_00000000/NonExistentFile_00000000.cs",
+                            Anchor = "var deleted = true;",
+                            RuleId = "DI999",
+                            Severity = "warning"
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var result = SampleDiagnosticsVerifier.VerifyContract(sarif, contract, "Synthetic");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("Stale claim", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Returns all unique public diagnostic IDs matching the DI\d{3} pattern
+    /// (e.g., DI001-DI016), excluding sub-variants like DI012b.
+    /// </summary>
+    private static HashSet<string> GetPublicDiagnosticIds()
+    {
+        return GetAllDiagnosticIdValues()
+            .Where(id => Regex.IsMatch(id, @"^DI\d{3}$"))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Returns all diagnostic ID values from the DiagnosticIds type,
+    /// including sub-variants like DI012b.
+    /// </summary>
+    private static HashSet<string> GetAllDiagnosticIdValues()
+    {
+        return typeof(DiagnosticIds)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static SampleContract ReadSampleAppContract()
+    {
+        var contractPath = Path.Combine(RepoRoot, "samples", "SampleApp", "sample-diagnostics-contract.json");
+        var json = File.ReadAllText(contractPath);
+        return JsonSerializer.Deserialize<SampleContract>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        }) ?? throw new InvalidOperationException($"Failed to deserialize contract: {contractPath}");
+    }
+
     [Fact]
     public void StaleClaimReportsObservedDiagnosticAtMovedLocation()
     {

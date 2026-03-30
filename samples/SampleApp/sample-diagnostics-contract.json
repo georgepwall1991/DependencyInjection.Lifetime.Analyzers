@@ -512,6 +512,39 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI017",
+      "ruleId": "DI017",
+      "claims": [
+        {
+          "filePathContains": "DI017/CircularDependencyExamples.cs",
+          "anchor": "services.AddScoped<IPaymentService, BadPaymentService>();",
+          "ruleId": "DI017",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI018",
+      "ruleId": "DI018",
+      "claims": [
+        {
+          "filePathContains": "DI018/NonInstantiableImplementationExamples.cs",
+          "anchor": "services.AddSingleton<IMyService, BadAbstractService>();",
+          "ruleId": "DI018",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI018/NonInstantiableImplementationExamples.cs",
+          "anchor": "services.AddSingleton<IMyService, GoodConcreteService>();",
+          "ruleId": "DI012b",
+          "severity": "note"
+        }
+      ]
     }
   ],
   "fileClaims": [],

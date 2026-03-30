@@ -129,6 +129,20 @@ const ruleSampleConfig = {
       { label: "Sample app allowed pattern", symbol: "CreateProvider" },
     ],
   },
+  DI017: {
+    samplePath: "samples/SampleApp/Diagnostics/DI017/CircularDependencyExamples.cs",
+    highlights: [
+      { label: "Sample app circular dependency", symbol: "BadOrderService" },
+      { label: "Sample app safe pattern", symbol: "GoodOrderService" },
+    ],
+  },
+  DI018: {
+    samplePath: "samples/SampleApp/Diagnostics/DI018/NonInstantiableImplementationExamples.cs",
+    highlights: [
+      { label: "Sample app non-instantiable type", symbol: "BadAbstractService" },
+      { label: "Sample app safe pattern", symbol: "GoodConcreteService" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(
