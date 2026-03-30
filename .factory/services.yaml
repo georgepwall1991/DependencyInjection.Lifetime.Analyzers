@@ -1,0 +1,8 @@
+commands:
+  install: dotnet restore "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln"
+  build: dotnet build "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln" --no-restore --configuration Release
+  test: dotnet test "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln" --no-build --configuration Release --verbosity normal
+  lint: node "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs" sync-readme --check
+  sample_build: TMPDIR=$(mktemp -d) && dotnet build "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/SampleApp/SampleApp.csproj" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog="$TMPDIR/SampleApp.sarif"
+
+services: {}
