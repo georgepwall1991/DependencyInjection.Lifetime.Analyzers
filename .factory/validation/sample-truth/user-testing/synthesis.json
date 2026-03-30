@@ -1,22 +1,43 @@
 {
   "milestone": "sample-truth",
-  "round": 2,
-  "status": "pass",
+  "round": 3,
+  "status": "fail",
   "assertionsSummary": {
-    "total": 1,
-    "passed": 1,
-    "failed": 0,
+    "total": 11,
+    "passed": 8,
+    "failed": 3,
     "blocked": 0
   },
   "passedAssertions": [
-    "VAL-WORKFLOW-003"
+    "VAL-SAMPLES-002",
+    "VAL-SAMPLES-004",
+    "VAL-SAMPLES-005",
+    "VAL-WORKFLOW-001",
+    "VAL-WORKFLOW-002",
+    "VAL-WORKFLOW-003",
+    "VAL-CROSS-002",
+    "VAL-CROSS-006"
   ],
-  "failedAssertions": [],
+  "failedAssertions": [
+    {
+      "id": "VAL-SAMPLES-001",
+      "reason": "SampleApp contract verification is unstable: the canonical root test failed with four DI012b anchor mismatches between SampleApp/DI007 and SampleApp/DI009 even though a later focused verifier rerun passed."
+    },
+    {
+      "id": "VAL-SAMPLES-003",
+      "reason": "Published SampleApp claims do not stay aligned with observed diagnostics on every validation run; the root test reported unexpected/missing DI012b claim anchors."
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "reason": "The canonical SampleApp sample-diagnostics contract is not stable because the root validation surface intermittently rejects the checked-in contract for DI012b anchor drift."
+    }
+  ],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round1.json",
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round2.json",
   "flowReports": [
-    ".factory/validation/sample-truth/user-testing/flows/workflow-site-gate-rerun.json"
+    ".factory/validation/sample-truth/user-testing/flows/sample-contracts-round4.json",
+    ".factory/validation/sample-truth/user-testing/flows/workflow-gate-round4.json"
   ],
-  "generatedAt": "2026-03-30T17:29:16Z"
+  "generatedAt": "2026-03-30T18:05:15Z"
 }

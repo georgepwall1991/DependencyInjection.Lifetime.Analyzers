@@ -1,0 +1,142 @@
+{
+  "surface": "command-line validation",
+  "testedAt": "2026-03-30T18:05:15Z",
+  "assertionsTested": [
+    "VAL-SAMPLES-004",
+    "VAL-SAMPLES-005",
+    "VAL-WORKFLOW-001",
+    "VAL-WORKFLOW-002",
+    "VAL-WORKFLOW-003",
+    "VAL-CROSS-006"
+  ],
+  "canonicalGateCommands": [
+    "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+    "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+    "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+    "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"<isolated-output-dir>\""
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-SAMPLES-004",
+      "title": "Rule-page sample extraction cannot silently drop missing snippets",
+      "status": "pass",
+      "reason": "The standalone freshness gate passed and the focused SampleDocsFreshnessVerifierTests rerun passed the no-silent-drop snippet extraction test.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/check-freshness.log",
+        "sample-truth/workflow-gate-round4/focused-freshness-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-005",
+      "title": "Sample rule coverage and mapping sets stay in parity",
+      "status": "pass",
+      "reason": "check-freshness still reports parity between the canonical public diagnostic inventory, SampleApp rule directories, and sample/docs mappings.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/check-freshness.log",
+        "sample-truth/workflow-gate-round4/focused-freshness-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-WORKFLOW-001",
+      "title": "Root validation uses standard repo commands and declared toolchains",
+      "status": "pass",
+      "reason": "The authoritative local gate was executed directly with the repo-declared node and dotnet commands from .factory/services.yaml and AGENTS.md, without any custom bootstrapping.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/lint-sync-readme.log",
+        "sample-truth/workflow-gate-round4/build.log",
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/workflow-gate-round4/site.log"
+      ]
+    },
+    {
+      "id": "VAL-WORKFLOW-002",
+      "title": "Standard validation includes sample diagnostics verification",
+      "status": "pass",
+      "reason": "The standard root dotnet test command executed SampleDiagnosticsVerifierTests as part of the normal solution suite, and that step is exactly where the SampleApp DI012b anchor drift surfaced.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/test.log"
+      ]
+    },
+    {
+      "id": "VAL-WORKFLOW-003",
+      "title": "Sample-derived content stays wired into automation",
+      "status": "pass",
+      "reason": "README freshness, sample/docs freshness checks, and docs site generation all ran from the standard validation surface with successful outputs written to evidence.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/lint-sync-readme.log",
+        "sample-truth/workflow-gate-round4/check-freshness.log",
+        "sample-truth/workflow-gate-round4/focused-freshness-tests.log",
+        "sample-truth/workflow-gate-round4/site.log",
+        "sample-truth/workflow-gate-round4/site-output/index.html"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-006",
+      "title": "Repository validation gates fail when analyzer, sample, or docs state diverges",
+      "status": "pass",
+      "reason": "The canonical gate tripped exactly where it should: after lint and build succeeded, the root test step returned exit code 1 because SampleApp_ClaimedDiagnosticsMatchContract detected SampleApp DI012b drift.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/lint-sync-readme.log",
+        "sample-truth/workflow-gate-round4/build.log",
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/workflow-gate-round4/check-freshness.log"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0,
+      "observation": "Succeeded. README install snippets are already in sync.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/lint-sync-readme.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0,
+      "observation": "Succeeded. The Release solution build completed, surfacing only the two expected DI015 warnings from the intentionally broken DI015InAction sample.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/build.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 1,
+      "observation": "Failed as a validation signal: 390/391 tests passed and SampleApp_ClaimedDiagnosticsMatchContract failed with four DI012b anchor mismatches moving between SampleApp/DI007 and SampleApp/DI009.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/test.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/workflow-gate-round4/site-output\"",
+      "exitCode": 0,
+      "observation": "Succeeded. Generated the docs site into the evidence directory.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/site.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" check-freshness",
+      "exitCode": 0,
+      "observation": "Succeeded. Freshness parity checks remained green.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/check-freshness.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj\" --no-build --configuration Release --filter \"FullyQualifiedName~SampleDocsFreshnessVerifierTests\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "observation": "Succeeded. All four focused SampleDocsFreshnessVerifierTests passed.",
+      "evidenceFile": "sample-truth/workflow-gate-round4/focused-freshness-tests.log"
+    }
+  ],
+  "toolsUsed": [
+    "dotnet",
+    "node",
+    "python3"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/workflow-gate-round4/lint-sync-readme.log",
+    "sample-truth/workflow-gate-round4/build.log",
+    "sample-truth/workflow-gate-round4/test.log",
+    "sample-truth/workflow-gate-round4/site.log",
+    "sample-truth/workflow-gate-round4/check-freshness.log",
+    "sample-truth/workflow-gate-round4/focused-freshness-tests.log",
+    "sample-truth/workflow-gate-round4/site-output/index.html",
+    "sample-truth/workflow-gate-round4/site-output/rules/di015-unresolvable-dependency/index.html"
+  ],
+  "overallStatus": "pass"
+}

@@ -1,0 +1,126 @@
+{
+  "surface": "command-line validation",
+  "testedAt": "2026-03-30T17:52:16.351500Z",
+  "assertionsTested": [
+    "VAL-SAMPLES-001",
+    "VAL-SAMPLES-002",
+    "VAL-SAMPLES-003",
+    "VAL-CROSS-001",
+    "VAL-CROSS-002"
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-SAMPLES-001",
+      "title": "SampleApp contract matches real claimed diagnostics",
+      "status": "pass",
+      "reason": "The real SampleApp Release rebuild emitted SampleApp.sarif, and the focused SampleApp_ClaimedDiagnosticsMatchContract verifier passed. The current SARIF summary shows 77 total results with the expected claimed DI rules still present, including DI012, DI012b, and two DI015 warnings.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round3/sampleapp-build-sarif.log",
+        "sample-truth/sample-contracts-round3/SampleApp.sarif",
+        "sample-truth/sample-contracts-round3/targeted-sample-tests.log",
+        "sample-truth/sample-contracts-round3/sarif-summary.json"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-002",
+      "title": "DI015InAction keeps its broken-vs-fixed unresolved-dependency contrast",
+      "status": "pass",
+      "reason": "The direct DI015InAction Release rebuild produced only the two documented broken-case DI015 warnings for BrokenInvoiceScheduler and BrokenKeyedNotificationRunner, and the focused DI015InAction_BrokenCasesReportWhileFixedStaysClean verifier passed to confirm the fixed path stayed clean.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round3/di015-build-sarif.log",
+        "sample-truth/sample-contracts-round3/DI015InAction.sarif",
+        "sample-truth/sample-contracts-round3/targeted-sample-tests.log",
+        "sample-truth/sample-contracts-round3/sarif-summary.json"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-003",
+      "title": "Published sample claims agree with observed diagnostics",
+      "status": "pass",
+      "reason": "The maintainer-facing check-freshness command passed with the expected parity summary (17 canonical public ids, 16 outward-facing after the approved omission, 16 SampleApp directories, 16 sample/docs mappings, 32 highlights), and the focused freshness tests all passed including RulePageSampleFiles_AllExist_NoStalePathReferences.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round3/check-freshness.log",
+        "sample-truth/sample-contracts-round3/targeted-sample-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "title": "SampleApp build is the canonical sample-diagnostics contract",
+      "status": "pass",
+      "reason": "A direct dotnet build of SampleApp with analyzer SARIF emission succeeded, and the focused SampleDiagnosticsVerifierTests run separately passed SampleApp_ClaimedDiagnosticsMatchContract. That keeps the canonical sample-build contract and verifier surface aligned on the current repo state.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round3/sampleapp-build-sarif.log",
+        "sample-truth/sample-contracts-round3/SampleApp.sarif",
+        "sample-truth/sample-contracts-round3/targeted-sample-tests.log",
+        "sample-truth/sample-contracts-round3/sarif-summary.json"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "title": "Runtime-failure guidance stays aligned between samples and generated docs",
+      "status": "pass",
+      "reason": "DI015InAction still rebuilds with the two expected runtime-failure DI015 warnings, the focused sample verifier confirms the broken-vs-fixed contrast, and fresh site generation produced both the DI015 rule page and the unable-to-resolve-service problem guide that continue to surface the same DI015 guidance.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round3/di015-build-sarif.log",
+        "sample-truth/sample-contracts-round3/DI015InAction.sarif",
+        "sample-truth/sample-contracts-round3/targeted-sample-tests.log",
+        "sample-truth/sample-contracts-round3/site-generate.log",
+        "sample-truth/sample-contracts-round3/site-output/rules/di015-unresolvable-dependency/index.html",
+        "sample-truth/sample-contracts-round3/site-output/problems/unable-to-resolve-service-for-type/index.html",
+        "sample-truth/sample-contracts-round3/sarif-summary.json"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" check-freshness",
+      "exitCode": 0,
+      "summary": "Freshness check passed with the canonical public-diagnostic parity summary: 17 ids, 16 outward-facing, 16 SampleApp directories, 16 sample/docs mappings, and 32 highlights.",
+      "evidenceFile": "sample-truth/sample-contracts-round3/check-freshness.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/SampleApp/SampleApp.csproj\" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round3/SampleApp.sarif",
+      "exitCode": 0,
+      "summary": "SampleApp rebuilt successfully and emitted SampleApp.sarif; build output ended with 31 warnings, 0 errors, and included the expected DI012 and DI015 warning lines.",
+      "evidenceFile": "sample-truth/sample-contracts-round3/sampleapp-build-sarif.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/DI015InAction/DI015InAction.csproj\" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round3/DI015InAction.sarif",
+      "exitCode": 0,
+      "summary": "DI015InAction rebuilt successfully and emitted DI015InAction.sarif; build output contained exactly two DI015 warnings for BrokenInvoiceScheduler and BrokenKeyedNotificationRunner and no errors.",
+      "evidenceFile": "sample-truth/sample-contracts-round3/di015-build-sarif.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj\" --configuration Release --filter \"FullyQualifiedName~SampleDiagnosticsVerifierTests|FullyQualifiedName~SampleDocsFreshnessVerifierTests\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "summary": "Focused verifier/freshness rerun passed all 6 tests, including SampleApp_ClaimedDiagnosticsMatchContract, DI015InAction_BrokenCasesReportWhileFixedStaysClean, and the four sample/docs freshness checks.",
+      "evidenceFile": "sample-truth/sample-contracts-round3/targeted-sample-tests.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round3/site-output\"",
+      "exitCode": 0,
+      "summary": "Static docs site generation succeeded into the assigned evidence directory, including the DI015 rule page and unable-to-resolve-service problem guide.",
+      "evidenceFile": "sample-truth/sample-contracts-round3/site-generate.log"
+    }
+  ],
+  "toolsUsed": [
+    "dotnet",
+    "node",
+    "python3"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/sample-contracts-round3/check-freshness.log",
+    "sample-truth/sample-contracts-round3/sampleapp-build-sarif.log",
+    "sample-truth/sample-contracts-round3/SampleApp.sarif",
+    "sample-truth/sample-contracts-round3/di015-build-sarif.log",
+    "sample-truth/sample-contracts-round3/DI015InAction.sarif",
+    "sample-truth/sample-contracts-round3/targeted-sample-tests.log",
+    "sample-truth/sample-contracts-round3/site-generate.log",
+    "sample-truth/sample-contracts-round3/sarif-summary.json",
+    "sample-truth/sample-contracts-round3/site-output/rules/di015-unresolvable-dependency/index.html",
+    "sample-truth/sample-contracts-round3/site-output/problems/unable-to-resolve-service-for-type/index.html"
+  ],
+  "overallStatus": "pass"
+}
