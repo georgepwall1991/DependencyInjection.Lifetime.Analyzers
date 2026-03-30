@@ -43,6 +43,7 @@ None.
    - `build`
    - `test`
    - `lint`
+   - `site`
 8. If the feature touched performance-sensitive code, run the performance/stress regression command required by the feature.
 9. Leave no temp files in the repo and report any unresolved uncertainty or discovered drift explicitly.
 
