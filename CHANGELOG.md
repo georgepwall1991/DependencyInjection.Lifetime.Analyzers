@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-03-30
+
+### Changed
+
+- **DI006 Inherited-Type Coverage**: Static provider cache analysis now catches custom interfaces that inherit from `IServiceProvider`, `IServiceScopeFactory`, or `IKeyedServiceProvider`, closing a real false-negative path for wrapper abstractions.
+- **DI006 Fixer Safety**: The remove-`static` code fix now stays conservative by refusing fixes for static classes, non-private members, partial types, static local-function usage, and other cases where rewriting could silently break references or produce invalid code.
+- **DI006 Regression Coverage**: Added targeted should-fix and should-not-fix tests for inherited interface detection, public member no-fix behavior, implicitly private members, static local functions, static classes, multi-variable fields, and partial-type guardrails.
+
 ## [2.3.0] - 2026-03-30
 
 ### Added

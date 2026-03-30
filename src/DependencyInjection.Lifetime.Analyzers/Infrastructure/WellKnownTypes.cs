@@ -183,10 +183,27 @@ public sealed class WellKnownTypes
 
     /// <summary>
     /// Checks if the given type is any service provider, keyed provider, or scope factory type.
+    /// Also returns true for types that inherit from or implement these interfaces.
     /// </summary>
     public bool IsServiceProviderOrFactoryOrKeyed(ITypeSymbol? type)
     {
-        return IsServiceProvider(type) || IsServiceScopeFactory(type) || IsKeyedServiceProvider(type);
+        if (type is null)
+            return false;
+
+        if (IsServiceProvider(type) || IsServiceScopeFactory(type) || IsKeyedServiceProvider(type))
+            return true;
+
+        foreach (var iface in type.AllInterfaces)
+        {
+            if (SymbolEqualityComparer.Default.Equals(iface, IServiceProvider) ||
+                SymbolEqualityComparer.Default.Equals(iface, IServiceScopeFactory) ||
+                SymbolEqualityComparer.Default.Equals(iface, IKeyedServiceProvider))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
