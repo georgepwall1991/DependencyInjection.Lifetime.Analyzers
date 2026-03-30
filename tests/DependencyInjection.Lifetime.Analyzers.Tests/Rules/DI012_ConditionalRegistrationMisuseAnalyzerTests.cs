@@ -374,5 +374,52 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 .WithArguments("IMyService", "line 23"));
     }
 
+    [Fact]
+    public async Task DuplicateRegistrations_AcrossFiles_UsesStableSourceOrdering()
+    {
+        var sharedTypes = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class ServiceA : IMyService { }
+            public class ServiceB : IMyService { }
+            """;
+
+        var laterAlphabetically = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class RegistrationB
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, ServiceB>();
+                }
+            }
+            """;
+
+        var earlierAlphabetically = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class RegistrationA
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, ServiceA>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            [
+                ("Common.cs", sharedTypes),
+                ("B.cs", laterAlphabetically),
+                ("A.cs", earlierAlphabetically)
+            ],
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithSpan("B.cs", 7, 9, 7, 54)
+                .WithArguments("IMyService", "line 7"));
+    }
+
     #endregion
 }

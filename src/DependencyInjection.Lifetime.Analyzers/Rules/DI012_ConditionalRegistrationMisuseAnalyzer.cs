@@ -65,8 +65,10 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
         foreach (var group in registrationsByServiceType)
         {
-            var orderedRegistrations = group.OrderBy(r => r.Order).ToList();
-            AnalyzeServiceTypeRegistrations(context, orderedRegistrations);
+            // The registrations are already in stable source-location order when they reach
+            // each grouping. Re-sorting by discovery order would reintroduce the concurrent
+            // analysis nondeterminism that the source ordering is meant to remove.
+            AnalyzeServiceTypeRegistrations(context, group.ToList());
         }
     }
 

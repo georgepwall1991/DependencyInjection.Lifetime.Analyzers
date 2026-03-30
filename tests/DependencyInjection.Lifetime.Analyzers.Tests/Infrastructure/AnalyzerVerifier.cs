@@ -61,6 +61,16 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies that the analyzer produces the expected diagnostics across multiple source files.
+    /// </summary>
+    public static async Task VerifyDiagnosticsAsync((string filename, string source)[] sources, params DiagnosticResult[] expected)
+    {
+        var test = CreateTest(sources);
+        test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Creates a diagnostic result for the given descriptor at the specified location.
     /// </summary>
     public static DiagnosticResult Diagnostic(DiagnosticDescriptor descriptor)
@@ -81,6 +91,22 @@ public static class AnalyzerVerifier<TAnalyzer>
         if (!string.IsNullOrWhiteSpace(editorConfig))
         {
             test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", editorConfig));
+        }
+
+        return test;
+    }
+
+    private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(
+        (string filename, string source)[] sources)
+    {
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
+        {
+            ReferenceAssemblies = ReferenceAssembliesWithDi
+        };
+
+        foreach (var (filename, source) in sources)
+        {
+            test.TestState.Sources.Add((filename, source));
         }
 
         return test;
