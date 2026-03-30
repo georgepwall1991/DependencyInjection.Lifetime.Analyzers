@@ -1,43 +1,24 @@
 {
   "milestone": "sample-truth",
-  "round": 3,
-  "status": "fail",
+  "round": 4,
+  "status": "pass",
   "assertionsSummary": {
-    "total": 11,
-    "passed": 8,
-    "failed": 3,
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
     "blocked": 0
   },
   "passedAssertions": [
-    "VAL-SAMPLES-002",
-    "VAL-SAMPLES-004",
-    "VAL-SAMPLES-005",
-    "VAL-WORKFLOW-001",
-    "VAL-WORKFLOW-002",
-    "VAL-WORKFLOW-003",
-    "VAL-CROSS-002",
-    "VAL-CROSS-006"
+    "VAL-SAMPLES-001",
+    "VAL-SAMPLES-003",
+    "VAL-CROSS-001"
   ],
-  "failedAssertions": [
-    {
-      "id": "VAL-SAMPLES-001",
-      "reason": "SampleApp contract verification is unstable: the canonical root test failed with four DI012b anchor mismatches between SampleApp/DI007 and SampleApp/DI009 even though a later focused verifier rerun passed."
-    },
-    {
-      "id": "VAL-SAMPLES-003",
-      "reason": "Published SampleApp claims do not stay aligned with observed diagnostics on every validation run; the root test reported unexpected/missing DI012b claim anchors."
-    },
-    {
-      "id": "VAL-CROSS-001",
-      "reason": "The canonical SampleApp sample-diagnostics contract is not stable because the root validation surface intermittently rejects the checked-in contract for DI012b anchor drift."
-    }
-  ],
+  "failedAssertions": [],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round2.json",
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round3.json",
   "flowReports": [
-    ".factory/validation/sample-truth/user-testing/flows/sample-contracts-round4.json",
-    ".factory/validation/sample-truth/user-testing/flows/workflow-gate-round4.json"
+    ".factory/validation/sample-truth/user-testing/flows/sample-contract-stability-round5.json"
   ],
-  "generatedAt": "2026-03-30T18:05:15Z"
+  "generatedAt": "2026-03-30T18:25:19Z"
 }
