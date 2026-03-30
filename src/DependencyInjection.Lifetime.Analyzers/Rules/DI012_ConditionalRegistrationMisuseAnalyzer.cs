@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -37,26 +38,57 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 return;
             }
 
+            var invocationObservations = new ConcurrentQueue<ServiceCollectionReachabilityAnalyzer.InvocationObservation>();
+
             // First pass: collect all registrations
             compilationContext.RegisterSyntaxNodeAction(
-                syntaxContext => registrationCollector.AnalyzeInvocation(
-                    (InvocationExpressionSyntax)syntaxContext.Node,
-                    syntaxContext.SemanticModel),
+                syntaxContext =>
+                {
+                    var invocation = (InvocationExpressionSyntax)syntaxContext.Node;
+                    registrationCollector.AnalyzeInvocation(
+                        invocation,
+                        syntaxContext.SemanticModel);
+
+                    if (ServiceCollectionReachabilityAnalyzer.IsPotentialServiceCollectionWrapperInvocation(
+                            invocation,
+                            syntaxContext.SemanticModel))
+                    {
+                        invocationObservations.Enqueue(
+                            new ServiceCollectionReachabilityAnalyzer.InvocationObservation(
+                                invocation,
+                                syntaxContext.SemanticModel));
+                    }
+                },
                 SyntaxKind.InvocationExpression);
 
             // Second pass: analyze registration order at compilation end
             compilationContext.RegisterCompilationEndAction(
-                endContext => AnalyzeRegistrationOrder(endContext, registrationCollector));
+                endContext => AnalyzeRegistrationOrder(
+                    endContext,
+                    registrationCollector,
+                    invocationObservations.ToImmutableArray()));
         });
     }
 
     private static void AnalyzeRegistrationOrder(
         CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        ImmutableArray<ServiceCollectionReachabilityAnalyzer.InvocationObservation> invocationObservations)
     {
+        var orderedRegistrations = registrationCollector.OrderedRegistrations.ToImmutableArray();
+        if (orderedRegistrations.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var effectiveOrderedRegistrations = invocationObservations.IsDefaultOrEmpty
+            ? OrderedRegistrationOrdering.SortBySourceLocation(orderedRegistrations)
+            : ServiceCollectionReachabilityAnalyzer
+                .Create(context.Compilation, invocationObservations, orderedRegistrations)
+                .AlignOrderedRegistrationsToRootFlows(orderedRegistrations);
+
         // Group registrations by service type and key (keyed services should be treated independently)
-        var registrationsByServiceType = OrderedRegistrationOrdering.SortBySourceLocation(
-                registrationCollector.OrderedRegistrations)
+        var registrationsByServiceType = effectiveOrderedRegistrations
             .GroupBy(
                 r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed, r.FlowKey),
                 RegistrationGroupKeyComparer.Instance)
@@ -65,9 +97,8 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
         foreach (var group in registrationsByServiceType)
         {
-            // The registrations are already in stable source-location order when they reach
-            // each grouping. Re-sorting by discovery order would reintroduce the concurrent
-            // analysis nondeterminism that the source ordering is meant to remove.
+            // The registrations are already grouped in either stable source order (for direct
+            // flows) or root-flow execution order (for invoked wrappers/helpers).
             AnalyzeServiceTypeRegistrations(context, group.ToList());
         }
     }

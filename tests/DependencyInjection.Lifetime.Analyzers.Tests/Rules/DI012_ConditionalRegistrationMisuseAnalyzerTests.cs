@@ -209,6 +209,76 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 .WithArguments("IMyService", "line 12"));
     }
 
+    [Fact]
+    public async Task TryAddSingleton_InInvokedWrapperAfterDirectAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public static class RegistrationExtensions
+            {
+                public static IServiceCollection AddFallback(this IServiceCollection services)
+                {
+                    services.TryAddSingleton<IMyService, MyService2>();
+                    return services;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                    services.AddFallback();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(12, 9)
+                .WithArguments("IMyService", "line 21"));
+    }
+
+    [Fact]
+    public async Task TryAddSingleton_AfterInvokedWrapperAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public static class RegistrationExtensions
+            {
+                public static IServiceCollection AddPrimary(this IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                    return services;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddPrimary();
+                    services.TryAddSingleton<IMyService, MyService2>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(22, 9)
+                .WithArguments("IMyService", "line 12"));
+    }
+
     #endregion
 
     #region Should Report Diagnostic - Duplicate Add
@@ -297,6 +367,41 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 .WithArguments("IMyService", "line 13"));
     }
 
+    [Fact]
+    public async Task DuplicateAddSingleton_SplitAcrossDirectCallAndInvokedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public static class RegistrationExtensions
+            {
+                public static IServiceCollection AddFallback(this IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService2>();
+                    return services;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                    services.AddFallback();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithLocation(12, 9)
+                .WithArguments("IMyService", "line 21"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -320,6 +425,36 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
 
         // TryAdd before Add is valid - TryAdd registers first, then Add would override
         // but we don't report TryAdd in this case since it wasn't ignored
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TryAddSingleton_InInvokedWrapperBeforeDirectAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public static class RegistrationExtensions
+            {
+                public static IServiceCollection AddFallback(this IServiceCollection services)
+                {
+                    services.TryAddSingleton<IMyService, MyService1>();
+                    return services;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddFallback();
+                    services.AddSingleton<IMyService, MyService2>();
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 

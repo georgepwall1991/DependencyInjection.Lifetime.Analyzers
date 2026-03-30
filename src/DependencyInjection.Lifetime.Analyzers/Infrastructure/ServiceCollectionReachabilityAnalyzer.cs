@@ -28,7 +28,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
     private ServiceCollectionReachabilityAnalyzer(
         Compilation compilation,
         ImmutableArray<InvocationObservation> observations,
-        IEnumerable<ServiceRegistration> registrations)
+        IEnumerable<LocationKey> registrationLocations)
     {
         _compilation = compilation;
         _serviceCollectionType = compilation.GetTypeByMetadataName(
@@ -40,16 +40,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             compilation.GetTypeByMetadataName(
                 "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions");
         _observations = observations;
-        _registrationLocations = new HashSet<LocationKey>();
-
-        foreach (var registration in registrations)
-        {
-            var key = LocationKey.Create(registration.Location);
-            if (key.HasValue)
-            {
-                _registrationLocations.Add(key.Value);
-            }
-        }
+        _registrationLocations = new HashSet<LocationKey>(registrationLocations);
 
         _rootStepsByMethod = new Dictionary<IMethodSymbol, ImmutableArray<RootMethodStep>>(SymbolEqualityComparer.Default);
         _wrapperStepsByMethod = new Dictionary<IMethodSymbol, ImmutableArray<WrapperStep>>(SymbolEqualityComparer.Default);
@@ -60,7 +51,23 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         ImmutableArray<InvocationObservation> observations,
         IEnumerable<ServiceRegistration> registrations)
     {
-        var analyzer = new ServiceCollectionReachabilityAnalyzer(compilation, observations, registrations);
+        var analyzer = new ServiceCollectionReachabilityAnalyzer(
+            compilation,
+            observations,
+            GetRegistrationLocations(registrations.Select(registration => registration.Location)));
+        analyzer.Build();
+        return analyzer;
+    }
+
+    public static ServiceCollectionReachabilityAnalyzer Create(
+        Compilation compilation,
+        ImmutableArray<InvocationObservation> observations,
+        IEnumerable<OrderedRegistration> registrations)
+    {
+        var analyzer = new ServiceCollectionReachabilityAnalyzer(
+            compilation,
+            observations,
+            GetRegistrationLocations(registrations.Select(registration => registration.Location)));
         analyzer.Build();
         return analyzer;
     }
@@ -75,6 +82,52 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
     {
         var key = LocationKey.Create(location);
         return key.HasValue && _opaquePredecessorRegistrations.Contains(key.Value);
+    }
+
+    public ImmutableArray<OrderedRegistration> AlignOrderedRegistrationsToRootFlows(
+        IEnumerable<OrderedRegistration> registrations)
+    {
+        var orderedRegistrations = registrations.ToImmutableArray();
+        if (orderedRegistrations.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<OrderedRegistration>.Empty;
+        }
+
+        var registrationsByLocation = orderedRegistrations
+            .Select(registration => new
+            {
+                Registration = registration,
+                LocationKey = LocationKey.Create(registration.Location)
+            })
+            .Where(static item => item.LocationKey.HasValue)
+            .GroupBy(static item => item.LocationKey!.Value)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group
+                    .Select(item => item.Registration)
+                    .OrderBy(static registration => registration.Order)
+                    .ToImmutableArray());
+
+        if (registrationsByLocation.Count == 0 || _rootStepsByMethod.Count == 0)
+        {
+            return OrderedRegistrationOrdering.SortBySourceLocation(orderedRegistrations);
+        }
+
+        var alignedRegistrations = ImmutableArray.CreateBuilder<OrderedRegistration>();
+        var order = 0;
+
+        foreach (var entry in OrderRootStepsBySourceLocation())
+        {
+            ExpandRootMethodRegistrations(
+                entry.Value,
+                registrationsByLocation,
+                alignedRegistrations,
+                ref order);
+        }
+
+        return alignedRegistrations.Count > 0
+            ? alignedRegistrations.ToImmutable()
+            : OrderedRegistrationOrdering.SortBySourceLocation(orderedRegistrations);
     }
 
     private void Build()
@@ -249,6 +302,116 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     opaqueByFlow[step.FlowKey!] = true;
                     break;
             }
+        }
+    }
+
+    private void ExpandRootMethodRegistrations(
+        ImmutableArray<RootMethodStep> steps,
+        Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
+        ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
+        ref int order)
+    {
+        foreach (var step in steps)
+        {
+            switch (step.Kind)
+            {
+                case StepKind.DirectRegistration:
+                    AppendAlignedRegistrations(
+                        step.Location,
+                        step.FlowKey!,
+                        registrationsByLocation,
+                        alignedRegistrations,
+                        ref order);
+                    break;
+
+                case StepKind.WrapperCall:
+                    ExpandWrapperRegistrations(
+                        step.TargetWrapper!,
+                        step.FlowKey!,
+                        registrationsByLocation,
+                        alignedRegistrations,
+                        ref order,
+                        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
+                    break;
+
+                case StepKind.OpaqueWrapper:
+                    break;
+            }
+        }
+    }
+
+    private void ExpandWrapperRegistrations(
+        IMethodSymbol wrapperMethod,
+        string flowKey,
+        Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
+        ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
+        ref int order,
+        HashSet<IMethodSymbol> wrapperStack)
+    {
+        if (!wrapperStack.Add(wrapperMethod))
+        {
+            return;
+        }
+
+        if (_wrapperStepsByMethod.TryGetValue(wrapperMethod, out var steps))
+        {
+            foreach (var step in steps)
+            {
+                switch (step.Kind)
+                {
+                    case StepKind.DirectRegistration:
+                        AppendAlignedRegistrations(
+                            step.Location,
+                            flowKey,
+                            registrationsByLocation,
+                            alignedRegistrations,
+                            ref order);
+                        break;
+
+                    case StepKind.WrapperCall:
+                        ExpandWrapperRegistrations(
+                            step.TargetWrapper!,
+                            flowKey,
+                            registrationsByLocation,
+                            alignedRegistrations,
+                            ref order,
+                            wrapperStack);
+                        break;
+
+                    case StepKind.OpaqueWrapper:
+                        break;
+                }
+            }
+        }
+
+        wrapperStack.Remove(wrapperMethod);
+    }
+
+    private static void AppendAlignedRegistrations(
+        LocationKey location,
+        string flowKey,
+        Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
+        ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
+        ref int order)
+    {
+        if (!registrationsByLocation.TryGetValue(location, out var registrations))
+        {
+            return;
+        }
+
+        foreach (var registration in registrations)
+        {
+            alignedRegistrations.Add(
+                new OrderedRegistration(
+                    registration.ServiceType,
+                    registration.Key,
+                    registration.IsKeyed,
+                    registration.Lifetime,
+                    registration.Location,
+                    flowKey,
+                    order++,
+                    registration.IsTryAdd,
+                    registration.MethodName));
         }
     }
 
@@ -534,6 +697,36 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         return primaryLocation != null
             ? symbol.Kind + ":" + symbol.Name + ":" + primaryLocation.SourceTree?.FilePath + ":" + primaryLocation.SourceSpan.Start
             : symbol.Kind + ":" + symbol.Name + ":" + symbol.ContainingType?.ToDisplayString();
+    }
+
+    private static IEnumerable<LocationKey> GetRegistrationLocations(IEnumerable<Location> registrationLocations)
+    {
+        foreach (var location in registrationLocations)
+        {
+            var key = LocationKey.Create(location);
+            if (key.HasValue)
+            {
+                yield return key.Value;
+            }
+        }
+    }
+
+    private IEnumerable<KeyValuePair<IMethodSymbol, ImmutableArray<RootMethodStep>>> OrderRootStepsBySourceLocation()
+    {
+        return _rootStepsByMethod
+            .OrderBy(static entry => GetSourcePath(entry.Key), System.StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static entry => GetSourceSpanStart(entry.Key))
+            .ThenBy(static entry => entry.Key.ToDisplayString(), System.StringComparer.Ordinal);
+    }
+
+    private static string GetSourcePath(ISymbol symbol)
+    {
+        return symbol.Locations.FirstOrDefault(location => location.IsInSource)?.SourceTree?.FilePath ?? string.Empty;
+    }
+
+    private static int GetSourceSpanStart(ISymbol symbol)
+    {
+        return symbol.Locations.FirstOrDefault(location => location.IsInSource)?.SourceSpan.Start ?? int.MaxValue;
     }
 
     internal readonly struct InvocationObservation
