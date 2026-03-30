@@ -46,3 +46,12 @@ Testing surfaces, tools, and validation concurrency for this mission.
 - Sample-project SARIF emission succeeded during planning.
 - `node tools/generate-growth-assets.mjs sync-readme --check` passed during planning.
 - No web/browser validation surface is needed for this mission.
+
+## Flow Validator Guidance: command-line validation
+
+- Isolation boundary: use the shared checkout at `/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers` only; do not create extra worktrees for this milestone.
+- Concurrency: shared-checkout command-line validators must run one at a time because `dotnet build` and `dotnet test` contend on shared `bin/obj` outputs.
+- Allowed tools: shell commands (`dotnet`, `node`, `python3`, `mktemp`) and file reads/writes needed for flow reports and evidence only.
+- Temp outputs: create SARIF and generated-site outputs in system temp directories or the assigned mission evidence directory, not under tracked repo paths.
+- Scope: validate repo commands and sample/docs flows only; do not start long-running services, open ports, or use `dotnet run`.
+- Evidence expectations: record the exact commands run, their exit codes, and the key observed output proving each assigned assertion passed or failed.
