@@ -1,0 +1,58 @@
+{
+  "milestone": "sample-truth",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 0,
+    "failed": 2,
+    "failedFeatures": [
+      "sample-diagnostics-verifier-core",
+      "sample-docs-freshness-gate"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "sample-diagnostics-verifier-core",
+      "severity": "blocking",
+      "description": "SampleApp verification matches claims only at the '/Diagnostics/{rule}/' folder level plus aggregate counts, so diagnostics can move from intentionally broken examples onto safe examples in the same folder without failing the verifier."
+    },
+    {
+      "featureId": "sample-diagnostics-verifier-core",
+      "severity": "blocking",
+      "description": "The sample diagnostics verifier does not model or validate diagnostic severity, so rule severity drift can pass unnoticed despite the contract requiring rule ID, severity, and stable anchor matching."
+    },
+    {
+      "featureId": "sample-docs-freshness-gate",
+      "severity": "blocking",
+      "description": "The freshness check compares only configured sample mappings against SampleApp diagnostic directories and does not verify parity against the public diagnostic inventory, so future outward-facing diagnostics can drift without tripping the gate."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "services.yaml",
+      "description": "Added a repo-declared `site` command for generated docs-site validation to mirror the CI docs-surface workflow locally.",
+      "sourceFeature": "sample-docs-freshness-gate"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [],
+  "previousRound": null
+}

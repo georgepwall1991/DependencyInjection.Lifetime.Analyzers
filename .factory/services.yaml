@@ -8,6 +8,7 @@ commands:
   # freshness_check: standalone freshness check for rule-page snippet extraction and
   # sample-dir/mapping parity. Also exercised by SampleDocsFreshnessVerifierTests inside 'test'.
   freshness_check: node "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs" check-freshness
+  site: node "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs" site --output-dir "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/artifacts/site"
   sample_build: TMPDIR=$(mktemp -d) && dotnet build "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/SampleApp/SampleApp.csproj" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog="$TMPDIR/SampleApp.sarif"
 
 services: {}
