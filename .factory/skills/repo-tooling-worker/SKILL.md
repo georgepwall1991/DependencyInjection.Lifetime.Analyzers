@@ -31,6 +31,7 @@ None.
 3. Write failing verification first:
    - add failing tests/helpers/verifier cases before implementation
    - if adding a helper project, keep it repo-local and CI-safe
+   - if the actual transcript does not follow red → green order, report that deviation honestly in the handoff instead of claiming full procedure compliance
 4. Implement the tooling change with clean temp-file behavior:
    - use SARIF rather than console scraping for diagnostic truth
    - use stable anchors/allowlists rather than brittle raw line checks where possible
