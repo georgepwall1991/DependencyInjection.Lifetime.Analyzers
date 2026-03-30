@@ -503,22 +503,8 @@ internal sealed class DependencyResolutionEngine
         return false;
     }
 
-    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
-    {
-        foreach (var attribute in parameter.GetAttributes())
-        {
-            if (attribute.AttributeClass?.Name == "FromKeyedServicesAttribute" &&
-                attribute.AttributeClass.ContainingNamespace.ToDisplayString() ==
-                "Microsoft.Extensions.DependencyInjection")
-            {
-                return (attribute.ConstructorArguments.Length > 0
-                    ? attribute.ConstructorArguments[0].Value
-                    : null, true);
-            }
-        }
-
-        return (null, false);
-    }
+    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
+        KeyedServiceHelpers.GetServiceKey(parameter);
 
     private static bool IsServiceImplementationCompatible(
         INamedTypeSymbol serviceType,

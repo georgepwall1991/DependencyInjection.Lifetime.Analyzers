@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-03-31
+
+### Changed
+
+- **DI003 Deduplication**: Captive-dependency reporting now emits one diagnostic per unique captured dependency per registration, reducing duplicate reports when the same scoped/transient service is resolved multiple times inside one singleton factory.
+- **Shared Key and Constant Helpers**: Extracted keyed-parameter parsing and constant-value extraction into shared infrastructure so DI003, DI015, and registration/factory analysis stay aligned on keyed-service semantics.
+- **DI003 Regression Coverage**: Added guardrail tests for `TryAddSingleton` captive dependencies, open-generic constructor no-diagnostic behavior, repeated factory resolutions of the same scoped dependency, and keyed factory resolutions with a `null` key.
+
 ## [2.3.2] - 2026-03-30
 
 ### Changed

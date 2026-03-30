@@ -626,15 +626,8 @@ public sealed class RegistrationCollector
         return null;
     }
 
-    private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel)
-    {
-        var constantValue = semanticModel.GetConstantValue(expr);
-        if (constantValue.HasValue)
-        {
-            return constantValue.Value;
-        }
-        return null;
-    }
+    private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
+        SyntaxValueHelpers.TryExtractConstantValue(expr, semanticModel, out var value) ? value : null;
 
     private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, object? key) ExtractTypes(
         IMethodSymbol method,

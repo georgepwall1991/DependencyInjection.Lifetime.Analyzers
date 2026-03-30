@@ -867,4 +867,159 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     #endregion
+
+    #region TryAddSingleton Coverage
+
+    [Fact]
+    public async Task TryAddSingletonCapturingScoped_ViaConstructor_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.TryAddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(27, 9, 27, 72)
+                .WithArguments("SingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task TryAddSingletonCapturingSingleton_ViaConstructor_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection TryAddSingleton<TService, TImplementation>(this IServiceCollection services)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface ISingletonDependency { }
+            public class SingletonDependency : ISingletonDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(ISingletonDependency dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonDependency, SingletonDependency>();
+                    services.TryAddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    #endregion
+
+    #region Open Generic Constructor Coverage
+
+    [Fact]
+    public async Task OpenGenericSingletonConstructor_WithScopedParameter_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface IRepository<T> { }
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        // DI009 handles open generic captive dependencies, not DI003
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    #endregion
+
+    #region Dedup Behavior
+
+    [Fact]
+    public async Task FactoryResolvingSameScopedDependencyTwice_ReportsSingleDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService s1, IScopedService s2) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService(
+                            sp.GetRequiredService<IScopedService>(),
+                            sp.GetRequiredService<IScopedService>()));
+                }
+            }
+            """;
+
+        // One diagnostic per unique captured dependency per registration
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(19, 17, 19, 56)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    #endregion
 }

@@ -23,20 +23,17 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         public ITypeSymbol DependencyType { get; }
         public object? Key { get; }
         public bool IsKeyed { get; }
-        public int DiagnosticStart { get; }
 
         public ReportedDiagnosticKey(
             int registrationStart,
             ITypeSymbol dependencyType,
             object? key,
-            bool isKeyed,
-            int diagnosticStart)
+            bool isKeyed)
         {
             RegistrationStart = registrationStart;
             DependencyType = dependencyType;
             Key = key;
             IsKeyed = isKeyed;
-            DiagnosticStart = diagnosticStart;
         }
 
         public bool Equals(ReportedDiagnosticKey other)
@@ -44,8 +41,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             return RegistrationStart == other.RegistrationStart &&
                    SymbolEqualityComparer.Default.Equals(DependencyType, other.DependencyType) &&
                    Equals(Key, other.Key) &&
-                   IsKeyed == other.IsKeyed &&
-                   DiagnosticStart == other.DiagnosticStart;
+                   IsKeyed == other.IsKeyed;
         }
 
         public override int GetHashCode()
@@ -56,7 +52,6 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 hashCode = (hashCode * 397) ^ SymbolEqualityComparer.Default.GetHashCode(DependencyType);
                 hashCode = (hashCode * 397) ^ (Key?.GetHashCode() ?? 0);
                 hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
-                hashCode = (hashCode * 397) ^ DiagnosticStart;
                 return hashCode;
             }
         }
@@ -262,15 +257,8 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             : ExtractConstantValue(keyExpression, semanticModel);
     }
 
-    private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel)
-    {
-        var constantValue = semanticModel.GetConstantValue(expr);
-        if (constantValue.HasValue)
-        {
-            return constantValue.Value;
-        }
-        return null;
-    }
+    private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
+        SyntaxValueHelpers.TryExtractConstantValue(expr, semanticModel, out var value) ? value : null;
 
     private static ExpressionSyntax? GetInvocationArgumentExpression(
         InvocationExpressionSyntax invocation,
@@ -397,8 +385,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             registration.Location.SourceSpan.Start,
             dependencyType,
             key,
-            isKeyed,
-            location.SourceSpan.Start);
+            isKeyed);
         if (!reportedDiagnostics.Add(reportKey))
         {
             return;
@@ -429,21 +416,8 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         #pragma warning restore RS1030
     }
 
-    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
-    {
-        foreach (var attribute in parameter.GetAttributes())
-        {
-            if (attribute.AttributeClass?.Name == "FromKeyedServicesAttribute" &&
-                (attribute.AttributeClass.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection"))
-            {
-                if (attribute.ConstructorArguments.Length > 0)
-                {
-                    return (attribute.ConstructorArguments[0].Value, true);
-                }
-            }
-        }
-        return (null, false);
-    }
+    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
+        KeyedServiceHelpers.GetServiceKey(parameter);
 
     private static bool IsCaptiveDependency(ServiceLifetime consumerLifetime, ServiceLifetime dependencyLifetime)
     {
