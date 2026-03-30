@@ -162,4 +162,66 @@ public class DI006_StaticProviderCacheAnalyzerTests
     }
 
     #endregion
+
+    #region Additional Coverage
+
+    [Fact]
+    public async Task StaticField_InheritedServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyProvider : IServiceProvider { }
+
+            public class MyClass
+            {
+                private static IMyProvider _provider;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(7, 32, 7, 41)
+                .WithArguments("IMyProvider", "_provider"));
+    }
+
+    [Fact]
+    public async Task StaticProperty_InheritedServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyScopeFactory : IServiceScopeFactory { }
+
+            public class MyClass
+            {
+                public static IMyScopeFactory ScopeFactory { get; set; }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(7, 35, 7, 47)
+                .WithArguments("IMyScopeFactory", "ScopeFactory"));
+    }
+
+    [Fact]
+    public async Task StaticField_InStaticClass_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class AppServices
+            {
+                public static IServiceProvider Provider { get; set; }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(5, 36, 5, 44)
+                .WithArguments("IServiceProvider", "Provider"));
+    }
+
+    #endregion
 }

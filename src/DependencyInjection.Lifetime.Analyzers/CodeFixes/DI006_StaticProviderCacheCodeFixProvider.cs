@@ -107,6 +107,21 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
             return false;
         }
 
+        if (containingType.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+        {
+            return false;
+        }
+
+        if (!IsPrivateMember(declaration))
+        {
+            return false;
+        }
+
+        if (IsPartialType(containingType))
+        {
+            return false;
+        }
+
         foreach (var identifier in containingType.DescendantNodes().OfType<IdentifierNameSyntax>())
         {
             if (declaration.Span.Contains(identifier.Span))
@@ -147,10 +162,40 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
 
                     break;
                 }
+                case LocalFunctionStatementSyntax localFunction when localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)):
+                    return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsPrivateMember(MemberDeclarationSyntax declaration)
+    {
+        var modifiers = declaration switch
+        {
+            FieldDeclarationSyntax field => field.Modifiers,
+            PropertyDeclarationSyntax property => property.Modifiers,
+            _ => default,
+        };
+
+        if (modifiers == default)
+        {
+            return false;
+        }
+
+        // If any public/internal/protected modifier is present, the member is visible
+        // outside the type and removing static could break external references.
+        // No accessibility modifier means implicitly private (safe).
+        return !modifiers.Any(m =>
+            m.IsKind(SyntaxKind.PublicKeyword) ||
+            m.IsKind(SyntaxKind.InternalKeyword) ||
+            m.IsKind(SyntaxKind.ProtectedKeyword));
+    }
+
+    private static bool IsPartialType(TypeDeclarationSyntax typeDeclaration)
+    {
+        return typeDeclaration.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
     }
 
     private static async Task<Document> RemoveStaticFromFieldAsync(
@@ -164,8 +209,17 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
             return document;
         }
 
+        var staticToken = fieldDeclaration.Modifiers.FirstOrDefault(m => m.IsKind(SyntaxKind.StaticKeyword));
         var newModifiers = RemoveStaticModifier(fieldDeclaration.Modifiers);
+
         var newFieldDeclaration = fieldDeclaration.WithModifiers(newModifiers);
+
+        // When static was the only modifier, the declaration loses its leading trivia
+        // (indentation). Restore it from the removed static token.
+        if (!newModifiers.Any() && staticToken != default)
+        {
+            newFieldDeclaration = newFieldDeclaration.WithLeadingTrivia(staticToken.LeadingTrivia);
+        }
 
         return document.WithSyntaxRoot(root.ReplaceNode(fieldDeclaration, newFieldDeclaration));
     }
@@ -181,8 +235,15 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
             return document;
         }
 
+        var staticToken = propertyDeclaration.Modifiers.FirstOrDefault(m => m.IsKind(SyntaxKind.StaticKeyword));
         var newModifiers = RemoveStaticModifier(propertyDeclaration.Modifiers);
+
         var newPropertyDeclaration = propertyDeclaration.WithModifiers(newModifiers);
+
+        if (!newModifiers.Any() && staticToken != default)
+        {
+            newPropertyDeclaration = newPropertyDeclaration.WithLeadingTrivia(staticToken.LeadingTrivia);
+        }
 
         return document.WithSyntaxRoot(root.ReplaceNode(propertyDeclaration, newPropertyDeclaration));
     }
@@ -195,21 +256,20 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
             return modifiers;
         }
 
-        // Remove the static token
         var newModifiers = SyntaxFactory.TokenList(
             modifiers.Where(m => !m.IsKind(SyntaxKind.StaticKeyword)));
 
-        // Preserve trivia: if static was first, move its leading trivia to the next token
-        if (modifiers.Count > 1 && modifiers[0].IsKind(SyntaxKind.StaticKeyword))
+        if (!newModifiers.Any())
         {
-            var leadingTrivia = staticToken.LeadingTrivia;
-            if (newModifiers.Any())
-            {
-                var firstNewToken = newModifiers[0];
-                newModifiers = newModifiers.Replace(
-                    firstNewToken,
-                    firstNewToken.WithLeadingTrivia(leadingTrivia));
-            }
+            return newModifiers;
+        }
+
+        if (modifiers[0].IsKind(SyntaxKind.StaticKeyword))
+        {
+            var firstToken = newModifiers[0];
+            newModifiers = newModifiers.Replace(
+                firstToken,
+                firstToken.WithLeadingTrivia(staticToken.LeadingTrivia));
         }
 
         return newModifiers;
