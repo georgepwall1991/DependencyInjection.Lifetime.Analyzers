@@ -26,6 +26,7 @@ How sample diagnostics and sample-backed docs are expected to behave for this mi
 - Sample verification should consume SARIF, not console text
 - Stable matching should be based on rule ID, severity, and stable sample anchors
 - The verifier may allow explicitly approved secondary diagnostics for overlapping sample cases
+- Canonical outward-facing public diagnostic inventory should come from repo-owned diagnostic metadata/release-tracking sources, not only from sample/docs mappings
 - Public outward-facing diagnostics must stay in parity with:
   - sample directories
   - sample/docs mappings
