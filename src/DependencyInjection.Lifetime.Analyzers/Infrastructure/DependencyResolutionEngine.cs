@@ -113,6 +113,29 @@ internal sealed class DependencyResolutionEngine
                 resolutionPath);
     }
 
+    public ResolutionResult ResolveServiceRequest(
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed,
+        bool assumeFrameworkServicesRegistered)
+    {
+        var resolutionCache = new Dictionary<ServiceLookupKey, ResolutionResult>();
+        var resolutionPath = new HashSet<ServiceLookupKey>();
+        var request = new DependencyRequest(
+            dependencyType,
+            key,
+            isKeyed,
+            DependencySourceKind.ConstructorParameter,
+            Location.None,
+            FormatDependencyName(dependencyType, key, isKeyed));
+
+        return ResolveDependency(
+            request,
+            assumeFrameworkServicesRegistered,
+            resolutionCache,
+            resolutionPath);
+    }
+
     internal static string FormatDependencyName(ITypeSymbol dependencyType, object? key, bool isKeyed)
     {
         var typeName = dependencyType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);

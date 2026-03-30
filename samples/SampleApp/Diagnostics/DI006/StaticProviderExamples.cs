@@ -19,10 +19,10 @@ public static class StaticProviderExamples
         // DI006: 'IServiceProvider' should not be stored in static member 'ServiceProvider'
         public static IServiceProvider? ServiceProvider { get; set; }
 
-        public static void Initialize(IServiceProvider provider)
+        public static void Initialize(IServiceProvider provider, IServiceScopeFactory scopeFactory)
         {
             _provider = provider;
-            _scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+            _scopeFactory = scopeFactory;
             ServiceProvider = provider;
         }
 

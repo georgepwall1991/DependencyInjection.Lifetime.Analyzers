@@ -203,7 +203,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
 
                 // Check if we're inside a method
                 case MethodDeclarationSyntax methodDecl:
-                    return IsAllowedMethod(methodDecl, semanticModel, wellKnownTypes);
+                    return IsAllowedMethod(methodDecl);
 
                 // Check if we're inside a constructor
                 case ConstructorDeclarationSyntax:
@@ -253,10 +253,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsAllowedMethod(
-        MethodDeclarationSyntax methodDecl,
-        SemanticModel semanticModel,
-        WellKnownTypes wellKnownTypes)
+    private static bool IsAllowedMethod(MethodDeclarationSyntax methodDecl)
     {
         var methodName = methodDecl.Identifier.Text;
 
@@ -270,20 +267,6 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         if (methodName.StartsWith("Create") || methodName.StartsWith("Build"))
         {
             return true;
-        }
-
-        // Check if method has IServiceProvider parameter (factory delegate pattern)
-        foreach (var parameter in methodDecl.ParameterList.Parameters)
-        {
-            if (parameter.Type is not null)
-            {
-                var typeInfo = semanticModel.GetTypeInfo(parameter.Type);
-                if ((typeInfo.Type is not null && IsSystemIServiceProvider(typeInfo.Type)) ||
-                    (typeInfo.Type is not null && wellKnownTypes.IsKeyedServiceProvider(typeInfo.Type)))
-                {
-                    return true;
-                }
-            }
         }
 
         return false;

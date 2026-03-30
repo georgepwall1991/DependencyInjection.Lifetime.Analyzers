@@ -56,6 +56,8 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes)
     {
+        var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
+
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             var implementationType = registration.ImplementationType;
@@ -82,7 +84,9 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
+            var constructors = ConstructorSelection.GetLikelyActivationConstructors(
+                implementationType,
+                parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
             foreach (var constructor in constructors)
             {
@@ -106,6 +110,19 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 }
             }
         }
+    }
+
+    private static bool IsResolvableConstructorParameter(
+        IParameterSymbol parameter,
+        DependencyResolutionEngine resolutionEngine)
+    {
+        var (key, isKeyed) = GetServiceKey(parameter);
+        return resolutionEngine.ResolveServiceRequest(
+                parameter.Type,
+                key,
+                isKeyed,
+                assumeFrameworkServicesRegistered: true)
+            .IsResolvable;
     }
 
     private static void ReportDiagnostic(
@@ -156,5 +173,22 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         return type.AllInterfaces.Any(i =>
             i.Name == "IEndpointFilterFactory" &&
             i.ContainingNamespace.ToDisplayString() == "Microsoft.AspNetCore.Http");
+    }
+
+    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
+    {
+        foreach (var attribute in parameter.GetAttributes())
+        {
+            if (attribute.AttributeClass?.Name == "FromKeyedServicesAttribute" &&
+                attribute.AttributeClass.ContainingNamespace.ToDisplayString() ==
+                "Microsoft.Extensions.DependencyInjection")
+            {
+                return (attribute.ConstructorArguments.Length > 0
+                    ? attribute.ConstructorArguments[0].Value
+                    : null, true);
+            }
+        }
+
+        return (null, false);
     }
 }
