@@ -9,25 +9,13 @@ using System.Text.Json.Serialization;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
-/// <summary>
-/// Verifies sample project diagnostics by rebuilding with the analyzer attached,
-/// consuming SARIF output, and matching claimed diagnostics by stable anchors (rule ID
-/// and source-folder location). Approved secondary diagnostics for overlapping sample
-/// cases are allowed without failing the check.
-/// </summary>
 public static class SampleDiagnosticsVerifier
 {
-    // AppContext.BaseDirectory resolves to:
-    //   tests/DependencyInjection.Lifetime.Analyzers.Tests/bin/Release/net10.0/
-    // Five levels up reaches the repository root.
     private static readonly string RepoRoot =
         Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
             "..", "..", "..", "..", ".."));
 
-    /// <summary>
-    /// Verifies SampleApp diagnostics against its contract.
-    /// </summary>
     public static SampleVerificationResult VerifySampleApp()
     {
         var projectPath = Path.Combine(RepoRoot, "samples", "SampleApp", "SampleApp.csproj");
@@ -35,9 +23,6 @@ public static class SampleDiagnosticsVerifier
         return VerifyProject(projectPath, contractPath, "SampleApp");
     }
 
-    /// <summary>
-    /// Verifies DI015InAction diagnostics against its contract.
-    /// </summary>
     public static SampleVerificationResult VerifyDI015InAction()
     {
         var projectPath = Path.Combine(RepoRoot, "samples", "DI015InAction", "DI015InAction.csproj");
@@ -45,8 +30,7 @@ public static class SampleDiagnosticsVerifier
         return VerifyProject(projectPath, contractPath, "DI015InAction");
     }
 
-    private static SampleVerificationResult VerifyProject(
-        string projectPath, string contractPath, string projectName)
+    private static SampleVerificationResult VerifyProject(string projectPath, string contractPath, string projectName)
     {
         if (!File.Exists(projectPath))
             return SampleVerificationResult.Failure($"Project not found: {projectPath}");
@@ -54,7 +38,6 @@ public static class SampleDiagnosticsVerifier
         if (!File.Exists(contractPath))
             return SampleVerificationResult.Failure($"Contract file not found: {contractPath}");
 
-        // Build in temp dir to keep repo clean
         var tempDir = Path.Combine(Path.GetTempPath(), $"sample-verifier-{projectName}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
@@ -102,7 +85,7 @@ public static class SampleDiagnosticsVerifier
 
         return new BuildOutput(
             Success: process.ExitCode == 0,
-            Output: stdout + (stderr.Length > 0 ? "\n" + stderr : ""));
+            Output: stdout + (stderr.Length > 0 ? "\n" + stderr : string.Empty));
     }
 
     private static List<SarifResult> ReadSarif(string sarifPath)
@@ -110,8 +93,11 @@ public static class SampleDiagnosticsVerifier
         var json = File.ReadAllText(sarifPath);
         using var doc = JsonDocument.Parse(json);
         var results = new List<SarifResult>();
+        var index = 0;
 
-        var runs = doc.RootElement.GetProperty("runs");
+        if (!doc.RootElement.TryGetProperty("runs", out var runs))
+            return results;
+
         foreach (var run in runs.EnumerateArray())
         {
             if (!run.TryGetProperty("results", out var resultsEl))
@@ -119,34 +105,53 @@ public static class SampleDiagnosticsVerifier
 
             foreach (var result in resultsEl.EnumerateArray())
             {
-                var ruleId = result.TryGetProperty("ruleId", out var r) ? r.GetString() ?? "" : "";
-                var level = result.TryGetProperty("level", out var l) ? l.GetString() ?? "" : "";
-                var message = result.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "";
+                var ruleId = result.TryGetProperty("ruleId", out var r) ? r.GetString() ?? string.Empty : string.Empty;
+                var level = result.TryGetProperty("level", out var l) ? l.GetString() ?? string.Empty : string.Empty;
+                var message = result.TryGetProperty("message", out var m) ? ReadSarifMessage(m) : string.Empty;
 
-                string? fileUri = null;
+                string fileUri = string.Empty;
                 int startLine = 0;
 
-                if (result.TryGetProperty("locations", out var locs))
+                if (result.TryGetProperty("locations", out var locations))
                 {
-                    foreach (var loc in locs.EnumerateArray())
+                    foreach (var location in locations.EnumerateArray())
                     {
-                        if (loc.TryGetProperty("resultFile", out var rf))
+                        if (location.TryGetProperty("resultFile", out var resultFile))
                         {
-                            if (rf.TryGetProperty("uri", out var u))
-                                fileUri = u.GetString();
-                            if (rf.TryGetProperty("region", out var reg) &&
-                                reg.TryGetProperty("startLine", out var sl))
-                                startLine = sl.GetInt32();
+                            if (resultFile.TryGetProperty("uri", out var uri))
+                                fileUri = uri.GetString() ?? string.Empty;
+
+                            if (resultFile.TryGetProperty("region", out var region) &&
+                                region.TryGetProperty("startLine", out var startLineEl) &&
+                                startLineEl.TryGetInt32(out var line))
+                            {
+                                startLine = line;
+                            }
                         }
+
                         break;
                     }
                 }
 
-                results.Add(new SarifResult(ruleId, level, message, fileUri ?? "", startLine));
+                results.Add(new SarifResult(index++, ruleId, level, message, fileUri, startLine));
             }
         }
 
         return results;
+    }
+
+    private static string ReadSarifMessage(JsonElement messageElement)
+    {
+        if (messageElement.ValueKind == JsonValueKind.String)
+            return messageElement.GetString() ?? string.Empty;
+
+        if (messageElement.ValueKind == JsonValueKind.Object &&
+            messageElement.TryGetProperty("text", out var textElement))
+        {
+            return textElement.GetString() ?? string.Empty;
+        }
+
+        return messageElement.ToString();
     }
 
     private static SampleContract ReadContract(string contractPath)
@@ -156,116 +161,269 @@ public static class SampleDiagnosticsVerifier
                ?? throw new InvalidOperationException($"Failed to deserialize contract: {contractPath}");
     }
 
-    private static SampleVerificationResult VerifyContract(
+    internal static SampleVerificationResult VerifyContract(
         List<SarifResult> sarif, SampleContract contract, string projectName)
     {
         var failures = new List<string>();
 
-        // Verify folder-based claims (used by SampleApp)
-        foreach (var claim in contract.FolderClaims)
-        {
-            var folderSegment = $"/Diagnostics/{claim.Folder}/";
-            var claimedRuleId = claim.RuleId;
+        foreach (var folderClaim in contract.FolderClaims)
+            failures.AddRange(VerifyFolderClaim(sarif, folderClaim, projectName));
 
-            // Diagnostics in this folder with the claimed rule ID
-            var claimedDiagnostics = sarif
-                .Where(r => r.FileUri.Contains(folderSegment, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(r.RuleId, claimedRuleId, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+        foreach (var fileGroup in contract.FileClaims.GroupBy(c => c.FilePathContains))
+            failures.AddRange(VerifyDiagnosticClaims(sarif, fileGroup.ToList(), projectName, fileGroup.Key));
 
-            // Diagnostics in this folder with ANY rule ID at warning level
-            // (excluding approved secondary and the claimed rule itself)
-            var approvedSecondary = claim.ApprovedSecondaryRuleIds ?? [];
-            var unexpectedDiagnostics = sarif
-                .Where(r => r.FileUri.Contains(folderSegment, StringComparison.OrdinalIgnoreCase)
-                            && r.Level == "warning"
-                            && !string.Equals(r.RuleId, claimedRuleId, StringComparison.OrdinalIgnoreCase)
-                            && !approvedSecondary.Contains(r.RuleId, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-
-            if (claim.ExpectedCount.HasValue)
-            {
-                if (claimedDiagnostics.Count != claim.ExpectedCount.Value)
-                {
-                    failures.Add(
-                        $"[{projectName}/{claim.Folder}] Expected {claim.ExpectedCount.Value} " +
-                        $"{claimedRuleId} diagnostic(s), observed {claimedDiagnostics.Count}." +
-                        (claimedDiagnostics.Count == 0
-                            ? $" No {claimedRuleId} diagnostics found in Diagnostics/{claim.Folder}/."
-                            : $" Observed: {string.Join("; ", claimedDiagnostics.Select(d => $"line {d.StartLine}"))}"));
-                }
-            }
-            else if (claimedDiagnostics.Count == 0)
-            {
-                failures.Add(
-                    $"[{projectName}/{claim.Folder}] Expected at least one {claimedRuleId} diagnostic " +
-                    $"in Diagnostics/{claim.Folder}/ but none were observed.");
-            }
-
-            foreach (var unexpected in unexpectedDiagnostics)
-            {
-                failures.Add(
-                    $"[{projectName}/{claim.Folder}] Unexpected {unexpected.RuleId} ({unexpected.Level}) " +
-                    $"diagnostic in Diagnostics/{claim.Folder}/ at line {unexpected.StartLine}. " +
-                    $"If this is intentional, add '{unexpected.RuleId}' to approvedSecondaryRuleIds for this folder claim.");
-            }
-        }
-
-        // Verify file-based claims (used by DI015InAction or precise matches)
-        foreach (var claim in contract.FileClaims)
-        {
-            var matchingResults = sarif
-                .Where(r => r.FileUri.Contains(claim.FilePathContains, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(r.RuleId, claim.RuleId, StringComparison.OrdinalIgnoreCase)
-                            && (claim.MessageContains == null ||
-                                r.Message.Contains(claim.MessageContains, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            if (matchingResults.Count == 0)
-            {
-                failures.Add(
-                    $"[{projectName}] Expected {claim.RuleId} diagnostic in file matching '{claim.FilePathContains}'" +
-                    (claim.MessageContains != null ? $" with message containing '{claim.MessageContains}'" : "") +
-                    " but none were observed. This claim may be stale.");
-            }
-        }
-
-        // Verify absence claims (sections that should stay clean for a specific rule)
         foreach (var absence in contract.AbsenceClaims)
-        {
-            var unexpectedDiagnostics = sarif
-                .Where(r => r.FileUri.Contains(absence.FilePathContains, StringComparison.OrdinalIgnoreCase)
-                            && string.Equals(r.RuleId, absence.RuleId, StringComparison.OrdinalIgnoreCase)
-                            && (absence.MessageContains == null ||
-                                r.Message.Contains(absence.MessageContains, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            if (unexpectedDiagnostics.Count > 0)
-            {
-                foreach (var d in unexpectedDiagnostics)
-                {
-                    failures.Add(
-                        $"[{projectName}] Unexpected {absence.RuleId} diagnostic found in '{absence.FilePathContains}' " +
-                        (absence.MessageContains != null ? $"with message containing '{absence.MessageContains}' " : "") +
-                        $"at line {d.StartLine}: \"{d.Message}\". " +
-                        $"This section should be clean for {absence.RuleId}.");
-                }
-            }
-        }
+            failures.AddRange(VerifyAbsenceClaim(sarif, absence, projectName));
 
         if (failures.Count == 0)
-            return SampleVerificationResult.Ok(
-                $"{projectName} verification passed ({sarif.Count} total SARIF results).");
+            return SampleVerificationResult.Ok($"{projectName} verification passed ({sarif.Count} total SARIF results).");
 
         var sb = new StringBuilder();
         sb.AppendLine($"{projectName} verification FAILED ({failures.Count} issue(s)):");
-        foreach (var f in failures)
-        {
-            sb.AppendLine($"  - {f}");
-        }
+        foreach (var failure in failures)
+            sb.AppendLine($"  - {failure}");
 
         return SampleVerificationResult.Failure(sb.ToString());
     }
+
+    private static List<string> VerifyFolderClaim(
+        List<SarifResult> sarif, FolderClaim folderClaim, string projectName)
+    {
+        var folderSegment = $"/Diagnostics/{folderClaim.Folder}/";
+        var folderResults = sarif
+            .Where(r => PathMatches(r.FileUri, folderSegment))
+            .ToList();
+
+        var failures = new List<string>();
+        var matched = new HashSet<int>();
+        var allowedSignatures = new HashSet<(string RuleId, string Severity)>(StringTupleComparer.OrdinalIgnoreCase);
+
+        foreach (var claim in folderClaim.Claims)
+        {
+            allowedSignatures.Add((claim.RuleId, claim.Severity));
+            MatchAndRecordClaim(
+                folderResults,
+                claim,
+                projectName,
+                folderClaim.Folder,
+                matched,
+                failures);
+        }
+
+        foreach (var secondary in folderClaim.ApprovedSecondaryDiagnostics)
+        {
+            allowedSignatures.Add((secondary.RuleId, secondary.Severity));
+            MatchAndRecordClaim(
+                folderResults,
+                secondary,
+                projectName,
+                folderClaim.Folder,
+                matched,
+                failures,
+                isSecondary: true);
+        }
+
+        foreach (var result in folderResults)
+        {
+            if (!allowedSignatures.Contains((result.RuleId, result.Level)))
+                continue;
+
+            if (!matched.Contains(result.Index))
+            {
+                failures.Add(
+                    $"[{projectName}/{folderClaim.Folder}] Unexpected {FormatDiagnostic(result)}. " +
+                    $"This diagnostic is not bound to an approved claim anchor.");
+            }
+        }
+
+        return failures;
+    }
+
+    private static List<string> VerifyDiagnosticClaims(
+        List<SarifResult> sarif,
+        IReadOnlyList<DiagnosticClaim> claims,
+        string projectName,
+        string scopeLabel)
+    {
+        var failures = new List<string>();
+        var matched = new HashSet<int>();
+
+        foreach (var claim in claims)
+        {
+            MatchAndRecordClaim(
+                sarif,
+                claim,
+                projectName,
+                scopeLabel,
+                matched,
+                failures);
+        }
+
+        foreach (var result in sarif.Where(r => claims.Any(c => MatchesClaimSignature(r, c))))
+        {
+            if (!matched.Contains(result.Index))
+            {
+                failures.Add(
+                    $"[{projectName}/{scopeLabel}] Unexpected {FormatDiagnostic(result)}. " +
+                    $"This diagnostic is not bound to an approved claim anchor.");
+            }
+        }
+
+        return failures;
+    }
+
+    private static void MatchAndRecordClaim(
+        List<SarifResult> results,
+        DiagnosticClaim claim,
+        string projectName,
+        string scopeLabel,
+        HashSet<int> matched,
+        List<string> failures,
+        bool isSecondary = false)
+    {
+        var scope = $"[{projectName}/{scopeLabel}]";
+        var sameRuleResults = results
+            .Where(result =>
+                PathMatches(result.FileUri, claim.FilePathContains) &&
+                string.Equals(result.RuleId, claim.RuleId, StringComparison.OrdinalIgnoreCase) &&
+                (claim.MessageContains is null ||
+                 result.Message.Contains(claim.MessageContains, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        var sameSeverityResults = sameRuleResults
+            .Where(result => string.Equals(result.Level, claim.Severity, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var sourcePath = ResolveSourcePath(results, claim);
+        if (sourcePath is null)
+        {
+            failures.Add(
+                $"{scope} Stale claim anchored at '{claim.Anchor}' expected {claim.RuleId} ({claim.Severity}) " +
+                $"in '{claim.FilePathContains}', but the source file could not be resolved.");
+            return;
+        }
+
+        int anchorLine;
+        try
+        {
+            anchorLine = FindAnchorLine(sourcePath, claim.Anchor, claim.Occurrence);
+        }
+        catch (Exception ex)
+        {
+            failures.Add(
+                $"{scope} Stale claim anchored at '{claim.Anchor}' expected {claim.RuleId} ({claim.Severity}) " +
+                $"in '{claim.FilePathContains}', but the anchor could not be found: {ex.Message}");
+            return;
+        }
+
+        var exactMatch = sameSeverityResults.FirstOrDefault(result => result.StartLine == anchorLine);
+        if (exactMatch is null)
+        {
+            var observed = sameRuleResults.Count == 0
+                ? "none"
+                : string.Join("; ", sameRuleResults.Select(FormatDiagnostic));
+
+            var prefix = isSecondary ? "Approved secondary claim" : "Stale claim";
+            failures.Add(
+                $"{scope} {prefix} anchored at '{claim.Anchor}' expected {claim.RuleId} ({claim.Severity}) " +
+                $"at line {anchorLine}, but observed {observed}.");
+            return;
+        }
+
+        matched.Add(exactMatch.Index);
+    }
+
+    private static List<string> VerifyAbsenceClaim(
+        List<SarifResult> sarif, AbsenceClaim absence, string projectName)
+    {
+        var unexpectedDiagnostics = sarif
+            .Where(r =>
+                PathMatches(r.FileUri, absence.FilePathContains) &&
+                string.Equals(r.RuleId, absence.RuleId, StringComparison.OrdinalIgnoreCase) &&
+                (absence.MessageContains is null ||
+                 r.Message.Contains(absence.MessageContains, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (unexpectedDiagnostics.Count == 0)
+            return [];
+
+        return unexpectedDiagnostics
+            .Select(d =>
+                $"[{projectName}] Unexpected {absence.RuleId} diagnostic in '{absence.FilePathContains}' " +
+                (absence.MessageContains is null ? string.Empty : $"with message containing '{absence.MessageContains}' ") +
+                $"at line {d.StartLine}: \"{d.Message}\". This section should be clean for {absence.RuleId}.")
+            .ToList();
+    }
+
+    private static bool MatchesClaimBasics(SarifResult result, DiagnosticClaim claim) =>
+        PathMatches(result.FileUri, claim.FilePathContains) &&
+        string.Equals(result.RuleId, claim.RuleId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(result.Level, claim.Severity, StringComparison.OrdinalIgnoreCase) &&
+        (claim.MessageContains is null ||
+         result.Message.Contains(claim.MessageContains, StringComparison.OrdinalIgnoreCase));
+
+    private static bool MatchesClaimSignature(SarifResult result, DiagnosticClaim claim) =>
+        PathMatches(result.FileUri, claim.FilePathContains) &&
+        string.Equals(result.RuleId, claim.RuleId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(result.Level, claim.Severity, StringComparison.OrdinalIgnoreCase);
+
+    private static string? ResolveSourcePath(IEnumerable<SarifResult> results, DiagnosticClaim claim)
+    {
+        var candidate = results
+            .Select(r => GetLocalPath(r.FileUri))
+            .FirstOrDefault(path => PathMatches(path, claim.FilePathContains));
+
+        if (!string.IsNullOrWhiteSpace(candidate))
+            return candidate;
+
+        var samplesRoot = Path.Combine(RepoRoot, "samples");
+        if (!Directory.Exists(samplesRoot))
+            return null;
+
+        return Directory
+            .EnumerateFiles(samplesRoot, "*.cs", SearchOption.AllDirectories)
+            .FirstOrDefault(path => PathMatches(path, claim.FilePathContains));
+    }
+
+    private static int FindAnchorLine(string sourcePath, string anchor, int occurrence)
+    {
+        if (occurrence < 1)
+            throw new InvalidOperationException($"Invalid anchor occurrence '{occurrence}'.");
+
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException($"Source file not found: {sourcePath}");
+
+        var lines = File.ReadAllLines(sourcePath);
+        var matches = lines
+            .Select((line, index) => new { Line = line, Index = index })
+            .Where(x => x.Line.Contains(anchor, StringComparison.Ordinal))
+            .ToList();
+
+        if (matches.Count < occurrence)
+            throw new InvalidOperationException($"Anchor '{anchor}' was found {matches.Count} time(s) in '{sourcePath}'.");
+
+        return matches[occurrence - 1].Index + 1;
+    }
+
+    private static bool PathMatches(string? candidatePath, string pathContains)
+    {
+        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(pathContains))
+            return false;
+
+        var normalizedCandidate = GetLocalPath(candidatePath).Replace('\\', '/');
+        var normalizedNeedle = pathContains.Replace('\\', '/');
+        return normalizedCandidate.Contains(normalizedNeedle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetLocalPath(string fileUri)
+    {
+        if (Uri.TryCreate(fileUri, UriKind.Absolute, out var uri) && uri.IsFile)
+            return uri.LocalPath;
+
+        return fileUri;
+    }
+
+    private static string FormatDiagnostic(SarifResult diagnostic) =>
+        $"{diagnostic.RuleId} ({diagnostic.Level}) at line {diagnostic.StartLine}: \"{diagnostic.Message}\"";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -277,9 +435,6 @@ public static class SampleDiagnosticsVerifier
     private sealed record BuildOutput(bool Success, string Output);
 }
 
-/// <summary>
-/// The result of a sample verification run.
-/// </summary>
 public sealed class SampleVerificationResult
 {
     public bool IsSuccess { get; }
@@ -297,108 +452,84 @@ public sealed class SampleVerificationResult
     public override string ToString() => Message;
 }
 
-/// <summary>
-/// A SARIF result entry extracted from the build output.
-/// </summary>
 internal sealed record SarifResult(
+    int Index,
     string RuleId,
     string Level,
     string Message,
     string FileUri,
     int StartLine);
 
-/// <summary>
-/// Contract for a sample project's expected diagnostics.
-/// </summary>
 internal sealed class SampleContract
 {
-    /// <summary>
-    /// Folder-based claims: for each Diagnostics/{Folder}/ directory, assert that
-    /// the claimed rule ID appears the expected number of times, and no other
-    /// unexpected warning-level DI diagnostics appear.
-    /// </summary>
     [JsonPropertyName("folderClaims")]
     public List<FolderClaim> FolderClaims { get; set; } = [];
 
-    /// <summary>
-    /// File-based claims: assert that a specific diagnostic appears in a given file
-    /// (matched by path substring) with an optional message filter.
-    /// </summary>
     [JsonPropertyName("fileClaims")]
-    public List<FileClaim> FileClaims { get; set; } = [];
+    public List<DiagnosticClaim> FileClaims { get; set; } = [];
 
-    /// <summary>
-    /// Absence claims: assert that a specific rule ID does NOT appear in a given file.
-    /// Used to verify "fixed" configurations stay clean.
-    /// </summary>
     [JsonPropertyName("absenceClaims")]
     public List<AbsenceClaim> AbsenceClaims { get; set; } = [];
 }
 
-/// <summary>
-/// A folder-level claim: the claimed rule should appear in Diagnostics/{Folder}/*.
-/// </summary>
 internal sealed class FolderClaim
 {
-    /// <summary>Subfolder name under Diagnostics/ (e.g. "DI001").</summary>
     [JsonPropertyName("folder")]
-    public string Folder { get; set; } = "";
+    public string Folder { get; set; } = string.Empty;
 
-    /// <summary>Rule ID expected to appear in this folder (e.g. "DI001").</summary>
     [JsonPropertyName("ruleId")]
-    public string RuleId { get; set; } = "";
+    public string RuleId { get; set; } = string.Empty;
 
-    /// <summary>
-    /// Exact number of diagnostics expected. If null, at least one is required.
-    /// </summary>
-    [JsonPropertyName("expectedCount")]
-    public int? ExpectedCount { get; set; }
+    [JsonPropertyName("claims")]
+    public List<DiagnosticClaim> Claims { get; set; } = [];
 
-    /// <summary>
-    /// Rule IDs that are approved to appear in this folder without failing the check.
-    /// Useful when one sample illustrates multiple overlapping rules.
-    /// </summary>
-    [JsonPropertyName("approvedSecondaryRuleIds")]
-    public List<string>? ApprovedSecondaryRuleIds { get; set; }
+    [JsonPropertyName("approvedSecondaryDiagnostics")]
+    public List<DiagnosticClaim> ApprovedSecondaryDiagnostics { get; set; } = [];
 }
 
-/// <summary>
-/// A file-level presence claim: the rule must appear in the given file.
-/// </summary>
-internal sealed class FileClaim
+internal sealed class DiagnosticClaim
 {
-    /// <summary>Substring of the file path to match (e.g. "Program.cs").</summary>
     [JsonPropertyName("filePathContains")]
-    public string FilePathContains { get; set; } = "";
+    public string FilePathContains { get; set; } = string.Empty;
 
-    /// <summary>Rule ID that must appear (e.g. "DI015").</summary>
+    [JsonPropertyName("anchor")]
+    public string Anchor { get; set; } = string.Empty;
+
     [JsonPropertyName("ruleId")]
-    public string RuleId { get; set; } = "";
+    public string RuleId { get; set; } = string.Empty;
 
-    /// <summary>Optional substring the diagnostic message must contain.</summary>
+    [JsonPropertyName("severity")]
+    public string Severity { get; set; } = string.Empty;
+
+    [JsonPropertyName("occurrence")]
+    public int Occurrence { get; set; } = 1;
+
     [JsonPropertyName("messageContains")]
     public string? MessageContains { get; set; }
 }
 
-/// <summary>
-/// An absence claim: the rule must NOT appear in files matching the path filter.
-/// An optional message filter further narrows which diagnostics are checked.
-/// </summary>
 internal sealed class AbsenceClaim
 {
-    /// <summary>Substring of the file path to match.</summary>
     [JsonPropertyName("filePathContains")]
-    public string FilePathContains { get; set; } = "";
+    public string FilePathContains { get; set; } = string.Empty;
 
-    /// <summary>Rule ID that must not appear.</summary>
     [JsonPropertyName("ruleId")]
-    public string RuleId { get; set; } = "";
+    public string RuleId { get; set; } = string.Empty;
 
-    /// <summary>
-    /// Optional substring the diagnostic message must contain for the absence
-    /// to apply. If null, all diagnostics with the rule ID in the matched file
-    /// are checked.
-    /// </summary>
     [JsonPropertyName("messageContains")]
     public string? MessageContains { get; set; }
+}
+
+internal sealed class StringTupleComparer : IEqualityComparer<(string RuleId, string Severity)>
+{
+    public static readonly StringTupleComparer OrdinalIgnoreCase = new();
+
+    public bool Equals((string RuleId, string Severity) x, (string RuleId, string Severity) y) =>
+        string.Equals(x.RuleId, y.RuleId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(x.Severity, y.Severity, StringComparison.OrdinalIgnoreCase);
+
+    public int GetHashCode((string RuleId, string Severity) obj) =>
+        HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.RuleId ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Severity ?? string.Empty));
 }
