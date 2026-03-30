@@ -1,0 +1,88 @@
+{
+  "folderClaims": [
+    {
+      "folder": "DI001",
+      "ruleId": "DI001",
+      "expectedCount": 1
+    },
+    {
+      "folder": "DI002",
+      "ruleId": "DI002",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI003",
+      "ruleId": "DI003",
+      "expectedCount": 3
+    },
+    {
+      "folder": "DI004",
+      "ruleId": "DI004",
+      "expectedCount": 3
+    },
+    {
+      "folder": "DI005",
+      "ruleId": "DI005",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI006",
+      "ruleId": "DI006",
+      "expectedCount": 3
+    },
+    {
+      "folder": "DI007",
+      "ruleId": "DI007",
+      "expectedCount": 2,
+      "approvedSecondaryRuleIds": ["DI011"],
+      "_comment": "DI007 is reported at note level (suggestion). Two DI007 notes appear in this sample. The service locator classes also trigger DI011 warnings, which are approved secondary diagnostics."
+    },
+    {
+      "folder": "DI008",
+      "ruleId": "DI008",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI009",
+      "ruleId": "DI009",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI010",
+      "ruleId": "DI010",
+      "expectedCount": 1
+    },
+    {
+      "folder": "DI011",
+      "ruleId": "DI011",
+      "expectedCount": 1
+    },
+    {
+      "folder": "DI012",
+      "ruleId": "DI012",
+      "expectedCount": 1
+    },
+    {
+      "folder": "DI013",
+      "ruleId": "DI013",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI014",
+      "ruleId": "DI014",
+      "expectedCount": 1
+    },
+    {
+      "folder": "DI015",
+      "ruleId": "DI015",
+      "expectedCount": 2
+    },
+    {
+      "folder": "DI016",
+      "ruleId": "DI016",
+      "expectedCount": 2
+    }
+  ],
+  "fileClaims": [],
+  "absenceClaims": []
+}

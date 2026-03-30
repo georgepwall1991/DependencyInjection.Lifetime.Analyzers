@@ -1,0 +1,27 @@
+{
+  "folderClaims": [],
+  "fileClaims": [
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "BrokenInvoiceScheduler"
+    },
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "BrokenKeyedNotificationRunner"
+    }
+  ],
+  "absenceClaims": [
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "FixedInvoiceScheduler"
+    },
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "FixedKeyedNotificationRunner"
+    }
+  ]
+}
