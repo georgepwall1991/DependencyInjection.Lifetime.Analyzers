@@ -27,6 +27,8 @@ For the latest full rule content, see:
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
+| [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
+| [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 
 ---
 
@@ -603,3 +605,63 @@ DI016 is intentionally conservative to reduce false positives:
 
 - It only reports symbol-confirmed DI `BuildServiceProvider()` calls in registration contexts.
 - It does not report provider-factory methods that intentionally return `IServiceProvider`.
+
+---
+
+## DI017: Circular Dependency
+
+**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops.
+
+**Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
+
+> **Explain Like I'm Ten:** If two people each wait for the other to hand over the key first, the door never opens.
+
+**Problem:**
+
+```csharp
+services.AddScoped<IOrderService, OrderService>();
+services.AddScoped<IPaymentService, PaymentService>();
+
+public sealed class OrderService : IOrderService
+{
+    public OrderService(IPaymentService payment) { }
+}
+
+public sealed class PaymentService : IPaymentService
+{
+    public PaymentService(IOrderService order) { }
+}
+```
+
+**Better pattern:** break the cycle by moving shared logic into a third collaborator or by changing the dependency direction so each service has an acyclic constructor graph.
+
+**Code Fix:** No. Breaking dependency cycles is a design change.
+
+---
+
+## DI018: Non-Instantiable Implementation Type
+
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or types without accessible constructors.
+
+**Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
+
+> **Explain Like I'm Ten:** Writing a ghost on the class register does not mean someone can actually show up for class.
+
+**Problem:**
+
+```csharp
+public interface IMyService { }
+public abstract class BadAbstractService : IMyService { }
+
+services.AddSingleton<IMyService, BadAbstractService>();
+```
+
+**Better pattern:**
+
+```csharp
+public sealed class GoodConcreteService : IMyService { }
+
+services.AddSingleton<IMyService, GoodConcreteService>();
+```
+
+**Code Fix:** No.

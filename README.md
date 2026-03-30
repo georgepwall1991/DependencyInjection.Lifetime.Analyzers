@@ -4,9 +4,9 @@
 
 # DependencyInjection.Lifetime.Analyzers
 
-**A Roslyn dependency injection analyzer/analyser package for C# and ASP.NET Core lifetime bugs.**
+**A Roslyn dependency injection analyzer/analyser package for C# and ASP.NET Core lifetime and activation bugs.**
 
-Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, and unresolvable services at compile time with zero runtime overhead.
+Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, circular dependencies, and unresolvable or non-instantiable services at compile time with zero runtime overhead.
 
 [![NuGet](https://img.shields.io/nuget/v/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
@@ -20,7 +20,7 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, and
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
 - Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 16 focused diagnostics, with code fixes where safe and unambiguous.
+- Ships 18 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
@@ -39,6 +39,7 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 - Find captive dependencies before they become stale-state or thread-safety bugs.
 - Catch scope leaks before they become `ObjectDisposedException` incidents or memory leaks.
 - Detect missing registrations and implementation mismatches before startup or background-job activation fails in production.
+- Catch circular dependency chains and non-instantiable registrations before they fail at runtime.
 - Push DI architecture rules into CI instead of relying on code review memory.
 
 ## Quickstart
@@ -99,7 +100,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Scope disposal and leaks | `DI001`, `DI004`, `DI005`, `DI014` |
 | Lifetime mismatches | `DI003`, `DI009` |
 | Service location and architectural drift | `DI006`, `DI007`, `DI011` |
-| Registration correctness | `DI012`, `DI013`, `DI015`, `DI016` |
+| Registration correctness and activation validity | `DI012`, `DI013`, `DI015`, `DI016`, `DI018` |
+| Dependency graph correctness | `DI017` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -126,6 +128,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI014: Root Service Provider Not Disposed](#di014-root-service-provider-not-disposed)
 - [DI015: Unresolvable Dependency](#di015-unresolvable-dependency)
 - [DI016: BuildServiceProvider Misuse](#di016-buildserviceprovider-misuse)
+- [DI017: Circular Dependency](#di017-circular-dependency)
+- [DI018: Non-Instantiable Implementation Type](#di018-non-instantiable-implementation-type)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -150,6 +154,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
+| [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
+| [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 
 ---
 
@@ -729,9 +735,69 @@ DI016 is intentionally conservative to reduce false positives:
 
 ---
 
+## DI017: Circular Dependency
+
+**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops.
+
+**Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
+
+> **Explain Like I'm Ten:** If two people each wait for the other to hand over the key first, the door never opens.
+
+**Problem:**
+
+```csharp
+services.AddScoped<IOrderService, OrderService>();
+services.AddScoped<IPaymentService, PaymentService>();
+
+public sealed class OrderService : IOrderService
+{
+    public OrderService(IPaymentService payment) { }
+}
+
+public sealed class PaymentService : IPaymentService
+{
+    public PaymentService(IOrderService order) { }
+}
+```
+
+**Better pattern:** break the cycle by moving shared logic into a third collaborator or by changing the dependency direction so each service has an acyclic constructor graph.
+
+**Code Fix:** No. Breaking dependency cycles is a design change.
+
+---
+
+## DI018: Non-Instantiable Implementation Type
+
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or types without accessible constructors.
+
+**Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
+
+> **Explain Like I'm Ten:** Writing a ghost on the class register does not mean someone can actually show up for class.
+
+**Problem:**
+
+```csharp
+public interface IMyService { }
+public abstract class BadAbstractService : IMyService { }
+
+services.AddSingleton<IMyService, BadAbstractService>();
+```
+
+**Better pattern:**
+
+```csharp
+public sealed class GoodConcreteService : IMyService { }
+
+services.AddSingleton<IMyService, GoodConcreteService>();
+```
+
+**Code Fix:** No.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI016`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI018`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration
