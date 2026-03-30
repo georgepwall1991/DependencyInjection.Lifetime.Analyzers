@@ -58,7 +58,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         var registrationsByServiceType = OrderedRegistrationOrdering.SortBySourceLocation(
                 registrationCollector.OrderedRegistrations)
             .GroupBy(
-                r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed),
+                r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed, r.FlowKey),
                 RegistrationGroupKeyComparer.Instance)
             .Where(g => g.Count() > 1)
             .ToList();
@@ -144,19 +144,22 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         public INamedTypeSymbol ServiceType { get; }
         public object? Key { get; }
         public bool IsKeyed { get; }
+        public string? FlowKey { get; }
 
-        public RegistrationGroupKey(INamedTypeSymbol serviceType, object? key, bool isKeyed)
+        public RegistrationGroupKey(INamedTypeSymbol serviceType, object? key, bool isKeyed, string? flowKey)
         {
             ServiceType = serviceType;
             Key = key;
             IsKeyed = isKeyed;
+            FlowKey = flowKey;
         }
 
         public bool Equals(RegistrationGroupKey other)
         {
             return SymbolEqualityComparer.Default.Equals(ServiceType, other.ServiceType)
                    && Equals(Key, other.Key)
-                   && IsKeyed == other.IsKeyed;
+                   && IsKeyed == other.IsKeyed
+                   && string.Equals(FlowKey, other.FlowKey, System.StringComparison.Ordinal);
         }
 
         public override bool Equals(object? obj) => obj is RegistrationGroupKey other && Equals(other);
@@ -168,6 +171,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 var hash = SymbolEqualityComparer.Default.GetHashCode(ServiceType);
                 hash = (hash * 397) ^ (Key?.GetHashCode() ?? 0);
                 hash = (hash * 397) ^ IsKeyed.GetHashCode();
+                hash = (hash * 397) ^ (FlowKey is null ? 0 : System.StringComparer.Ordinal.GetHashCode(FlowKey));
                 return hash;
             }
         }

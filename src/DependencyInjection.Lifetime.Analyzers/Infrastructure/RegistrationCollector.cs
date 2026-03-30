@@ -230,12 +230,14 @@ public sealed class RegistrationCollector
 
         // Always track ordered registrations (for DI012 analysis)
         var order = Interlocked.Increment(ref _registrationOrder);
+        var flowKey = ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(invocation, semanticModel);
         var orderedRegistration = new OrderedRegistration(
             serviceType,
             key,
             isKeyed,
             lifetime.Value,
             invocation.GetLocation(),
+            flowKey,
             order,
             isTryAdd,
             methodName);

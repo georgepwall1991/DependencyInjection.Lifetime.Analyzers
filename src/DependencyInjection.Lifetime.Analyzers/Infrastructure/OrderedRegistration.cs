@@ -24,6 +24,12 @@ public sealed class OrderedRegistration
     public Location Location { get; }
 
     /// <summary>
+    /// Gets the analyzed service-collection flow key for this registration.
+    /// Registrations on different flows should not cross-trigger DI012.
+    /// </summary>
+    public string? FlowKey { get; }
+
+    /// <summary>
     /// Gets the order in which this registration was encountered (0-based).
     /// </summary>
     public int Order { get; }
@@ -57,6 +63,7 @@ public sealed class OrderedRegistration
         bool isKeyed,
         ServiceLifetime lifetime,
         Location location,
+        string? flowKey,
         int order,
         bool isTryAdd,
         string methodName)
@@ -66,6 +73,7 @@ public sealed class OrderedRegistration
         IsKeyed = isKeyed;
         Lifetime = lifetime;
         Location = location;
+        FlowKey = flowKey;
         Order = order;
         IsTryAdd = isTryAdd;
         MethodName = methodName;

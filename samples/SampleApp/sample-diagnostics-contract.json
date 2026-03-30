@@ -356,20 +356,7 @@
           "severity": "warning"
         }
       ],
-      "approvedSecondaryDiagnostics": [
-        {
-          "filePathContains": "DI009/OpenGenericExamples.cs",
-          "anchor": "services.AddSingleton<ISingletonService, SingletonService>();",
-          "ruleId": "DI012b",
-          "severity": "note"
-        },
-        {
-          "filePathContains": "DI009/OpenGenericExamples.cs",
-          "anchor": "services.AddScoped<IScopedService, ScopedService>();",
-          "ruleId": "DI012b",
-          "severity": "note"
-        }
-      ]
+      "approvedSecondaryDiagnostics": []
     },
     {
       "folder": "DI010",
