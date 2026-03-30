@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-03-30
+
+### Added
+
+- **DI017 Circular Dependency Detection**: New diagnostic that detects direct, transitive, and self-referential circular dependencies in constructor injection chains. Uses keyed-service-aware resolution with memoized graph traversal for performance. Conservative by design — skips factory registrations, optional parameters, and `IEnumerable<T>` dependencies to avoid false positives. Reports deterministically on the lexicographically smallest service type in each cycle.
+- **DI018 Non-Instantiable Implementation Detection**: New diagnostic that catches implementation types the DI container cannot construct — abstract classes, interfaces, static classes, and types with no public constructors. Skips factory registrations where the factory handles construction. Catches registration mistakes that would otherwise surface as runtime `InvalidOperationException`.
+- **Sample Parity Enforcement**: New contract tests that enforce every public diagnostic ID has sample coverage with concrete claim anchors, all contract folder claims reference existing sample directories, and all claimed diagnostic IDs exist in the public inventory.
+- **Cross-Rule Interaction Tests**: New test suite validating expected multi-rule behavior — DI007+DI011, DI003+DI015, DI008+DI012b, and DI010+DI011 interactions on shared source.
+- **Performance Regression Gate**: Deterministic stress tests with 200-service registration sets, diamond dependency patterns, and large-scale cycle detection. Memoized cycle detection prevents exponential blowup on acyclic graphs.
+
+### Changed
+
+- **DI012 Accuracy**: Wrapper flow ordering restored for invoked helper methods so TryAdd-after-Add detection correctly follows service collection parameters across method boundaries.
+- **DI011 Precision**: Provider heuristics narrowed to honor selected constructors and reduce service-locator escape hatches, keeping diagnostics focused on real DI misuse.
+- **DI012 Flow Scoping**: Duplicate registration analysis scoped to service-collection flows to prevent cross-wrapper false positives.
+- **Sample Verification Hardening**: SARIF-based contract verification tightened with approved secondary diagnostic allowlisting, public diagnostic parity checks, and sample/docs freshness gate integration.
+
 ## [2.2.2] - 2026-03-17
 
 ### Changed

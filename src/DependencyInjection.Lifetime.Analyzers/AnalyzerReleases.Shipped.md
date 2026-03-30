@@ -42,6 +42,14 @@ Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI016 | DependencyInjection | Warning | Avoid BuildServiceProvider() while composing service registrations (duplicate container risk)
 
+## Release 2.3.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI017 | DependencyInjection | Warning | Circular dependency detected in constructor injection chain
+DI018 | DependencyInjection | Warning | Non-instantiable implementation type (abstract, interface, static, no public constructors)
+
 ## Release 2.1.2
 
 ### Changed Rules
