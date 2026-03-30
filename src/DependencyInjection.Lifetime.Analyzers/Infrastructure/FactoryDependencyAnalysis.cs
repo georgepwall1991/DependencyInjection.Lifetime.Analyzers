@@ -282,13 +282,11 @@ internal static class FactoryDependencyAnalysis
             return false;
         }
 
-        var constantValue = semanticModel.GetConstantValue(keyExpression);
-        if (!constantValue.HasValue)
+        if (!SyntaxValueHelpers.TryExtractConstantValue(keyExpression, semanticModel, out key))
         {
             return false;
         }
 
-        key = constantValue.Value;
         return true;
     }
 

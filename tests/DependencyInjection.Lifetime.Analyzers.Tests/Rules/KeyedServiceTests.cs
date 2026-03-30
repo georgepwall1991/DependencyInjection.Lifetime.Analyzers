@@ -239,6 +239,33 @@ public class KeyedServiceTests
     }
 
     [Fact]
+    public async Task NullKey_CaptiveDependency_ViaFactory_ReportsDiagnostic()
+    {
+        // Regression test: GetRequiredKeyedService<T>(null) inside a singleton factory
+        // must still be analyzed — null is a valid keyed identity, not "unknown key".
+        var source = Usings + """
+            public interface IService { }
+            public class Service : IService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IService, Service>(null);
+                    services.AddSingleton<IService>(sp => sp.GetRequiredKeyedService<IService>(null));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(36, 47, 36, 89)
+                .WithArguments("IService", "scoped", "IService"));
+    }
+
+    [Fact]
     public async Task EnumKey_CaptiveDependency_Detected()
     {
         var source = Usings + """
