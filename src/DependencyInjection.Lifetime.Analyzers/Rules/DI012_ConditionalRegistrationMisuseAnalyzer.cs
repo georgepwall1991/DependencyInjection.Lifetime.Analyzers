@@ -55,7 +55,8 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         RegistrationCollector registrationCollector)
     {
         // Group registrations by service type and key (keyed services should be treated independently)
-        var registrationsByServiceType = registrationCollector.OrderedRegistrations
+        var registrationsByServiceType = OrderedRegistrationOrdering.SortBySourceLocation(
+                registrationCollector.OrderedRegistrations)
             .GroupBy(
                 r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed),
                 RegistrationGroupKeyComparer.Instance)

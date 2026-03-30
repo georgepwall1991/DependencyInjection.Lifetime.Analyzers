@@ -1,43 +1,22 @@
 {
   "milestone": "sample-truth",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "assertionsSummary": {
-    "total": 11,
-    "passed": 10,
-    "failed": 1,
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
     "blocked": 0
   },
   "passedAssertions": [
-    "VAL-SAMPLES-001",
-    "VAL-SAMPLES-002",
-    "VAL-SAMPLES-003",
-    "VAL-SAMPLES-004",
-    "VAL-SAMPLES-005",
-    "VAL-CROSS-001",
-    "VAL-CROSS-006",
-    "VAL-WORKFLOW-001",
-    "VAL-WORKFLOW-002",
-    "VAL-CROSS-002"
+    "VAL-WORKFLOW-003"
   ],
-  "failedAssertions": [
-    {
-      "id": "VAL-WORKFLOW-003",
-      "reason": "README freshness is wired into the canonical lint command and passed, and CI separately generates the docs site, but the maintainer-facing required final validation only names build/test/lint. The canonical local gate exercised from AGENTS.md and services.yaml does not include the site command, so sample-backed site generation is still outside the normal root validation path."
-    }
-  ],
+  "failedAssertions": [],
   "blockedAssertions": [],
-  "appliedUpdates": [
-    {
-      "target": "user-testing.md",
-      "description": "Added Flow Validator Guidance for command-line validation covering shared-checkout isolation, temp-output rules, and evidence expectations for sample-truth validators.",
-      "source": "setup"
-    }
-  ],
-  "previousRound": null,
+  "appliedUpdates": [],
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round1.json",
   "flowReports": [
-    ".factory/validation/sample-truth/user-testing/flows/sample-contracts.json",
-    ".factory/validation/sample-truth/user-testing/flows/workflow-gate.json"
+    ".factory/validation/sample-truth/user-testing/flows/workflow-site-gate-rerun.json"
   ],
-  "generatedAt": "2026-03-30T17:15:45Z"
+  "generatedAt": "2026-03-30T17:29:16Z"
 }

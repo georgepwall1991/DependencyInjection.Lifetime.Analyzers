@@ -301,18 +301,6 @@
       "approvedSecondaryDiagnostics": [
         {
           "filePathContains": "DI007/ServiceLocatorExamples.cs",
-          "anchor": "services.AddSingleton<ISingletonService, SingletonService>();",
-          "ruleId": "DI012b",
-          "severity": "note"
-        },
-        {
-          "filePathContains": "DI007/ServiceLocatorExamples.cs",
-          "anchor": "services.AddScoped<IScopedService, ScopedService>();",
-          "ruleId": "DI012b",
-          "severity": "note"
-        },
-        {
-          "filePathContains": "DI007/ServiceLocatorExamples.cs",
           "anchor": "services.AddScoped<BadServiceLocatorInConstructor>();",
           "ruleId": "DI011",
           "severity": "warning"
@@ -378,12 +366,6 @@
         {
           "filePathContains": "DI009/OpenGenericExamples.cs",
           "anchor": "services.AddScoped<IScopedService, ScopedService>();",
-          "ruleId": "DI012b",
-          "severity": "note"
-        },
-        {
-          "filePathContains": "DI009/OpenGenericExamples.cs",
-          "anchor": "services.AddTransient<ITransientService, TransientService>();",
           "ruleId": "DI012b",
           "severity": "note"
         }

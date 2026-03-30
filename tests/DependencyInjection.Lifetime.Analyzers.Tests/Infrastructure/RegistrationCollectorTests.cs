@@ -40,6 +40,29 @@ public class RegistrationCollectorTests
         return (compilation, semanticModel, invocations);
     }
 
+    private static (Compilation compilation, FileAnalysis[] files) CreateCompilationWithInvocations(
+        params (string filePath, string source)[] files)
+    {
+        var syntaxTrees = files
+            .Select(file => CSharpSyntaxTree.ParseText(file.source, path: file.filePath))
+            .ToArray();
+
+        var compilation = CSharpCompilation.Create(
+            "TestAssembly",
+            syntaxTrees,
+            DiReferences,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var fileAnalyses = syntaxTrees
+            .Select(tree => new FileAnalysis(
+                tree,
+                compilation.GetSemanticModel(tree),
+                tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>().ToArray()))
+            .ToArray();
+
+        return (compilation, fileAnalyses);
+    }
+
     #region Create Tests
 
     [Fact]
@@ -716,6 +739,65 @@ public class RegistrationCollectorTests
         // But ordered registrations has both
         Assert.Equal(2, collector.OrderedRegistrations.Count());
     }
+
+    [Fact]
+    public void AnalyzeInvocation_DuplicateRegistration_StableAcrossFiles()
+    {
+        var sharedTypes = """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IMyService { }
+            public class ServiceA : IMyService { }
+            public class ServiceB : IMyService { }
+            """;
+
+        var sourceB = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class RegistrationB
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, ServiceB>();
+                }
+            }
+            """;
+
+        var sourceA = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class RegistrationA
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, ServiceA>();
+                }
+            }
+            """;
+
+        var (compilation, files) = CreateCompilationWithInvocations(
+            ("Common.cs", sharedTypes),
+            ("B.cs", sourceB),
+            ("A.cs", sourceA));
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var file in files.Reverse())
+        {
+            foreach (var invocation in file.Invocations)
+            {
+                collector.AnalyzeInvocation(invocation, file.SemanticModel);
+            }
+        }
+
+        var ordered = OrderedRegistrationOrdering.SortBySourceLocation(collector.OrderedRegistrations).ToArray();
+
+        Assert.Equal("A.cs", ordered[0].Location.GetLineSpan().Path);
+        Assert.Equal("B.cs", ordered[1].Location.GetLineSpan().Path);
+    }
+
+    private sealed record FileAnalysis(
+        SyntaxTree Tree,
+        SemanticModel SemanticModel,
+        InvocationExpressionSyntax[] Invocations);
 
     #endregion
 }

@@ -1,22 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
-using SampleApp.Diagnostics.DI003;
-using SampleApp.Services;
 
 // Build the service provider
 var services = new ServiceCollection();
-
-// Register services with different lifetimes
-services.AddScoped<IScopedService, ScopedService>();
-services.AddTransient<ITransientService, TransientService>();
-services.AddSingleton<ISingletonService, SingletonService>();
-
-// These registrations will trigger DI003 warnings:
-services.AddSingleton<BadSingletonWithScopedDependency>();
-services.AddSingleton<BadSingletonWithTransientDependency>();
-
-// These registrations are correct:
-services.AddSingleton<GoodSingletonWithSingletonDependency>();
-services.AddSingleton<GoodSingletonWithScopeFactory>();
 
 var serviceProvider = services.BuildServiceProvider();
 
