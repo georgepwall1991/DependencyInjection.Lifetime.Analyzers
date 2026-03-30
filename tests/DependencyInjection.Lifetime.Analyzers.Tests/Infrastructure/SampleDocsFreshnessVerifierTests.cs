@@ -77,6 +77,24 @@ public class SampleDocsFreshnessVerifierTests
     }
 
     /// <summary>
+    /// Verifies that the freshness gate now includes the canonical public
+    /// diagnostic inventory in its parity summary, so future outward-facing
+    /// diagnostics cannot drift silently between the inventory, sample
+    /// directories, and sample/docs mappings.
+    /// (VAL-SAMPLES-005: sample rule coverage and mapping sets stay in parity)
+    /// </summary>
+    [Fact]
+    public void PublicDiagnosticInventory_IsIncludedInFreshnessParitySummary()
+    {
+        var result = RunFreshnessCheck();
+        _output.WriteLine(result.Output);
+        Assert.Contains("Canonical public diagnostic inventory", result.Output);
+        Assert.True(
+            result.ExitCode == 0,
+            $"Sample/docs parity check failed (exit code {result.ExitCode}):\n{result.Output}");
+    }
+
+    /// <summary>
     /// Verifies that every configured sample file actually exists on disk so
     /// stale sample path references in ruleSampleConfig are detected early.
     /// (VAL-SAMPLES-003: published sample claims agree with observed diagnostics)

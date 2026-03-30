@@ -131,6 +131,22 @@ const ruleSampleConfig = {
   },
 };
 
+const publicDiagnosticInventoryPath = path.join(
+  repoRoot,
+  "src",
+  "DependencyInjection.Lifetime.Analyzers",
+  "DiagnosticIds.cs",
+);
+
+const approvedPublicDiagnosticParity = {
+  aliases: new Map([
+    // DI012b is the duplicate-registration family member that intentionally
+    // rolls up to the outward-facing DI012 sample/docs surface.
+    ["DI012b", "DI012"],
+  ]),
+  omissions: new Set(),
+};
+
 const problemPages = [
   {
     slug: "objectdisposedexception-from-scoped-service",
@@ -363,6 +379,8 @@ async function syncReadme({ check }) {
  */
 async function checkFreshness() {
   const failures = [];
+  const publicDiagnosticInventory = await loadPublicDiagnosticInventory();
+  const normalizedPublicDiagnosticIds = normalizeParityIds(publicDiagnosticInventory);
 
   // --- VAL-SAMPLES-005: parity between ruleSampleConfig keys and sample dirs ---
 
@@ -371,34 +389,39 @@ async function checkFreshness() {
 
   try {
     const entries = await fs.readdir(sampleDiagnosticsDir);
-    sampleDirs = entries.filter((e) => /^DI\d+$/.test(e)).sort();
+    sampleDirs = entries.filter((e) => /^DI\d+[a-z]?$/.test(e)).sort();
   } catch (error) {
     failures.push(`Cannot read sample diagnostics directory '${sampleDiagnosticsDir}': ${error.message}`);
   }
 
   const configuredIds = Object.keys(ruleSampleConfig).sort();
-  const configuredSet = new Set(configuredIds);
-  const sampleDirSet = new Set(sampleDirs);
+  const parityInventory = {
+    surfaceLabel: "public diagnostic inventory",
+    ids: normalizedPublicDiagnosticIds,
+    sourceLabel: path.relative(repoRoot, publicDiagnosticInventoryPath),
+  };
 
-  // Rule IDs in sample dirs but not in ruleSampleConfig
-  for (const dir of sampleDirs) {
-    if (!configuredSet.has(dir)) {
-      failures.push(
-        `[VAL-SAMPLES-005] Sample directory 'samples/SampleApp/Diagnostics/${dir}/' exists but '${dir}' is not` +
-          ` in ruleSampleConfig. Add it to the mapping or add it to an approved omissions list.`,
-      );
-    }
-  }
+  failures.push(
+    ...compareParitySurfaces(
+      parityInventory,
+      {
+        surfaceLabel: "SampleApp diagnostic directories",
+        ids: normalizeParityIds(sampleDirs),
+        sourceLabel: path.relative(repoRoot, sampleDiagnosticsDir),
+      },
+    ),
+  );
 
-  // Rule IDs in ruleSampleConfig but not in sample dirs
-  for (const id of configuredIds) {
-    if (!sampleDirSet.has(id)) {
-      failures.push(
-        `[VAL-SAMPLES-005] Rule '${id}' is in ruleSampleConfig but no corresponding directory` +
-          ` 'samples/SampleApp/Diagnostics/${id}/' was found. Create the directory or remove the stale mapping.`,
-      );
-    }
-  }
+  failures.push(
+    ...compareParitySurfaces(
+      parityInventory,
+      {
+        surfaceLabel: "sample/docs mappings",
+        ids: normalizeParityIds(configuredIds),
+        sourceLabel: "ruleSampleConfig",
+      },
+    ),
+  );
 
   // --- VAL-SAMPLES-003 / VAL-SAMPLES-004: snippet extraction freshness ---
 
@@ -449,8 +472,15 @@ async function checkFreshness() {
   }
 
   if (failures.length === 0) {
+    const rawInventoryCount = publicDiagnosticInventory.length;
+    const normalizedInventoryCount = normalizedPublicDiagnosticIds.length;
+    const approvedParityAdjustmentCount = rawInventoryCount - normalizedInventoryCount;
     console.log(
-      `Sample/docs freshness check passed. ${configuredIds.length} rule(s) verified across` +
+      `Sample/docs freshness check passed. Canonical public diagnostic inventory` +
+        ` (${rawInventoryCount} id(s), ${normalizedInventoryCount} outward-facing after` +
+        ` ${approvedParityAdjustmentCount} approved alias/omission adjustment(s)) matches` +
+        ` ${sampleDirs.length} SampleApp diagnostic directory(s) and ${configuredIds.length}` +
+        ` sample/docs mapping(s) across` +
         ` ${configuredIds.reduce((sum, id) => sum + (ruleSampleConfig[id]?.highlights?.length ?? 0), 0)} highlight(s).`,
     );
     return;
@@ -463,6 +493,90 @@ async function checkFreshness() {
   }
 
   process.exitCode = 1;
+}
+
+async function loadPublicDiagnosticInventory() {
+  let contents;
+
+  try {
+    contents = normalizeNewlines(readFileSyncSafe(publicDiagnosticInventoryPath));
+  } catch (error) {
+    throw new Error(`Unable to read public diagnostic inventory '${publicDiagnosticInventoryPath}': ${error.message}`);
+  }
+
+  const ids = [];
+  const seen = new Set();
+  const pattern = /public\s+const\s+string\s+\w+\s*=\s*"(?<id>DI\d+[a-z]?)"/gi;
+
+  for (const match of contents.matchAll(pattern)) {
+    const id = match.groups?.id;
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    ids.push(id);
+  }
+
+  if (ids.length === 0) {
+    throw new Error(
+      `No public diagnostic IDs could be parsed from '${publicDiagnosticInventoryPath}'.` +
+        ` Expected public const string declarations in DiagnosticIds.cs.`,
+    );
+  }
+
+  return ids;
+}
+
+function normalizeParityIds(ids) {
+  const normalized = [];
+  const seen = new Set();
+
+  for (const id of ids) {
+    const normalizedId = normalizeParityId(id);
+    if (!normalizedId || seen.has(normalizedId)) {
+      continue;
+    }
+
+    seen.add(normalizedId);
+    normalized.push(normalizedId);
+  }
+
+  return normalized.sort();
+}
+
+function normalizeParityId(id) {
+  if (approvedPublicDiagnosticParity.omissions.has(id)) {
+    return null;
+  }
+
+  return approvedPublicDiagnosticParity.aliases.get(id) ?? id;
+}
+
+function compareParitySurfaces(referenceSurface, observedSurface) {
+  const failures = [];
+  const referenceIds = new Set(referenceSurface.ids);
+  const observedIds = new Set(observedSurface.ids);
+
+  for (const id of referenceSurface.ids) {
+    if (!observedIds.has(id)) {
+      failures.push(
+        `[VAL-SAMPLES-005] ${referenceSurface.surfaceLabel} contains '${id}' but ${observedSurface.surfaceLabel}` +
+          ` does not. Update ${observedSurface.sourceLabel} or add an approved alias/omission if the difference is intentional.`,
+      );
+    }
+  }
+
+  for (const id of observedSurface.ids) {
+    if (!referenceIds.has(id)) {
+      failures.push(
+        `[VAL-SAMPLES-005] ${observedSurface.surfaceLabel} contains '${id}' but ${referenceSurface.surfaceLabel}` +
+          ` does not. Update ${referenceSurface.sourceLabel} or add an approved alias/omission if the difference is intentional.`,
+      );
+    }
+  }
+
+  return failures;
 }
 
 async function generateSite(outputDir) {
