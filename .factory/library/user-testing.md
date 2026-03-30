@@ -24,8 +24,11 @@ Testing surfaces, tools, and validation concurrency for this mission.
 
 ### Surface: Docs/readme freshness
 - Tool: `node`
-- Current validated command: `node tools/generate-growth-assets.mjs sync-readme --check`
-- Mission expectation: sample-backed docs freshness checks become part of the same validation gate
+- Canonical local gate commands:
+  - `node tools/generate-growth-assets.mjs sync-readme --check`
+  - `node tools/generate-growth-assets.mjs check-freshness`
+  - `node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site`
+- Mission expectation: generated-site validation is part of the same maintainer-facing local gate as README/sample freshness
 
 ## Validation Concurrency
 
