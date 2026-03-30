@@ -1,0 +1,28 @@
+{
+  "featureId": "sample-diagnostics-verifier-core",
+  "reviewedAt": "2026-03-30T16:00:36.016546Z",
+  "commitId": "432e129b15d78c29c3d3f0868d4d844e5a5cf9c5",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature adds the promised repo-owned SARIF verifier and keeps temp outputs outside the repo, but the matching logic does not actually verify stable anchors or severity, so it can miss the exact sample drift this feature was meant to catch.",
+    "issues": [
+      {
+        "file": "tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/SampleDiagnosticsVerifier.cs",
+        "line": 167,
+        "severity": "blocking",
+        "description": "SampleApp folder claims only match on '/Diagnostics/{rule}/' plus an aggregate count. Because they do not anchor to a specific sample file/claim location, the verifier will still pass if a diagnostic moves from the intentionally broken example onto one of the paired safe examples in the same folder (for example, DI001's bad and good methods all live in the same file under samples/SampleApp/Diagnostics/DI001/ScopeNotDisposedExamples.cs). That falls short of the required stable-anchor verification and can miss regressions where the 'bad vs good' sample contrast is inverted without changing the folder-level count."
+      },
+      {
+        "file": "tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/SampleDiagnosticsVerifier.cs",
+        "line": 171,
+        "severity": "blocking",
+        "description": "The verifier never checks diagnostic severity, and the contract model has no way to declare one. 'claimedDiagnostics' only filters by rule ID/path, approved secondary handling only looks at warning-level surprises, and the JSON contracts contain no severity field. As a result, a sample can silently drift from warning to note/error (or vice versa) and still pass, even though the feature brief and sample-verification guidance require matching claims by rule ID, severity, and stable anchor."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the handoff, transcript skeleton, skill guidance, commit 432e129b15d78c29c3d3f0868d4d844e5a5cf9c5, and current repo state for sample-diagnostics-verifier-core. The implementation is close, but it does not enforce the required stable-anchor and severity checks, so I marked the review as fail."
+}

@@ -1,0 +1,22 @@
+{
+  "milestone": "sample-truth",
+  "round": 2,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-WORKFLOW-003"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/user-testing/synthesis.round1.json",
+  "flowReports": [
+    ".factory/validation/sample-truth/user-testing/flows/workflow-site-gate-rerun.json"
+  ],
+  "generatedAt": "2026-03-30T17:29:16Z"
+}

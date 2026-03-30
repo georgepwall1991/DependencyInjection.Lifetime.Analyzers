@@ -1,7 +1,42 @@
 using Microsoft.Extensions.DependencyInjection;
-using SampleApp.Services;
 
 namespace SampleApp.Diagnostics.DI003;
+
+public interface ISingletonService
+{
+    void Execute();
+}
+
+public sealed class SingletonService : ISingletonService
+{
+    public void Execute()
+    {
+    }
+}
+
+public interface IScopedService
+{
+    void DoWork();
+}
+
+public sealed class ScopedService : IScopedService
+{
+    public void DoWork()
+    {
+    }
+}
+
+public interface ITransientService
+{
+    void Process();
+}
+
+public sealed class TransientService : ITransientService
+{
+    public void Process()
+    {
+    }
+}
 
 /// <summary>
 /// DI003: Captive dependency - singleton captures scoped/transient.

@@ -1,0 +1,29 @@
+{
+  "folderClaims": [],
+  "fileClaims": [
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "anchor": "services.AddSingleton<BrokenInvoiceScheduler>();",
+      "ruleId": "DI015",
+      "severity": "warning"
+    },
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "anchor": "sp.GetRequiredKeyedService<IBrokenNotificationSender>(\"primary\")));",
+      "ruleId": "DI015",
+      "severity": "warning"
+    }
+  ],
+  "absenceClaims": [
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "FixedInvoiceScheduler"
+    },
+    {
+      "filePathContains": "DI015InAction/Program.cs",
+      "ruleId": "DI015",
+      "messageContains": "FixedKeyedNotificationRunner"
+    }
+  ]
+}

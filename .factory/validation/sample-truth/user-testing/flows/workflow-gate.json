@@ -1,0 +1,130 @@
+{
+  "surface": "command-line maintainer validation",
+  "assertionsTested": [
+    "VAL-WORKFLOW-001",
+    "VAL-WORKFLOW-002",
+    "VAL-WORKFLOW-003",
+    "VAL-CROSS-002"
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-WORKFLOW-001",
+      "title": "Root validation uses standard repo commands and declared toolchains",
+      "status": "pass",
+      "reason": "The canonical root-level commands surfaced in .factory/services.yaml (install, build, test, lint) all ran successfully with only dotnet and node, and the standard test command exercised analyzer tests plus sample/docs verification without extra local bootstrapping.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate/install.log",
+        "sample-truth/workflow-gate/build.log",
+        "sample-truth/workflow-gate/test.log",
+        "sample-truth/workflow-gate/lint-sync-readme.log"
+      ],
+      "repoReferences": [
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/services.yaml:3-11",
+        "/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/AGENTS.md:41-44"
+      ]
+    },
+    {
+      "id": "VAL-WORKFLOW-002",
+      "title": "Standard validation includes sample diagnostics verification",
+      "status": "pass",
+      "reason": "The standard dotnet test command passed both sample-verifier tests inside the main suite: SampleApp_ClaimedDiagnosticsMatchContract and DI015InAction_BrokenCasesReportWhileFixedStaysClean.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate/test.log"
+      ],
+      "repoReferences": [
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/SampleDiagnosticsVerifierTests.cs:6-43"
+      ]
+    },
+    {
+      "id": "VAL-WORKFLOW-003",
+      "title": "Sample-derived content stays wired into automation",
+      "status": "fail",
+      "reason": "README freshness is wired into the canonical lint command and passed, and CI separately generates the docs site, but the maintainer-facing required final validation only names build/test/lint. The canonical local gate exercised from AGENTS.md and services.yaml does not include the site command, so sample-backed site generation is still outside the normal root validation path.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate/lint-sync-readme.log",
+        "sample-truth/workflow-gate/site.log"
+      ],
+      "repoReferences": [
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/services.yaml:3-11",
+        "/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/AGENTS.md:41-49",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:32-41",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:107-108"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "title": "Runtime-failure guidance stays aligned between samples and generated docs",
+      "status": "pass",
+      "reason": "Rebuilding DI015InAction emitted exactly the two expected broken-case DI015 warnings, the standard test suite separately passed DI015InAction_BrokenCasesReportWhileFixedStaysClean, and generated site output still contains the DI015 rule page and related problem-guide wiring for unresolved-dependency guidance.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate/di015-build.log",
+        "sample-truth/workflow-gate/DI015InAction.sarif",
+        "sample-truth/workflow-gate/test.log",
+        "sample-truth/workflow-gate/site.log",
+        "sample-truth/workflow-gate/site-output/rules/di015-unresolvable-dependency/index.html",
+        "sample-truth/workflow-gate/site-output/problems/unable-to-resolve-service-for-type/index.html"
+      ],
+      "repoReferences": [
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/DI015InAction/README.md:1-20",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/DI015InAction/sample-diagnostics-contract.json:1-27"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "dotnet restore \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\"",
+      "exitCode": 0,
+      "summary": "Restore succeeded with all projects already up to date.",
+      "evidenceFile": "sample-truth/workflow-gate/install.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0,
+      "summary": "Release build succeeded; solution build surfaced the expected DI015 warnings from the intentionally broken DI015InAction sample.",
+      "evidenceFile": "sample-truth/workflow-gate/build.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 0,
+      "summary": "390 tests passed, including SampleDocsFreshnessVerifierTests and both SampleDiagnosticsVerifierTests.",
+      "evidenceFile": "sample-truth/workflow-gate/test.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0,
+      "summary": "README install snippet freshness check passed.",
+      "evidenceFile": "sample-truth/workflow-gate/lint-sync-readme.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/workflow-gate/site-output\"",
+      "exitCode": 0,
+      "summary": "Generated docs site successfully into the mission evidence directory.",
+      "evidenceFile": "sample-truth/workflow-gate/site.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/DI015InAction/DI015InAction.csproj\" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/workflow-gate/DI015InAction.sarif",
+      "exitCode": 0,
+      "summary": "DI015InAction rebuilt successfully and emitted the two expected broken-case DI015 warnings to the build log and SARIF.",
+      "evidenceFile": "sample-truth/workflow-gate/di015-build.log"
+    }
+  ],
+  "toolsUsed": [
+    "dotnet",
+    "node",
+    "python3"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/workflow-gate/install.log",
+    "sample-truth/workflow-gate/build.log",
+    "sample-truth/workflow-gate/test.log",
+    "sample-truth/workflow-gate/lint-sync-readme.log",
+    "sample-truth/workflow-gate/site.log",
+    "sample-truth/workflow-gate/di015-build.log",
+    "sample-truth/workflow-gate/DI015InAction.sarif",
+    "sample-truth/workflow-gate/site-output/rules/di015-unresolvable-dependency/index.html",
+    "sample-truth/workflow-gate/site-output/problems/unable-to-resolve-service-for-type/index.html"
+  ],
+  "overallStatus": "fail"
+}

@@ -230,12 +230,14 @@ public sealed class RegistrationCollector
 
         // Always track ordered registrations (for DI012 analysis)
         var order = Interlocked.Increment(ref _registrationOrder);
+        var flowKey = ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(invocation, semanticModel);
         var orderedRegistration = new OrderedRegistration(
             serviceType,
             key,
             isKeyed,
             lifetime.Value,
             invocation.GetLocation(),
+            flowKey,
             order,
             isTryAdd,
             methodName);
@@ -243,8 +245,8 @@ public sealed class RegistrationCollector
 
         // Store registrations that can actually become effective at runtime. TryAdd* only
         // participates when no earlier effective registration exists for the same service/key.
-        // This uses analyzer discovery order as an approximation of source registration order;
-        // cross-file ordering remains a known limitation.
+        // Discovery order is still used here for the runtime-effective registration cache,
+        // but DI012 now applies a stable source-location ordering when it evaluates duplicates.
         var hasEffectiveRegistration = _registrations.ContainsKey(new ServiceIdentifier(serviceType, key, isKeyed));
         if (implementationType is not null || factoryExpression is not null)
         {

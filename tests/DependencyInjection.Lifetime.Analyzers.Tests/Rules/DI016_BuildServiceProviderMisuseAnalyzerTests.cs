@@ -167,6 +167,27 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task LocalProviderFactoryFunction_ThatReturnsProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    IServiceProvider CreateProvider(IServiceCollection registrations)
+                    {
+                        return registrations.BuildServiceProvider();
+                    }
+
+                    _ = CreateProvider(services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderFactoryLambda_ThatReturnsProvider_NoDiagnostic()
     {
         var source = Usings + """

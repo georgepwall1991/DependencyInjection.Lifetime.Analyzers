@@ -1,0 +1,28 @@
+{
+  "featureId": "sample-diagnostics-claim-contract-hardening",
+  "reviewedAt": "2026-03-30T16:35:42.595228Z",
+  "commitId": "1a13480635bf2dc983a063384a17d4002e561393",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The fix meaningfully addresses the original scrutiny failure: it replaces folder-count matching with per-claim anchors plus severity checks, updates both sample contracts, and adds focused regression tests for moved diagnostics and severity drift. However, folder verification now skips any extra diagnostic whose (ruleId, severity) pair is absent from the contract, so new unapproved secondary diagnostics in a sample folder can slip through even though the feature requires approved secondary diagnostics to stay explicit.",
+    "issues": [
+      {
+        "file": "tests/DependencyInjection.Lifetime.Analyzers.Tests/Infrastructure/SampleDiagnosticsVerifier.cs",
+        "line": 228,
+        "severity": "blocking",
+        "description": "VerifyFolderClaim only flags unmatched diagnostics when their (ruleId, severity) pair already exists in allowedSignatures. The `if (!allowedSignatures.Contains((result.RuleId, result.Level))) continue;` branch means a newly introduced secondary diagnostic such as DI014/warning inside another rule folder is ignored instead of failing verification. That violates the feature contract that approved secondary diagnostics must remain explicit and allowed, because unexpected secondaries with previously unseen signatures now pass silently."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The repo-tooling-worker skill requires failing verification before implementation, but this worker session applied verifier/contract patches before adding the new regression tests even though handoff.skillFeedback reports followedProcedure=true. Shared guidance is clear; the feedback/reporting around whether the procedure was followed appears unreliable.",
+      "evidence": "SKILL.md step 3 says 'Write failing verification first'. The transcript skeleton for workerSessionId 7681ded7-687c-4567-bcb9-cd35d473901b shows ApplyPatch edits to SampleDiagnosticsVerifier.cs and the contract JSON files before the later step that adds SampleDiagnosticsVerifierContractTests.cs, while the handoff records skillFeedback.followedProcedure=true."
+    }
+  ],
+  "addressesFailureFrom": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/reviews/sample-diagnostics-verifier-core.json",
+  "summary": "Reviewed the fix handoff, transcript skeleton, repo-tooling-worker skill, prior failed review, and both relevant commit diffs (432e129b15d78c29c3d3f0868d4d844e5a5cf9c5 and 1a13480635bf2dc983a063384a17d4002e561393). The fix does close the original stable-anchor and severity-verification gaps, but I marked it fail because the folder verifier now ignores unexpected secondary diagnostics whose signature is not already declared in the contract, so secondary diagnostics are no longer enforced as explicit allowlisted behavior."
+}

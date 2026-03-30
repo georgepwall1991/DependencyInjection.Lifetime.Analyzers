@@ -234,6 +234,44 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                 .WithArguments("IMyService"));
     }
 
+    [Fact]
+    public async Task GetRequiredKeyedService_Typeof_InRegularMethod_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public interface IKeyedServiceProvider
+                {
+                    object? GetRequiredKeyedService(System.Type serviceType, object? serviceKey);
+                }
+            }
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IKeyedServiceProvider _provider;
+
+                public MyClass(IKeyedServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    var service = (IMyService)_provider.GetRequiredKeyedService(typeof(IMyService), "primary");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(24, 35, 24, 99)
+                .WithArguments("IMyService"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -369,7 +407,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     }
 
     [Fact]
-    public async Task GetRequiredService_InMethodWithIServiceProviderParameter_NoDiagnostic()
+    public async Task GetRequiredService_InMethodWithIServiceProviderParameter_ReportsDiagnostic()
     {
         var source = Usings + """
             public interface IMyService { }
@@ -383,7 +421,12 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             }
             """;
 
-        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(9, 16, 9, 57)
+                .WithArguments("IMyService"));
     }
 
     [Fact]
@@ -526,7 +569,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     [Fact]
     public async Task GetService_InStaticMethod_ReportsDiagnostic()
     {
-        // Static methods should still report - not allowed context
+        // Static helpers are ordinary application code, so they should still report.
         var source = Usings + """
             public interface IMyService { }
 
@@ -539,14 +582,18 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             }
             """;
 
-        // Method has IServiceProvider parameter - this is allowed (factory delegate pattern)
-        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(9, 16, 9, 57)
+                .WithArguments("IMyService"));
     }
 
     [Fact]
-    public async Task GetService_InExtensionMethod_NoDiagnostic()
+    public async Task GetService_InExtensionMethod_ReportsDiagnostic()
     {
-        // Extension methods with IServiceProvider parameter should be allowed
+        // Extension methods are helper code, not a DI-composition boundary.
         var source = Usings + """
             public interface IMyService { }
 
@@ -559,8 +606,12 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             }
             """;
 
-        // Extension method has IServiceProvider as first parameter - this is allowed
-        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(9, 16, 9, 57)
+                .WithArguments("IMyService"));
     }
 
     #endregion

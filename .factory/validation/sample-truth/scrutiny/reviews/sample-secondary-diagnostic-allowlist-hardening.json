@@ -1,0 +1,21 @@
+{
+  "featureId": "sample-secondary-diagnostic-allowlist-hardening",
+  "reviewedAt": "2026-03-30T16:57:00Z",
+  "commitId": "799c9baeceb6bfb1ee81cc1b250110298e0e3b37",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix adequately closes the prior blocking gap. `VerifyFolderClaim` no longer skips unmatched diagnostics with previously unseen `(ruleId, severity)` pairs; instead it now fails any unmatched public DI diagnostic found in a claimed SampleApp folder, so unexpected secondary diagnostics are rejected unless they are explicitly matched by a primary claim or an `approvedSecondaryDiagnostics` entry. The SampleApp contract was expanded to enumerate the intentional overlaps with explicit rule IDs, severities, anchors, and occurrences, and the new synthetic verifier tests cover both the reject-unapproved and allow-approved paths.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The `repo-tooling-worker` skill still asks workers to 'Write failing verification first', but this fix session's transcript does not show a new failing verifier check before the implementation edits while the handoff still reports `followedProcedure=true`. The skill/procedure feedback remains difficult to trust for tooling work.",
+      "evidence": "`.factory/skills/repo-tooling-worker/SKILL.md` step 3 requires failing verification first. The `worker-transcripts.jsonl` entry for workerSessionId `6eee3550-641f-4932-9cc2-1a35f0f9d431` shows the first `ApplyPatch` at step 50 and the targeted verifier test executions afterward (for example steps 51 and 54), while `handoffs/2026-03-30T16-52-11-715Z__sample-secondary-diagnostic-allowlist-hardening__6eee3550-641f-4932-9cc2-1a35f0f9d431.json` records `skillFeedback.followedProcedure: true` with no deviations."
+    }
+  ],
+  "addressesFailureFrom": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/reviews/sample-diagnostics-claim-contract-hardening.json",
+  "summary": "Reviewed the prior failed feature commit (`1a13480635bf2dc983a063384a17d4002e561393`), the fix commit (`799c9baeceb6bfb1ee81cc1b250110298e0e3b37`), the prior review, the fix handoff, the fix transcript skeleton, and the current repo state. I found that the fix addresses the original blocking issue around silently skipped unexpected secondary diagnostics, and I found no remaining high-confidence correctness issues in the implemented allowlist hardening."
+}

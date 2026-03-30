@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -37,35 +38,68 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 return;
             }
 
+            var invocationObservations = new ConcurrentQueue<ServiceCollectionReachabilityAnalyzer.InvocationObservation>();
+
             // First pass: collect all registrations
             compilationContext.RegisterSyntaxNodeAction(
-                syntaxContext => registrationCollector.AnalyzeInvocation(
-                    (InvocationExpressionSyntax)syntaxContext.Node,
-                    syntaxContext.SemanticModel),
+                syntaxContext =>
+                {
+                    var invocation = (InvocationExpressionSyntax)syntaxContext.Node;
+                    registrationCollector.AnalyzeInvocation(
+                        invocation,
+                        syntaxContext.SemanticModel);
+
+                    if (ServiceCollectionReachabilityAnalyzer.IsPotentialServiceCollectionWrapperInvocation(
+                            invocation,
+                            syntaxContext.SemanticModel))
+                    {
+                        invocationObservations.Enqueue(
+                            new ServiceCollectionReachabilityAnalyzer.InvocationObservation(
+                                invocation,
+                                syntaxContext.SemanticModel));
+                    }
+                },
                 SyntaxKind.InvocationExpression);
 
             // Second pass: analyze registration order at compilation end
             compilationContext.RegisterCompilationEndAction(
-                endContext => AnalyzeRegistrationOrder(endContext, registrationCollector));
+                endContext => AnalyzeRegistrationOrder(
+                    endContext,
+                    registrationCollector,
+                    invocationObservations.ToImmutableArray()));
         });
     }
 
     private static void AnalyzeRegistrationOrder(
         CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        ImmutableArray<ServiceCollectionReachabilityAnalyzer.InvocationObservation> invocationObservations)
     {
+        var orderedRegistrations = registrationCollector.OrderedRegistrations.ToImmutableArray();
+        if (orderedRegistrations.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var effectiveOrderedRegistrations = invocationObservations.IsDefaultOrEmpty
+            ? OrderedRegistrationOrdering.SortBySourceLocation(orderedRegistrations)
+            : ServiceCollectionReachabilityAnalyzer
+                .Create(context.Compilation, invocationObservations, orderedRegistrations)
+                .AlignOrderedRegistrationsToRootFlows(orderedRegistrations);
+
         // Group registrations by service type and key (keyed services should be treated independently)
-        var registrationsByServiceType = registrationCollector.OrderedRegistrations
+        var registrationsByServiceType = effectiveOrderedRegistrations
             .GroupBy(
-                r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed),
+                r => new RegistrationGroupKey(r.ServiceType, r.Key, r.IsKeyed, r.FlowKey),
                 RegistrationGroupKeyComparer.Instance)
             .Where(g => g.Count() > 1)
             .ToList();
 
         foreach (var group in registrationsByServiceType)
         {
-            var orderedRegistrations = group.OrderBy(r => r.Order).ToList();
-            AnalyzeServiceTypeRegistrations(context, orderedRegistrations);
+            // The registrations are already grouped in either stable source order (for direct
+            // flows) or root-flow execution order (for invoked wrappers/helpers).
+            AnalyzeServiceTypeRegistrations(context, group.ToList());
         }
     }
 
@@ -141,19 +175,22 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         public INamedTypeSymbol ServiceType { get; }
         public object? Key { get; }
         public bool IsKeyed { get; }
+        public string? FlowKey { get; }
 
-        public RegistrationGroupKey(INamedTypeSymbol serviceType, object? key, bool isKeyed)
+        public RegistrationGroupKey(INamedTypeSymbol serviceType, object? key, bool isKeyed, string? flowKey)
         {
             ServiceType = serviceType;
             Key = key;
             IsKeyed = isKeyed;
+            FlowKey = flowKey;
         }
 
         public bool Equals(RegistrationGroupKey other)
         {
             return SymbolEqualityComparer.Default.Equals(ServiceType, other.ServiceType)
                    && Equals(Key, other.Key)
-                   && IsKeyed == other.IsKeyed;
+                   && IsKeyed == other.IsKeyed
+                   && string.Equals(FlowKey, other.FlowKey, System.StringComparison.Ordinal);
         }
 
         public override bool Equals(object? obj) => obj is RegistrationGroupKey other && Equals(other);
@@ -165,6 +202,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 var hash = SymbolEqualityComparer.Default.GetHashCode(ServiceType);
                 hash = (hash * 397) ^ (Key?.GetHashCode() ?? 0);
                 hash = (hash * 397) ^ IsKeyed.GetHashCode();
+                hash = (hash * 397) ^ (FlowKey is null ? 0 : System.StringComparer.Ordinal.GetHashCode(FlowKey));
                 return hash;
             }
         }

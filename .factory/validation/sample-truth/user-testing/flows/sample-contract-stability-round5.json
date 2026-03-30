@@ -1,0 +1,118 @@
+{
+  "surface": "command-line validation via dotnet/node",
+  "testedAt": "2026-03-30T18:25:19Z",
+  "assertionsTested": [
+    "VAL-SAMPLES-001",
+    "VAL-SAMPLES-003",
+    "VAL-CROSS-001"
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-SAMPLES-001",
+      "title": "SampleApp contract matches real claimed diagnostics",
+      "status": "pass",
+      "pass": true,
+      "reason": "Pass: the canonical root validation path accepted the SampleApp contract on this run. `dotnet test DependencyInjection.Lifetime.Analyzers.sln --no-build --configuration Release --verbosity normal` passed 392/392 tests including `SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract`, and three additional serial focused reruns also passed with `SampleApp verification passed (77 total SARIF results)`. No DI012b anchor mismatch surfaced.",
+      "evidenceFiles": [
+        "sample-truth/sample-contract-stability-round5/03-test-solution.log",
+        "sample-truth/sample-contract-stability-round5/04-sampleapp-contract-run1.log",
+        "sample-truth/sample-contract-stability-round5/05-sampleapp-contract-run2.log",
+        "sample-truth/sample-contract-stability-round5/06-sampleapp-contract-run3.log"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-003",
+      "title": "Published sample claims agree with observed diagnostics",
+      "status": "pass",
+      "pass": true,
+      "reason": "Pass: the published SampleApp claims stayed aligned with observed diagnostics on the maintainer-facing surface. The focused verifier passed four times total (once inside the full solution test and three standalone reruns), and the direct `SampleApp.sarif` rebuild summary recorded 77 SARIF results with the expected claimed DI family entries, including DI012 at `DI012/ConditionalRegistrationExamples.cs:16` and six DI012b secondaries anchored in DI008, DI009, DI012, and DI013 rather than drifting back to DI007.",
+      "evidenceFiles": [
+        "sample-truth/sample-contract-stability-round5/03-test-solution.log",
+        "sample-truth/sample-contract-stability-round5/04-sampleapp-contract-run1.log",
+        "sample-truth/sample-contract-stability-round5/05-sampleapp-contract-run2.log",
+        "sample-truth/sample-contract-stability-round5/06-sampleapp-contract-run3.log",
+        "sample-truth/sample-contract-stability-round5/SampleApp.sarif",
+        "sample-truth/sample-contract-stability-round5/08-sampleapp-sarif-summary.json"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "title": "SampleApp build is the canonical sample-diagnostics contract",
+      "status": "pass",
+      "pass": true,
+      "reason": "Pass: rebuilding `samples/SampleApp/SampleApp.csproj` with analyzers and SARIF output succeeded, producing `SampleApp.sarif`, and the contract verifier stayed green across the solution test plus three standalone reruns. Observed diagnostics from the direct SampleApp build matched the approved contract, so the SampleApp rebuild remains the canonical sample-diagnostics source for this milestone.",
+      "evidenceFiles": [
+        "sample-truth/sample-contract-stability-round5/07-sampleapp-rebuild-sarif.log",
+        "sample-truth/sample-contract-stability-round5/SampleApp.sarif",
+        "sample-truth/sample-contract-stability-round5/08-sampleapp-sarif-summary.json",
+        "sample-truth/sample-contract-stability-round5/03-test-solution.log",
+        "sample-truth/sample-contract-stability-round5/04-sampleapp-contract-run1.log",
+        "sample-truth/sample-contract-stability-round5/05-sampleapp-contract-run2.log",
+        "sample-truth/sample-contract-stability-round5/06-sampleapp-contract-run3.log"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "node tools/generate-growth-assets.mjs sync-readme --check",
+      "exitCode": 0,
+      "observation": "Passed: README install snippets were already in sync.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/01-sync-readme-check.log"
+    },
+    {
+      "command": "dotnet build DependencyInjection.Lifetime.Analyzers.sln --no-restore --configuration Release",
+      "exitCode": 0,
+      "observation": "Passed: solution build succeeded without restore. The sample projects built under Release and surfaced the expected analyzer warnings; the build finished with 33 warnings and 0 errors.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/02-build-release.log"
+    },
+    {
+      "command": "dotnet test DependencyInjection.Lifetime.Analyzers.sln --no-build --configuration Release --verbosity normal",
+      "exitCode": 0,
+      "observation": "Passed: 392/392 tests passed in the canonical root validation path, including `SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract` and `SampleDiagnosticsVerifierTests.DI015InAction_BrokenCasesReportWhileFixedStaysClean`.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/03-test-solution.log"
+    },
+    {
+      "command": "dotnet test tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj --no-build --configuration Release --filter \"FullyQualifiedName~SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "observation": "Focused rerun 1 passed: `SampleApp verification passed (77 total SARIF results)`.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/04-sampleapp-contract-run1.log"
+    },
+    {
+      "command": "dotnet test tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj --no-build --configuration Release --filter \"FullyQualifiedName~SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "observation": "Focused rerun 2 passed: `SampleApp verification passed (77 total SARIF results)`.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/05-sampleapp-contract-run2.log"
+    },
+    {
+      "command": "dotnet test tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj --no-build --configuration Release --filter \"FullyQualifiedName~SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "observation": "Focused rerun 3 passed: `SampleApp verification passed (77 total SARIF results)`.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/06-sampleapp-contract-run3.log"
+    },
+    {
+      "command": "dotnet build samples/SampleApp/SampleApp.csproj -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contract-stability-round5/SampleApp.sarif",
+      "exitCode": 0,
+      "observation": "Passed: direct SampleApp rebuild succeeded and emitted `SampleApp.sarif`. The derived SARIF summary recorded 77 total results, including DI012 once at `ConditionalRegistrationExamples.cs:16` and six DI012b note results anchored in DI008, DI009, DI012, and DI013.",
+      "evidenceFile": "sample-truth/sample-contract-stability-round5/07-sampleapp-rebuild-sarif.log"
+    }
+  ],
+  "toolsUsed": [
+    "node",
+    "dotnet",
+    "python3"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/sample-contract-stability-round5/01-sync-readme-check.log",
+    "sample-truth/sample-contract-stability-round5/02-build-release.log",
+    "sample-truth/sample-contract-stability-round5/03-test-solution.log",
+    "sample-truth/sample-contract-stability-round5/04-sampleapp-contract-run1.log",
+    "sample-truth/sample-contract-stability-round5/05-sampleapp-contract-run2.log",
+    "sample-truth/sample-contract-stability-round5/06-sampleapp-contract-run3.log",
+    "sample-truth/sample-contract-stability-round5/07-sampleapp-rebuild-sarif.log",
+    "sample-truth/sample-contract-stability-round5/SampleApp.sarif",
+    "sample-truth/sample-contract-stability-round5/08-sampleapp-sarif-summary.json"
+  ],
+  "overallStatus": "pass"
+}

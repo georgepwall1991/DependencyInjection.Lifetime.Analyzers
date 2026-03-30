@@ -1,0 +1,83 @@
+{
+  "surface": "command-line validation",
+  "assertionsTested": [
+    "VAL-WORKFLOW-003"
+  ],
+  "canonicalGateCommands": [
+    "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+    "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+    "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+    "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"<isolated-output-dir>\""
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-WORKFLOW-003",
+      "title": "Sample-derived content stays wired into automation",
+      "status": "pass",
+      "reason": "Pass: the authoritative maintainer-facing local gate now explicitly requires build, test, lint, and site in AGENTS.md, and .factory/services.yaml exposes concrete root commands for all four. The validator reran build/test/lint/site from that gate, with the site step succeeding against isolated evidence output, so generated-site validation is part of the normal root validation path rather than a separate optional/manual step. The current dotnet test command is red for an unrelated SampleApp DI012b contract mismatch, but that does not remove site from the declared gate.",
+      "evidenceFiles": [
+        "sample-truth/workflow-site-gate-rerun/build.log",
+        "sample-truth/workflow-site-gate-rerun/test.log",
+        "sample-truth/workflow-site-gate-rerun/lint-sync-readme.log",
+        "sample-truth/workflow-site-gate-rerun/site.log",
+        "sample-truth/workflow-site-gate-rerun/site-output/index.html",
+        "sample-truth/workflow-site-gate-rerun/site-output/rules/di015-unresolvable-dependency/index.html"
+      ],
+      "repoReferences": [
+        "/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/AGENTS.md:38-50",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/services.yaml:1-11",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:27-33",
+        "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:107-114"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0,
+      "observation": "Succeeded. The canonical build command ran from the shared checkout and produced the expected sample-project warnings from intentionally broken samples.",
+      "evidenceFile": "sample-truth/workflow-site-gate-rerun/build.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 1,
+      "observation": "Failed for a current SampleApp contract mismatch: SampleDiagnosticsVerifierTests.SampleApp_ClaimedDiagnosticsMatchContract reported four DI012b anchor issues. The same run still passed SampleDocsFreshnessVerifierTests, showing sample/docs freshness automation remains wired into the standard test command.",
+      "evidenceFile": "sample-truth/workflow-site-gate-rerun/test.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0,
+      "observation": "Succeeded. README install snippets are already in sync.",
+      "evidenceFile": "sample-truth/workflow-site-gate-rerun/lint-sync-readme.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/workflow-site-gate-rerun/site-output\"",
+      "exitCode": 0,
+      "observation": "Succeeded. Generated the docs site into the assigned evidence directory, confirming the repo-declared site step is executable as part of local validation.",
+      "evidenceFile": "sample-truth/workflow-site-gate-rerun/site.log"
+    }
+  ],
+  "repoReferences": [
+    "/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/AGENTS.md:38-50",
+    "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/services.yaml:1-11",
+    "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:27-33",
+    "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.github/workflows/ci.yml:107-114"
+  ],
+  "toolsUsed": [
+    "dotnet",
+    "node",
+    "python3"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/workflow-site-gate-rerun/build.log",
+    "sample-truth/workflow-site-gate-rerun/test.log",
+    "sample-truth/workflow-site-gate-rerun/lint-sync-readme.log",
+    "sample-truth/workflow-site-gate-rerun/site.log",
+    "sample-truth/workflow-site-gate-rerun/site-output/index.html",
+    "sample-truth/workflow-site-gate-rerun/site-output/rules/di015-unresolvable-dependency/index.html"
+  ],
+  "overallStatus": "pass",
+  "testedAt": "2026-03-30T17:27:32.003541Z"
+}

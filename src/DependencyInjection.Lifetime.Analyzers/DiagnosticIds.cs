@@ -82,4 +82,14 @@ public static class DiagnosticIds
     /// DI016: BuildServiceProvider used during service registration.
     /// </summary>
     public const string BuildServiceProviderMisuse = "DI016";
+
+    /// <summary>
+    /// DI017: Circular dependency detected in constructor injection chain.
+    /// </summary>
+    public const string CircularDependency = "DI017";
+
+    /// <summary>
+    /// DI018: Implementation type cannot be constructed by the DI container.
+    /// </summary>
+    public const string NonInstantiableImplementation = "DI018";
 }

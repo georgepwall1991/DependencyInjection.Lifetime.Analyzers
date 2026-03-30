@@ -129,6 +129,36 @@ const ruleSampleConfig = {
       { label: "Sample app allowed pattern", symbol: "CreateProvider" },
     ],
   },
+  DI017: {
+    samplePath: "samples/SampleApp/Diagnostics/DI017/CircularDependencyExamples.cs",
+    highlights: [
+      { label: "Sample app circular dependency", symbol: "BadOrderService" },
+      { label: "Sample app safe pattern", symbol: "GoodOrderService" },
+    ],
+  },
+  DI018: {
+    samplePath: "samples/SampleApp/Diagnostics/DI018/NonInstantiableImplementationExamples.cs",
+    highlights: [
+      { label: "Sample app non-instantiable type", symbol: "BadAbstractService" },
+      { label: "Sample app safe pattern", symbol: "GoodConcreteService" },
+    ],
+  },
+};
+
+const publicDiagnosticInventoryPath = path.join(
+  repoRoot,
+  "src",
+  "DependencyInjection.Lifetime.Analyzers",
+  "DiagnosticIds.cs",
+);
+
+const approvedPublicDiagnosticParity = {
+  aliases: new Map([
+    // DI012b is the duplicate-registration family member that intentionally
+    // rolls up to the outward-facing DI012 sample/docs surface.
+    ["DI012b", "DI012"],
+  ]),
+  omissions: new Set(),
 };
 
 const problemPages = [
@@ -274,6 +304,11 @@ async function main() {
     return;
   }
 
+  if (command === "check-freshness") {
+    await checkFreshness();
+    return;
+  }
+
   printUsage();
 }
 
@@ -284,6 +319,7 @@ function printUsage() {
       "  node tools/generate-growth-assets.mjs sync-readme [--check]",
       "  node tools/generate-growth-assets.mjs site [--output-dir <path>]",
       "  node tools/generate-growth-assets.mjs release-notes --version <x.y.z> [--output-dir <path>]",
+      "  node tools/generate-growth-assets.mjs check-freshness",
     ].join("\n"),
   );
   process.exitCode = 1;
@@ -340,6 +376,221 @@ async function syncReadme({ check }) {
 
   await fs.writeFile(paths.readme, nextReadme, "utf8");
   console.log("Updated README install snippets.");
+}
+
+/**
+ * Validates that the sample/docs wiring is fresh and consistent:
+ *
+ * 1. Every configured rule-page snippet (symbol or marker) can still be extracted
+ *    from its mapped sample file. Missing snippets fail loudly instead of being
+ *    silently dropped. (VAL-SAMPLES-004)
+ *
+ * 2. The set of rule IDs in ruleSampleConfig matches the set of rule-sample
+ *    directories under samples/SampleApp/Diagnostics/, except for explicitly
+ *    approved aliases or omissions. (VAL-SAMPLES-005)
+ *
+ * 3. Every configured sample file actually exists on disk. (VAL-SAMPLES-003)
+ */
+async function checkFreshness() {
+  const failures = [];
+  const publicDiagnosticInventory = await loadPublicDiagnosticInventory();
+  const normalizedPublicDiagnosticIds = normalizeParityIds(publicDiagnosticInventory);
+
+  // --- VAL-SAMPLES-005: parity between ruleSampleConfig keys and sample dirs ---
+
+  const sampleDiagnosticsDir = path.join(repoRoot, "samples", "SampleApp", "Diagnostics");
+  let sampleDirs = [];
+
+  try {
+    const entries = await fs.readdir(sampleDiagnosticsDir);
+    sampleDirs = entries.filter((e) => /^DI\d+[a-z]?$/.test(e)).sort();
+  } catch (error) {
+    failures.push(`Cannot read sample diagnostics directory '${sampleDiagnosticsDir}': ${error.message}`);
+  }
+
+  const configuredIds = Object.keys(ruleSampleConfig).sort();
+  const parityInventory = {
+    surfaceLabel: "public diagnostic inventory",
+    ids: normalizedPublicDiagnosticIds,
+    sourceLabel: path.relative(repoRoot, publicDiagnosticInventoryPath),
+  };
+
+  failures.push(
+    ...compareParitySurfaces(
+      parityInventory,
+      {
+        surfaceLabel: "SampleApp diagnostic directories",
+        ids: normalizeParityIds(sampleDirs),
+        sourceLabel: path.relative(repoRoot, sampleDiagnosticsDir),
+      },
+    ),
+  );
+
+  failures.push(
+    ...compareParitySurfaces(
+      parityInventory,
+      {
+        surfaceLabel: "sample/docs mappings",
+        ids: normalizeParityIds(configuredIds),
+        sourceLabel: "ruleSampleConfig",
+      },
+    ),
+  );
+
+  // --- VAL-SAMPLES-003 / VAL-SAMPLES-004: snippet extraction freshness ---
+
+  for (const [ruleId, config] of Object.entries(ruleSampleConfig)) {
+    const samplePath = path.join(repoRoot, config.samplePath);
+
+    // Check that the sample file itself exists
+    let contents;
+
+    try {
+      contents = normalizeNewlines(readFileSyncSafe(samplePath));
+    } catch (error) {
+      failures.push(
+        `[VAL-SAMPLES-003] Rule ${ruleId}: sample file '${config.samplePath}' cannot be read: ${error.message}`,
+      );
+      continue;
+    }
+
+    // Check every highlight
+    for (const highlight of config.highlights) {
+      if (highlight.symbol) {
+        const code = extractSymbolSnippet(contents, highlight.symbol);
+
+        if (!code) {
+          failures.push(
+            `[VAL-SAMPLES-004] Rule ${ruleId}: symbol '${highlight.symbol}' (label: "${highlight.label}")` +
+              ` could not be extracted from '${config.samplePath}'.` +
+              ` Rename the symbol in the sample file or update the mapping in ruleSampleConfig.`,
+          );
+        }
+      } else if (highlight.marker) {
+        const code = extractMarkerSnippet(contents, highlight.marker);
+
+        if (!code) {
+          failures.push(
+            `[VAL-SAMPLES-004] Rule ${ruleId}: marker '${highlight.marker}' (label: "${highlight.label}")` +
+              ` could not be extracted from '${config.samplePath}'.` +
+              ` Update the marker comment in the sample file or update the mapping in ruleSampleConfig.`,
+          );
+        }
+      } else {
+        failures.push(
+          `[VAL-SAMPLES-004] Rule ${ruleId}: highlight entry (label: "${highlight.label}") has neither` +
+            ` a 'symbol' nor a 'marker' field. Each highlight must specify exactly one.`,
+        );
+      }
+    }
+  }
+
+  if (failures.length === 0) {
+    const rawInventoryCount = publicDiagnosticInventory.length;
+    const normalizedInventoryCount = normalizedPublicDiagnosticIds.length;
+    const approvedParityAdjustmentCount = rawInventoryCount - normalizedInventoryCount;
+    console.log(
+      `Sample/docs freshness check passed. Canonical public diagnostic inventory` +
+        ` (${rawInventoryCount} id(s), ${normalizedInventoryCount} outward-facing after` +
+        ` ${approvedParityAdjustmentCount} approved alias/omission adjustment(s)) matches` +
+        ` ${sampleDirs.length} SampleApp diagnostic directory(s) and ${configuredIds.length}` +
+        ` sample/docs mapping(s) across` +
+        ` ${configuredIds.reduce((sum, id) => sum + (ruleSampleConfig[id]?.highlights?.length ?? 0), 0)} highlight(s).`,
+    );
+    return;
+  }
+
+  console.error(`Sample/docs freshness check FAILED (${failures.length} issue(s)):`);
+
+  for (const failure of failures) {
+    console.error(`  - ${failure}`);
+  }
+
+  process.exitCode = 1;
+}
+
+async function loadPublicDiagnosticInventory() {
+  let contents;
+
+  try {
+    contents = normalizeNewlines(readFileSyncSafe(publicDiagnosticInventoryPath));
+  } catch (error) {
+    throw new Error(`Unable to read public diagnostic inventory '${publicDiagnosticInventoryPath}': ${error.message}`);
+  }
+
+  const ids = [];
+  const seen = new Set();
+  const pattern = /public\s+const\s+string\s+\w+\s*=\s*"(?<id>DI\d+[a-z]?)"/gi;
+
+  for (const match of contents.matchAll(pattern)) {
+    const id = match.groups?.id;
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    ids.push(id);
+  }
+
+  if (ids.length === 0) {
+    throw new Error(
+      `No public diagnostic IDs could be parsed from '${publicDiagnosticInventoryPath}'.` +
+        ` Expected public const string declarations in DiagnosticIds.cs.`,
+    );
+  }
+
+  return ids;
+}
+
+function normalizeParityIds(ids) {
+  const normalized = [];
+  const seen = new Set();
+
+  for (const id of ids) {
+    const normalizedId = normalizeParityId(id);
+    if (!normalizedId || seen.has(normalizedId)) {
+      continue;
+    }
+
+    seen.add(normalizedId);
+    normalized.push(normalizedId);
+  }
+
+  return normalized.sort();
+}
+
+function normalizeParityId(id) {
+  if (approvedPublicDiagnosticParity.omissions.has(id)) {
+    return null;
+  }
+
+  return approvedPublicDiagnosticParity.aliases.get(id) ?? id;
+}
+
+function compareParitySurfaces(referenceSurface, observedSurface) {
+  const failures = [];
+  const referenceIds = new Set(referenceSurface.ids);
+  const observedIds = new Set(observedSurface.ids);
+
+  for (const id of referenceSurface.ids) {
+    if (!observedIds.has(id)) {
+      failures.push(
+        `[VAL-SAMPLES-005] ${referenceSurface.surfaceLabel} contains '${id}' but ${observedSurface.surfaceLabel}` +
+          ` does not. Update ${observedSurface.sourceLabel} or add an approved alias/omission if the difference is intentional.`,
+      );
+    }
+  }
+
+  for (const id of observedSurface.ids) {
+    if (!referenceIds.has(id)) {
+      failures.push(
+        `[VAL-SAMPLES-005] ${observedSurface.surfaceLabel} contains '${id}' but ${referenceSurface.surfaceLabel}` +
+          ` does not. Update ${referenceSurface.sourceLabel} or add an approved alias/omission if the difference is intentional.`,
+      );
+    }
+  }
+
+  return failures;
 }
 
 async function generateSite(outputDir) {

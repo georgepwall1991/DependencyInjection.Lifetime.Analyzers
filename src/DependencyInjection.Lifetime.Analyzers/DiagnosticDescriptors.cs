@@ -222,4 +222,30 @@ public static class DiagnosticDescriptors
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Calling BuildServiceProvider() during service registration creates an additional root container, which can duplicate singletons and cause lifetime inconsistencies.");
+
+    /// <summary>
+    /// DI017: Circular dependency detected in constructor injection chain.
+    /// </summary>
+    public static readonly DiagnosticDescriptor CircularDependency = new(
+        id: DiagnosticIds.CircularDependency,
+        title: "Circular dependency detected",
+        messageFormat: "Service '{0}' has a circular dependency: {1}",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A circular dependency chain was detected in the constructor injection graph. This will cause a StackOverflowException at runtime when the DI container attempts to resolve the service.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI018: Implementation type cannot be constructed by the DI container.
+    /// </summary>
+    public static readonly DiagnosticDescriptor NonInstantiableImplementation = new(
+        id: DiagnosticIds.NonInstantiableImplementation,
+        title: "Non-instantiable implementation type",
+        messageFormat: "Implementation type '{0}' registered for service '{1}' cannot be constructed: {2}",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The registered implementation type cannot be constructed by the DI container because it is abstract, an interface, a static class, or has no accessible constructors. This will cause a runtime exception when the service is resolved.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

@@ -1,0 +1,48 @@
+{
+  "milestone": "sample-truth",
+  "round": 2,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 1,
+    "failed": 1,
+    "failedFeatures": [
+      "sample-diagnostics-claim-contract-hardening"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "sample-diagnostics-claim-contract-hardening",
+      "severity": "blocking",
+      "description": "Folder verification ignores unexpected secondary diagnostics whose (ruleId, severity) pair is absent from the contract, so new unapproved secondary diagnostics can pass sample verification silently instead of failing as non-allowlisted behavior."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "repo-tooling-worker skill",
+      "suggestion": "Tighten procedure reporting or review guidance so handoffs do not mark followedProcedure=true when transcript order shows failing verification was added only after implementation edits.",
+      "evidence": "The review for sample-diagnostics-claim-contract-hardening found transcript edits to verifier/contract files before the later regression-test addition, even though the skill requires writing failing verification first and the handoff reported followedProcedure=true.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/synthesis.round1.json"
+}

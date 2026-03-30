@@ -1,0 +1,34 @@
+{
+  "featureId": "sample-docs-freshness-gate",
+  "reviewedAt": "2026-03-30T16:01:00Z",
+  "commitId": "fbb036cec794be52a2564839fad83fb3267bff67",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature adds the promised loud snippet-extraction check and wires it into `dotnet test`, but the freshness gate still does not cover the full outward-facing surface it claims to protect. In particular, it never compares against the public diagnostic inventory, so future public-rule additions can still drift past the gate, and the authoritative local command set still omits generated-site validation.",
+    "issues": [
+      {
+        "file": "tools/generate-growth-assets.mjs",
+        "line": 379,
+        "severity": "blocking",
+        "description": "`check-freshness` only compares `ruleSampleConfig` against `samples/SampleApp/Diagnostics/*` (`configuredIds` vs `sampleDirs`). It never checks the separate public diagnostic inventory that the feature is supposed to keep in parity (for example `src/DependencyInjection.Lifetime.Analyzers/DiagnosticIds.cs` and the outward-facing README/rule index parsed elsewhere in this file). If a future outward-facing diagnostic such as DI017/DI018 is added to the public inventory but neither `ruleSampleConfig` nor the sample directory tree is updated, this gate still passes, so the required three-way parity check from VAL-SAMPLES-005 is not actually enforced."
+      },
+      {
+        "file": ".factory/services.yaml",
+        "line": 6,
+        "severity": "non_blocking",
+        "description": "The feature claims one canonical root validation gate for sample/docs freshness, but the authoritative local command set still stops at `sync-readme --check`, `build`, and `test`. It does not expose the generated-site validation that CI still runs separately in `.github/workflows/ci.yml:107-108` (`node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site`). That leaves maintainers following `AGENTS.md`/`services.yaml` without a single repo-declared command set that reproduces the full docs-surface gate locally."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "services",
+      "observation": "`.factory/services.yaml` is now treated as the authoritative validation command list in `AGENTS.md`, but it still does not declare the docs-site generation command that CI uses.",
+      "evidence": "`.factory/services.yaml:1-11` defines install/build/test/lint/freshness_check only, while `.github/workflows/ci.yml:107-108` still runs `node tools/generate-growth-assets.mjs site --output-dir ./artifacts/site`."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the handoff, transcript skeleton, repo-tooling-worker skill guidance, commit `fbb036cec794be52a2564839fad83fb3267bff67`, and current repo state for `sample-docs-freshness-gate`. The loud snippet-extraction check is in place, but I marked the review as fail because the implementation still skips the public-diagnostic inventory side of the required parity check, so outward-facing rule additions can drift without tripping the new gate."
+}

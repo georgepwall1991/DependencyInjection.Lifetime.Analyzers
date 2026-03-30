@@ -37,6 +37,43 @@ public static class ConstructorSelection
         return candidates;
     }
 
+    /// <summary>
+    /// Gets the constructor(s) most likely to be selected for activation.
+    /// Prefers attributed constructors, otherwise chooses the resolvable constructor set
+    /// with the highest parameter count.
+    /// </summary>
+    public static IEnumerable<IMethodSymbol> GetLikelyActivationConstructors(
+        INamedTypeSymbol implementationType,
+        System.Func<IParameterSymbol, bool> isParameterResolvable)
+    {
+        var candidates = GetConstructorsToAnalyze(implementationType).ToList();
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var attributed = candidates
+            .Where(HasActivatorUtilitiesConstructorAttribute)
+            .ToList();
+
+        if (attributed.Count > 0)
+        {
+            return attributed;
+        }
+
+        var resolvableConstructors = candidates
+            .Where(constructor => constructor.Parameters.All(isParameterResolvable))
+            .ToList();
+
+        if (resolvableConstructors.Count == 0)
+        {
+            return [];
+        }
+
+        var selectedParameterCount = resolvableConstructors.Max(constructor => constructor.Parameters.Length);
+        return resolvableConstructors.Where(constructor => constructor.Parameters.Length == selectedParameterCount);
+    }
+
     private static bool HasActivatorUtilitiesConstructorAttribute(IMethodSymbol constructor)
     {
         foreach (var attribute in constructor.GetAttributes())

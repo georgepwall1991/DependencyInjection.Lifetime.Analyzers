@@ -1,0 +1,40 @@
+{
+  "milestone": "sample-truth",
+  "round": 3,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-build --configuration Release --verbosity normal",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.sln\" --no-restore --configuration Release",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" sync-readme --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "repo-tooling-worker skill",
+      "suggestion": "Tighten procedure reporting or review guidance so handoffs do not mark followedProcedure=true when transcript order shows targeted failing verification was added only after implementation edits.",
+      "evidence": "Both the sample-diagnostics-claim-contract-hardening and sample-secondary-diagnostic-allowlist-hardening reviews found repo-tooling-worker sessions whose transcript skeletons showed implementation edits before the later targeted verifier/test additions, while both handoffs reported skillFeedback.followedProcedure=true with no deviations.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": "/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/.factory/validation/sample-truth/scrutiny/synthesis.round2.json"
+}

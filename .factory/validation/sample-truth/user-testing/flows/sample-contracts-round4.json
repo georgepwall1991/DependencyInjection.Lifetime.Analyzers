@@ -1,0 +1,136 @@
+{
+  "surface": "command-line validation",
+  "testedAt": "2026-03-30T18:05:15Z",
+  "assertionsTested": [
+    "VAL-SAMPLES-001",
+    "VAL-SAMPLES-002",
+    "VAL-SAMPLES-003",
+    "VAL-CROSS-001",
+    "VAL-CROSS-002"
+  ],
+  "assertionResults": [
+    {
+      "id": "VAL-SAMPLES-001",
+      "title": "SampleApp contract matches real claimed diagnostics",
+      "status": "fail",
+      "reason": "The SampleApp contract is currently unstable: the canonical root solution test failed with four DI012b anchor mismatches moving between SampleApp/DI007 and SampleApp/DI009, even though a later focused SampleDiagnosticsVerifierTests rerun passed. Because the real verification surface can report extra/missing claimed DI diagnostics on the same checkout, the SampleApp contract does not currently match claimed diagnostics reliably.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/sample-contracts-round4/targeted-sample-tests.log",
+        "sample-truth/sample-contracts-round4/sampleapp-build-sarif.log",
+        "sample-truth/sample-contracts-round4/SampleApp.sarif"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-002",
+      "title": "DI015InAction keeps its broken-vs-fixed unresolved-dependency contrast",
+      "status": "pass",
+      "reason": "DI015InAction rebuilt successfully with exactly the two expected broken-case DI015 warnings, and the focused verifier run passed DI015InAction_BrokenCasesReportWhileFixedStaysClean.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round4/di015-build-sarif.log",
+        "sample-truth/sample-contracts-round4/DI015InAction.sarif",
+        "sample-truth/sample-contracts-round4/targeted-sample-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-SAMPLES-003",
+      "title": "Published sample claims agree with observed diagnostics",
+      "status": "fail",
+      "reason": "The verification surface can still surface stale SampleApp claim drift: the failing root test explicitly reported unexpected DI012b diagnostics under SampleApp/DI007 and missing approved secondary DI012b claims under SampleApp/DI009. Even though check-freshness passes structurally, the published claim set does not stay aligned with observed diagnostics on every run.",
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/sample-contracts-round4/check-freshness.log",
+        "sample-truth/sample-contracts-round4/targeted-sample-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "title": "SampleApp build is the canonical sample-diagnostics contract",
+      "status": "fail",
+      "reason": "A direct SampleApp rebuild still succeeds and emits SARIF, but the canonical root validation path intermittently rejects the resulting SampleApp contract with DI012b anchor drift. Because analyzer behavior changes are not moving in lockstep with the checked-in sample contract on every run, the canonical SampleApp contract surface is not stable.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round4/sampleapp-build-sarif.log",
+        "sample-truth/sample-contracts-round4/SampleApp.sarif",
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/sample-contracts-round4/targeted-sample-tests.log"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "title": "Runtime-failure guidance stays aligned between samples and generated docs",
+      "status": "pass",
+      "reason": "DI015InAction still demonstrates the broken-vs-fixed unresolved-dependency contrast, and docs site generation still produced the DI015 rule page plus the unable-to-resolve-service problem guide from the current repo state.",
+      "evidenceFiles": [
+        "sample-truth/sample-contracts-round4/di015-build-sarif.log",
+        "sample-truth/sample-contracts-round4/DI015InAction.sarif",
+        "sample-truth/sample-contracts-round4/site-generate.log",
+        "sample-truth/sample-contracts-round4/site-output/rules/di015-unresolvable-dependency/index.html",
+        "sample-truth/sample-contracts-round4/site-output/problems/unable-to-resolve-service-for-type/index.html"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" check-freshness",
+      "exitCode": 0,
+      "observation": "Succeeded. Structural sample/docs freshness parity still reports 17 canonical ids, 16 outward-facing diagnostics, 16 SampleApp directories, 16 sample/docs mappings, and 32 highlights.",
+      "evidenceFile": "sample-truth/sample-contracts-round4/check-freshness.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/SampleApp/SampleApp.csproj\" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round4/SampleApp.sarif",
+      "exitCode": 0,
+      "observation": "Succeeded. SampleApp rebuilt and emitted SampleApp.sarif with 31 warnings and 0 errors.",
+      "evidenceFile": "sample-truth/sample-contracts-round4/sampleapp-build-sarif.log"
+    },
+    {
+      "command": "dotnet build \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/samples/DI015InAction/DI015InAction.csproj\" -t:Rebuild --configuration Release -p:RunAnalyzersDuringBuild=true -p:ErrorLog=/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round4/DI015InAction.sarif",
+      "exitCode": 0,
+      "observation": "Succeeded. DI015InAction rebuilt and emitted DI015InAction.sarif with the documented two DI015 warnings for BrokenInvoiceScheduler and BrokenKeyedNotificationRunner.",
+      "evidenceFile": "sample-truth/sample-contracts-round4/di015-build-sarif.log"
+    },
+    {
+      "command": "dotnet test \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj\" --configuration Release --filter \"FullyQualifiedName~SampleDiagnosticsVerifierTests\" --logger \"console;verbosity=detailed\"",
+      "exitCode": 0,
+      "observation": "Succeeded on this rerun: both SampleApp_ClaimedDiagnosticsMatchContract and DI015InAction_BrokenCasesReportWhileFixedStaysClean passed.",
+      "evidenceFile": "sample-truth/sample-contracts-round4/targeted-sample-tests.log"
+    },
+    {
+      "command": "node \"/Users/georgewall/RiderProjects/DependencyInjection.Lifetime.Analyzers/tools/generate-growth-assets.mjs\" site --output-dir \"/Users/georgewall/.factory/missions/939f1b12-0eee-4ab1-aa18-723a0cd6b137/evidence/sample-truth/sample-contracts-round4/site-output\"",
+      "exitCode": 0,
+      "observation": "Succeeded. Generated the docs site into the evidence directory.",
+      "evidenceFile": "sample-truth/sample-contracts-round4/site-generate.log"
+    }
+  ],
+  "toolsUsed": [
+    "dotnet",
+    "node",
+    "python3"
+  ],
+  "frictions": [
+    {
+      "description": "SampleApp contract verification is nondeterministic: the same checkout produced a failing root solution test with four DI012b anchor mismatches and a later passing focused verifier rerun.",
+      "resolved": false,
+      "affectedAssertions": [
+        "VAL-SAMPLES-001",
+        "VAL-SAMPLES-003",
+        "VAL-CROSS-001"
+      ],
+      "evidenceFiles": [
+        "sample-truth/workflow-gate-round4/test.log",
+        "sample-truth/sample-contracts-round4/targeted-sample-tests.log"
+      ]
+    }
+  ],
+  "blockers": [],
+  "evidenceFiles": [
+    "sample-truth/workflow-gate-round4/test.log",
+    "sample-truth/sample-contracts-round4/check-freshness.log",
+    "sample-truth/sample-contracts-round4/sampleapp-build-sarif.log",
+    "sample-truth/sample-contracts-round4/SampleApp.sarif",
+    "sample-truth/sample-contracts-round4/di015-build-sarif.log",
+    "sample-truth/sample-contracts-round4/DI015InAction.sarif",
+    "sample-truth/sample-contracts-round4/targeted-sample-tests.log",
+    "sample-truth/sample-contracts-round4/site-generate.log"
+  ],
+  "overallStatus": "fail"
+}

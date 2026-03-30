@@ -169,6 +169,38 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 .WithArguments("MyService", "IServiceProvider"));
     }
 
+    [Fact]
+    public async Task Constructor_WithIKeyedServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public interface IKeyedServiceProvider { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IKeyedServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithSpan(18, 9, 18, 52)
+                .WithArguments("MyService", "IKeyedServiceProvider"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (Allowed Cases)
@@ -392,6 +424,37 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
             """;
 
         // Normal dependencies don't trigger
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithResolvableCleanConstructor_AndServiceProviderFallback_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+            public interface IAnotherDependency { }
+            public class AnotherDependency : IAnotherDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dependency, IAnotherDependency anotherDependency) { }
+
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IAnotherDependency, AnotherDependency>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
