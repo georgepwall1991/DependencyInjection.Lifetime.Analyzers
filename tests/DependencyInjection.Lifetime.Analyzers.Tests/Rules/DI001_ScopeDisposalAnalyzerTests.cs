@@ -427,5 +427,271 @@ public class DI001_ScopeDisposalAnalyzerTests
                 .WithArguments("CreateScope"));
     }
 
+    [Fact]
+    public async Task CreateScope_ConditionalAccessDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    try
+                    {
+                        var service = scope.ServiceProvider.GetService<object>();
+                    }
+                    finally
+                    {
+                        scope?.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_ReassignmentToLocalWithDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    IServiceScope scope;
+                    scope = _scopeFactory.CreateScope();
+                    try
+                    {
+                        var service = scope.ServiceProvider.GetService<object>();
+                    }
+                    finally
+                    {
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_InterveningReassignment_FirstScopeLeaked_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    IServiceScope scope = _scopeFactory.CreateScope();
+                    scope = _scopeFactory.CreateScope();
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        // The first CreateScope is leaked (reassigned before dispose).
+        // The second CreateScope is properly disposed.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 31, 15, 58)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task CreateScope_InterveningNonScopeReassignment_FirstScopeLeaked_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork(IServiceScope otherScope)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    scope = otherScope;
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        // The CreateScope is leaked — reassigned to otherScope before dispose.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 21, 15, 48)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task CreateScope_ReassignmentInsideLambda_DoesNotSuppressDiagnostic()
+    {
+        // Reassignment inside a lambda may never execute, so it should NOT
+        // invalidate the dispose proof from the outer scope.
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork(IServiceScope otherScope)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    Action a = () => { scope = otherScope; };
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        // The lambda reassignment may never execute, so dispose still counts.
+        // No diagnostic — the scope is properly disposed.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_UsingStatementNoVariable_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    using (_scopeFactory.CreateScope())
+                    {
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_InsideUsingButNotDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    using (_scopeFactory.CreateScope())
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(17, 25, 17, 52)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task IServiceProvider_CreateScope_NotDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _provider.CreateScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 21, 15, 44)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task IServiceProvider_CreateScope_WithUsing_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    using (var scope = _provider.CreateScope())
+                    {
+                        var service = scope.ServiceProvider.GetService<object>();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }

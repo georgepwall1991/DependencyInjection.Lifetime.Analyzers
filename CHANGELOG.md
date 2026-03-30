@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-03-31
+
+### Changed
+
+- **DI001 Explicit Disposal Accuracy**: Scope-disposal analysis now recognizes `scope?.Dispose()` and reassignment-to-local disposal patterns, reducing false positives for valid explicit disposal code.
+- **DI001 Reassignment Leak Detection**: Explicit disposal tracking now rejects dispose proofs when the local is reassigned before disposal, including non-scope reassignments, while respecting executable boundaries so lambda-only reassignments do not create noise.
+- **DI001 Regression Coverage**: Added guardrail tests for conditional disposal, reassignment-to-local, intervening reassignments, expression-based `using (CreateScope())`, and `IServiceProvider.CreateScope()` report/no-report behavior.
+
 ## [2.3.3] - 2026-03-31
 
 ### Changed
