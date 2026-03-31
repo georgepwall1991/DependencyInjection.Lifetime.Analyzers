@@ -641,7 +641,7 @@ public sealed class PaymentService : IPaymentService
 
 ## DI018: Non-Instantiable Implementation Type
 
-**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or types without accessible constructors.
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or concrete classes with no public constructors.
 
 **Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
 
@@ -651,10 +651,15 @@ public sealed class PaymentService : IPaymentService
 
 ```csharp
 public interface IMyService { }
-public abstract class BadAbstractService : IMyService { }
+public sealed class BadPrivateCtorService : IMyService
+{
+    private BadPrivateCtorService() { }
+}
 
-services.AddSingleton<IMyService, BadAbstractService>();
+services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
+
+DI018 also reports abstract classes, interfaces, and static classes used as implementation types.
 
 **Better pattern:**
 

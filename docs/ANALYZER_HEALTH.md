@@ -4,7 +4,7 @@ Date: 2026-03-31
 
 Validation:
 - `dotnet test DependencyInjection.Lifetime.Analyzers.sln`
-- Result: `553/553` tests passing
+- Result: `568/568` tests passing
 
 Scoring:
 - `10/10` = strong implementation, strong tests, no obvious short-term hardening need.
@@ -37,15 +37,14 @@ Scoring factors:
 | DI015 | Warning | 53 | 9/10 | No | One of the strongest analyzers in the repo. Broad support for keyed, factory, wrapper, open-generic, and now implementation-instance scenarios. |
 | DI016 | Warning | 11 | 6/10 | Yes | Useful rule, but intentionally heuristic. Registration-context detection is shape-based, so false negatives are still plausible. |
 | DI017 | Warning | 11 | 8/10 | No | Much healthier now. Cycle detection uses stable effective registrations instead of concurrent discovery order, and mixed instance-plus-constructed graphs have direct coverage. |
-| DI018 | Warning | 13 | 6/10 | Yes | Better than before thanks to explicit implementation-instance suppression, but it still has an important blind spot around unbound generic constructor accessibility. |
+| DI018 | Warning | 28 | 9/10 | No | Strong current state. Open-generic constructor checks now use the generic definition, and direct coverage spans keyed registrations, `TryAdd`, `ServiceDescriptor.Singleton`/`Describe`, factory and instance silence, constructor accessibility matrices, and sample/docs parity. |
 
 ## Suggested Pass Order
 
-1. DI018
-2. DI016
-3. DI009
-4. DI002
-5. DI004
+1. DI016
+2. DI009
+3. DI002
+4. DI004
 
 ## Watchlist
 
