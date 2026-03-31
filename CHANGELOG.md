@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.7] - 2026-03-31
+
+### Changed
+
+- **Instance-Backed Registration Fidelity**: Shared registration metadata now tracks pre-built implementation instances explicitly so constructor-driven analyzers and dependency resolution stay aligned with runtime behavior instead of treating existing objects like activatable implementation types.
+- **False-Positive Reduction Across Rules**: DI003, DI010, DI011, DI015, DI017, and DI018 now stay silent for valid implementation-instance registrations, including `ServiceDescriptor` instance forms and generic `implementationInstance:` overloads.
+- **DI017 Determinism Hardening**: Circular-dependency analysis now builds its effective registration set from stable source order, preventing duplicate or mixed instance-plus-constructed registrations from changing results due to concurrent discovery order.
+- **Regression Coverage Expansion**: Added direct tests for generic and named implementation-instance collection, `ServiceDescriptor` instance shapes, mixed instance-plus-constructed DI017 graphs, and the cross-rule fallout cases that motivated this pass.
+
 ## [2.3.6] - 2026-03-31
 
 ### Changed
