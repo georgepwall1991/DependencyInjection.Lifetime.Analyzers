@@ -53,7 +53,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes)
     {
-        var registrations = registrationCollector.Registrations.ToList();
+        var registrations = GetEffectiveRegistrations(registrationCollector);
         if (registrations.Count == 0)
         {
             return;
@@ -295,6 +295,53 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
 
         return lookup;
     }
+
+    private static List<ServiceRegistration> GetEffectiveRegistrations(RegistrationCollector registrationCollector)
+    {
+        var sortedRegistrations = SortRegistrationsBySourceLocation(registrationCollector.AllRegistrations);
+        var effectiveRegistrations = new Dictionary<ServiceLookupKey, ServiceRegistration>();
+
+        foreach (var registration in sortedRegistrations)
+        {
+            var key = new ServiceLookupKey(registration.ServiceType, registration.Key, registration.IsKeyed);
+            effectiveRegistrations[key] = registration;
+        }
+
+        return sortedRegistrations
+            .Where(registration =>
+            {
+                var key = new ServiceLookupKey(registration.ServiceType, registration.Key, registration.IsKeyed);
+                return ReferenceEquals(effectiveRegistrations[key], registration);
+            })
+            .ToList();
+    }
+
+    private static List<ServiceRegistration> SortRegistrationsBySourceLocation(
+        IEnumerable<ServiceRegistration> registrations) =>
+        registrations
+            .Select(registration =>
+            {
+                var lineSpan = registration.Location.GetLineSpan();
+                var path = lineSpan.Path;
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    path = registration.Location.SourceTree?.FilePath ?? string.Empty;
+                }
+
+                return new
+                {
+                    Registration = registration,
+                    Path = path ?? string.Empty,
+                    Line = lineSpan.StartLinePosition.Line,
+                    Column = lineSpan.StartLinePosition.Character
+                };
+            })
+            .OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Line)
+            .ThenBy(item => item.Column)
+            .Select(item => item.Registration)
+            .ToList();
 
     /// <summary>
     /// Finds the registration in the cycle with the lexicographically smallest
