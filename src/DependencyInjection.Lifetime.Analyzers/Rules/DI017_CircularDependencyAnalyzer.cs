@@ -53,7 +53,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes)
     {
-        var registrations = registrationCollector.AllRegistrations.ToList();
+        var registrations = registrationCollector.Registrations.ToList();
         if (registrations.Count == 0)
         {
             return;
