@@ -50,6 +50,22 @@ public class UseAfterDisposeExamples
     }
 
     /// <summary>
+    /// ⚠️ BAD: Service resolved through a provider alias is used after its scope is disposed.
+    /// </summary>
+    public void Bad_PredeclaredScopeProviderAliasAfterDispose()
+    {
+        IScopedService escaped;
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var provider = scope.ServiceProvider;
+            escaped = provider.GetRequiredService<IScopedService>();
+        }
+
+        // DI004: Service 'escaped' may be used after its scope is disposed
+        escaped.DoWork();
+    }
+
+    /// <summary>
     /// ✅ GOOD: All service usage within the using block.
     /// </summary>
     public void Good_UsedWithinScope()

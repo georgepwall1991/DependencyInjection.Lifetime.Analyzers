@@ -136,15 +136,21 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var serviceVariables = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        var providerAliases = new Dictionary<ILocalSymbol, ILocalSymbol>(SymbolEqualityComparer.Default);
+        var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         if (usingStmt.Statement is not null)
         {
-            foreach (var invocation in usingStmt.Statement.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            foreach (var node in usingStmt.Statement.DescendantNodes())
             {
-                if (!TryGetResolutionLifetime(
+                TrackProviderAlias(node, semanticModel, scopeSymbol, providerAliases);
+                TrackServiceAlias(node, semanticModel, serviceVariables);
+
+                if (node is not InvocationExpressionSyntax invocation ||
+                    !TryGetResolutionLifetime(
                         invocation,
                         semanticModel,
                         scopeSymbol,
+                        providerAliases,
                         registrationCollector,
                         wellKnownTypes,
                         out var lifetime) ||
@@ -156,7 +162,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 var assignedVariable = GetAssignedVariableSymbol(invocation, semanticModel);
                 if (assignedVariable is not null)
                 {
-                    serviceVariables.Add(assignedVariable);
+                    serviceVariables[assignedVariable] = invocation;
                 }
             }
         }
@@ -195,7 +201,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var serviceVariables = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        var providerAliases = new Dictionary<ILocalSymbol, ILocalSymbol>(SymbolEqualityComparer.Default);
+        var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
 
         foreach (var node in containingBlock.DescendantNodes())
         {
@@ -204,11 +211,15 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            TrackProviderAlias(node, semanticModel, scopeSymbol, providerAliases);
+            TrackServiceAlias(node, semanticModel, serviceVariables);
+
             if (node is not InvocationExpressionSyntax invocation ||
                 !TryGetResolutionLifetime(
                     invocation,
                     semanticModel,
                     scopeSymbol,
+                    providerAliases,
                     registrationCollector,
                     wellKnownTypes,
                     out var lifetime) ||
@@ -220,7 +231,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             var assignedVariable = GetAssignedVariableSymbol(invocation, semanticModel);
             if (assignedVariable is not null)
             {
-                serviceVariables.Add(assignedVariable);
+                serviceVariables[assignedVariable] = invocation;
             }
         }
 
@@ -243,7 +254,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         MethodDeclarationSyntax containingMethod,
         SemanticModel semanticModel,
-        HashSet<ILocalSymbol> serviceVariables,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
         int position,
         HashSet<TextSpan> reportedSpans)
     {
@@ -258,18 +269,40 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 invocationAfter.Expression is MemberAccessExpressionSyntax memberAccess &&
                 memberAccess.Expression is IdentifierNameSyntax identifier &&
                 semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol symbol &&
-                serviceVariables.Contains(symbol))
+                serviceVariables.ContainsKey(symbol))
             {
                 ReportDiagnostic(context, invocationAfter, identifier.Identifier.Text, reportedSpans);
+            }
+
+            if (node is InvocationExpressionSyntax invocationWithTrackedArgument)
+            {
+                foreach (var argument in invocationWithTrackedArgument.ArgumentList.Arguments)
+                {
+                    if (argument.Expression is not IdentifierNameSyntax argumentIdentifier ||
+                        semanticModel.GetSymbolInfo(argumentIdentifier).Symbol is not ILocalSymbol argumentSymbol ||
+                        !serviceVariables.ContainsKey(argumentSymbol))
+                    {
+                        continue;
+                    }
+
+                    ReportDiagnostic(context, argumentIdentifier, argumentIdentifier.Identifier.Text, reportedSpans);
+                }
             }
 
             if (node is MemberAccessExpressionSyntax memberAccessAfter &&
                 memberAccessAfter.Parent is not InvocationExpressionSyntax &&
                 memberAccessAfter.Expression is IdentifierNameSyntax identifierAccess &&
                 semanticModel.GetSymbolInfo(identifierAccess).Symbol is ILocalSymbol symbolAccess &&
-                serviceVariables.Contains(symbolAccess))
+                serviceVariables.ContainsKey(symbolAccess))
             {
                 ReportDiagnostic(context, memberAccessAfter, identifierAccess.Identifier.Text, reportedSpans);
+            }
+
+            if (node is ReturnStatementSyntax { Expression: IdentifierNameSyntax returnIdentifier } &&
+                semanticModel.GetSymbolInfo(returnIdentifier).Symbol is ILocalSymbol returnSymbol &&
+                serviceVariables.ContainsKey(returnSymbol))
+            {
+                ReportDiagnostic(context, returnIdentifier, returnIdentifier.Identifier.Text, reportedSpans);
             }
         }
     }
@@ -301,25 +334,23 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
     {
         scopeSymbol = null!;
 
-        if (usingStmt.Declaration is null)
+        if (usingStmt.Declaration is not null)
         {
-            return false;
-        }
-
-        foreach (var variable in usingStmt.Declaration.Variables)
-        {
-            if (variable.Initializer?.Value is not InvocationExpressionSyntax invocation ||
-                !IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) ||
-                semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol localSymbol)
+            foreach (var variable in usingStmt.Declaration.Variables)
             {
-                continue;
-            }
+                if (variable.Initializer?.Value is not InvocationExpressionSyntax invocation ||
+                    !IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) ||
+                    semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol localSymbol)
+                {
+                    continue;
+                }
 
-            scopeSymbol = localSymbol;
-            return true;
+                scopeSymbol = localSymbol;
+                return true;
+            }
         }
 
-        return false;
+        return TryGetExistingScopeSymbol(usingStmt.Expression, semanticModel, wellKnownTypes, out scopeSymbol);
     }
 
     private static bool TryGetScopeSymbolFromUsingDeclaration(
@@ -341,6 +372,38 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             scopeSymbol = localSymbol;
             return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetExistingScopeSymbol(
+        ExpressionSyntax? expression,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes,
+        out ILocalSymbol scopeSymbol)
+    {
+        scopeSymbol = null!;
+
+        if (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return TryGetExistingScopeSymbol(parenthesized.Expression, semanticModel, wellKnownTypes, out scopeSymbol);
+        }
+
+        if (expression is not IdentifierNameSyntax identifierName ||
+            semanticModel.GetSymbolInfo(identifierName).Symbol is not ILocalSymbol localSymbol)
+        {
+            return false;
+        }
+
+        foreach (var syntaxReference in localSymbol.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: InvocationExpressionSyntax invocation } &&
+                IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes))
+            {
+                scopeSymbol = localSymbol;
+                return true;
+            }
         }
 
         return false;
@@ -403,13 +466,22 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         ILocalSymbol scopeSymbol,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes,
         out ServiceLifetime? lifetime)
     {
         lifetime = null;
 
-        if (!TryGetResolvedServiceInfo(invocation, semanticModel, scopeSymbol, wellKnownTypes, out var serviceType, out var key, out var isKeyed))
+        if (!TryGetResolvedServiceInfo(
+                invocation,
+                semanticModel,
+                scopeSymbol,
+                providerAliases,
+                wellKnownTypes,
+                out var serviceType,
+                out var key,
+                out var isKeyed))
         {
             return false;
         }
@@ -427,6 +499,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         ILocalSymbol scopeSymbol,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
         WellKnownTypes wellKnownTypes,
         out ITypeSymbol? serviceType,
         out object? key,
@@ -437,11 +510,12 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         isKeyed = false;
 
         if (invocation.Expression is not MemberAccessExpressionSyntax outerMember ||
-            outerMember.Expression is not MemberAccessExpressionSyntax innerMember ||
-            innerMember.Name.Identifier.Text != "ServiceProvider" ||
-            innerMember.Expression is not IdentifierNameSyntax scopeIdentifier ||
-            semanticModel.GetSymbolInfo(scopeIdentifier).Symbol is not ILocalSymbol resolvedScopeSymbol ||
-            !SymbolEqualityComparer.Default.Equals(resolvedScopeSymbol, scopeSymbol))
+            !TryResolveProviderScope(
+                outerMember.Expression,
+                semanticModel,
+                scopeSymbol,
+                providerAliases,
+                out _))
         {
             return false;
         }
@@ -466,6 +540,141 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         }
 
         return true;
+    }
+
+    private static void TrackProviderAlias(
+        SyntaxNode node,
+        SemanticModel semanticModel,
+        ILocalSymbol scopeSymbol,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases)
+    {
+        if (node is LocalDeclarationStatementSyntax localDeclaration)
+        {
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol localSymbol)
+                {
+                    continue;
+                }
+
+                if (variable.Initializer?.Value is null ||
+                    !TryResolveProviderScope(
+                        variable.Initializer.Value,
+                        semanticModel,
+                        scopeSymbol,
+                        providerAliases,
+                        out var resolvedScope))
+                {
+                    providerAliases.Remove(localSymbol);
+                    continue;
+                }
+
+                providerAliases[localSymbol] = resolvedScope;
+            }
+        }
+
+        if (node is AssignmentExpressionSyntax assignment &&
+            assignment.Left is IdentifierNameSyntax leftIdentifier &&
+            semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol leftLocal)
+        {
+            if (!TryResolveProviderScope(
+                    assignment.Right,
+                    semanticModel,
+                    scopeSymbol,
+                    providerAliases,
+                    out var assignmentScope))
+            {
+                providerAliases.Remove(leftLocal);
+                return;
+            }
+
+            providerAliases[leftLocal] = assignmentScope;
+        }
+    }
+
+    private static bool TryResolveProviderScope(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        ILocalSymbol scopeSymbol,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
+        out ILocalSymbol resolvedScope)
+    {
+        resolvedScope = null!;
+
+        if (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return TryResolveProviderScope(
+                parenthesized.Expression,
+                semanticModel,
+                scopeSymbol,
+                providerAliases,
+                out resolvedScope);
+        }
+
+        if (expression is MemberAccessExpressionSyntax memberAccess &&
+            memberAccess.Name.Identifier.Text == "ServiceProvider" &&
+            memberAccess.Expression is IdentifierNameSyntax scopeIdentifier &&
+            semanticModel.GetSymbolInfo(scopeIdentifier).Symbol is ILocalSymbol directScope &&
+            SymbolEqualityComparer.Default.Equals(directScope, scopeSymbol))
+        {
+            resolvedScope = directScope;
+            return true;
+        }
+
+        if (expression is IdentifierNameSyntax identifierName &&
+            semanticModel.GetSymbolInfo(identifierName).Symbol is ILocalSymbol providerLocal &&
+            providerAliases.TryGetValue(providerLocal, out var aliasScope) &&
+            SymbolEqualityComparer.Default.Equals(aliasScope, scopeSymbol))
+        {
+            resolvedScope = aliasScope;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void TrackServiceAlias(
+        SyntaxNode node,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables)
+    {
+        if (node is LocalDeclarationStatementSyntax localDeclaration)
+        {
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (variable.Initializer?.Value is not IdentifierNameSyntax identifier ||
+                    semanticModel.GetSymbolInfo(identifier).Symbol is not ILocalSymbol sourceLocal ||
+                    !serviceVariables.TryGetValue(sourceLocal, out var sourceInvocation) ||
+                    semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol aliasLocal)
+                {
+                    continue;
+                }
+
+                serviceVariables[aliasLocal] = sourceInvocation;
+            }
+        }
+
+        if (node is AssignmentExpressionSyntax assignment &&
+            assignment.Left is IdentifierNameSyntax leftIdentifier &&
+            semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol leftLocal)
+        {
+            if (assignment.Right is InvocationExpressionSyntax &&
+                serviceVariables.TryGetValue(leftLocal, out var existingInvocation) &&
+                existingInvocation == assignment.Right)
+            {
+                return;
+            }
+
+            if (assignment.Right is not IdentifierNameSyntax rightIdentifier ||
+                semanticModel.GetSymbolInfo(rightIdentifier).Symbol is not ILocalSymbol rightLocal ||
+                !serviceVariables.TryGetValue(rightLocal, out var invocation))
+            {
+                serviceVariables.Remove(leftLocal);
+                return;
+            }
+
+            serviceVariables[leftLocal] = invocation;
+        }
     }
 
     private static bool IsServiceResolutionMethod(IMethodSymbol methodSymbol, WellKnownTypes wellKnownTypes)

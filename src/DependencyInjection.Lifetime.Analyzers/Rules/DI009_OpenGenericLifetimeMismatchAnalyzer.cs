@@ -31,6 +31,12 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
 
         context.RegisterCompilationStartAction(compilationContext =>
         {
+            var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
+            if (wellKnownTypes is null)
+            {
+                return;
+            }
+
             var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
             if (registrationCollector is null)
             {
@@ -46,14 +52,17 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
 
             // Second pass: check for open generic captive dependencies at compilation end
             compilationContext.RegisterCompilationEndAction(
-                endContext => AnalyzeOpenGenericRegistrations(endContext, registrationCollector));
+                endContext => AnalyzeOpenGenericRegistrations(endContext, registrationCollector, wellKnownTypes));
         });
     }
 
     private static void AnalyzeOpenGenericRegistrations(
         CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        WellKnownTypes wellKnownTypes)
     {
+        var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
+
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             // Only check singletons for open generic captive dependencies
@@ -76,7 +85,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
 
             // For open generics, we need to analyze the generic type definition's constructor
             var genericDefinition = registration.ImplementationType.OriginalDefinition;
-            var constructors = ConstructorSelection.GetConstructorsToAnalyze(genericDefinition);
+            var constructors = ConstructorSelection.GetLikelyActivationConstructors(
+                genericDefinition,
+                parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
             foreach (var constructor in constructors)
             {
@@ -113,6 +124,19 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 }
             }
         }
+    }
+
+    private static bool IsResolvableConstructorParameter(
+        IParameterSymbol parameter,
+        DependencyResolutionEngine resolutionEngine)
+    {
+        var (key, isKeyed) = GetServiceKey(parameter);
+        return resolutionEngine.ResolveServiceRequest(
+                parameter.Type,
+                key,
+                isKeyed,
+                assumeFrameworkServicesRegistered: true)
+            .IsResolvable;
     }
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)

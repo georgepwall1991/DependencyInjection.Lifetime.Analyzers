@@ -104,6 +104,151 @@ public class DI002_ScopeEscapeAnalyzerTests
                 .WithArguments("_service"));
     }
 
+    [Fact]
+    public async Task ScopedService_AssignedToProperty_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                public IMyService? Service { get; private set; }
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Initialize()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(19, 19)
+                .WithArguments("Service"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ResolvedViaProviderAlias_ThenReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var provider = scope.ServiceProvider;
+                        service = provider.GetRequiredService<IMyService>();
+                    }
+
+                    return service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(21, 23)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_AliasedThenReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    IMyService escaped;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        escaped = service;
+                    }
+
+                    return escaped;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(20, 27)
+                .WithArguments("return"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -198,6 +343,79 @@ public class DI002_ScopeEscapeAnalyzerTests
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task ProviderAlias_ReassignedBeforeResolution_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IServiceProvider _rootProvider;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IServiceProvider rootProvider)
+                {
+                    _scopeFactory = scopeFactory;
+                    _rootProvider = rootProvider;
+                }
+
+                public IMyService? GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var provider = scope.ServiceProvider;
+                    provider = _rootProvider;
+                    return provider.GetService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AliasedScopedService_OverwrittenBeforeReturn_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService()
+                {
+                    IMyService? escaped = null;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        escaped = service;
+                        escaped = null;
+                    }
+
+                    return escaped;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 
     #region Edge Case Tests
@@ -273,6 +491,50 @@ public class DI002_ScopeEscapeAnalyzerTests
             AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
                 .WithSpan(18, 16, 18, 70)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ExistingScopeVariable_DisposedViaUsingStatement_ReturnedService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    using (scope)
+                    {
+                        return scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(20, 20)
                 .WithArguments("return"));
     }
 

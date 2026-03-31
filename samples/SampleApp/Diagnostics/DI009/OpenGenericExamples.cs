@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SampleApp.Services;
 
 namespace SampleApp.Diagnostics.DI009;
@@ -28,6 +29,19 @@ public static class OpenGenericExamples
         // DI009: Open generic singleton 'BadRepositoryWithTransient' captures transient dependency 'ITransientService'
         services.AddSingleton(typeof(IBadRepositoryWithTransient<>), typeof(BadRepositoryWithTransient<>));
 
+        // BAD: ServiceDescriptor singleton shape capturing scoped dependency
+        // DI009: Open generic singleton 'DescriptorBadRepository' captures scoped dependency 'IScopedService'
+        services.Add(ServiceDescriptor.Singleton(typeof(IDescriptorBadRepository<>), typeof(DescriptorBadRepository<>)));
+
+        // BAD: TryAdd singleton shape capturing scoped dependency
+        // DI009: Open generic singleton 'TryAddBadRepository' captures scoped dependency 'IScopedService'
+        services.TryAddSingleton(typeof(ITryAddBadRepository<>), typeof(TryAddBadRepository<>));
+
+        // BAD: Keyed open generic singleton capturing keyed scoped dependency
+        // DI009: Open generic singleton 'KeyedBadRepository' captures scoped dependency 'IScopedService'
+        services.AddKeyedScoped<IScopedService, ScopedService>("primary");
+        services.AddKeyedSingleton(typeof(IKeyedBadRepository<>), "primary", typeof(KeyedBadRepository<>));
+
         // GOOD: Open generic singleton with only singleton dependencies
         services.AddSingleton(typeof(IGoodRepository<>), typeof(GoodRepository<>));
 
@@ -51,6 +65,21 @@ public interface IBadRepositoryWithTransient<T>
 }
 
 public interface IGoodRepository<T>
+{
+    T? Get(int id);
+}
+
+public interface IDescriptorBadRepository<T>
+{
+    T? Get(int id);
+}
+
+public interface ITryAddBadRepository<T>
+{
+    T? Get(int id);
+}
+
+public interface IKeyedBadRepository<T>
 {
     T? Get(int id);
 }
@@ -137,6 +166,42 @@ public class GoodRepository<T> : IGoodRepository<T>
         _singletonService.Execute();
         return default;
     }
+}
+
+/// <summary>
+/// ⚠️ BAD: Open generic singleton registered through ServiceDescriptor capturing a scoped dependency.
+/// </summary>
+public class DescriptorBadRepository<T> : IDescriptorBadRepository<T>
+{
+    public DescriptorBadRepository(IScopedService scopedService)
+    {
+    }
+
+    public T? Get(int id) => default;
+}
+
+/// <summary>
+/// ⚠️ BAD: Open generic singleton registered through TryAdd capturing a scoped dependency.
+/// </summary>
+public class TryAddBadRepository<T> : ITryAddBadRepository<T>
+{
+    public TryAddBadRepository(IScopedService scopedService)
+    {
+    }
+
+    public T? Get(int id) => default;
+}
+
+/// <summary>
+/// ⚠️ BAD: Keyed open generic singleton capturing a matching keyed scoped dependency.
+/// </summary>
+public class KeyedBadRepository<T> : IKeyedBadRepository<T>
+{
+    public KeyedBadRepository([FromKeyedServices("primary")] IScopedService scopedService)
+    {
+    }
+
+    public T? Get(int id) => default;
 }
 
 /// <summary>
