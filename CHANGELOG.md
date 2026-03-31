@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.5] - 2026-03-31
+
+### Changed
+
+- **DI005 Extension-Method Coverage**: Added analyzer and code-fix coverage for `IServiceProvider.CreateScope()` in async and sync contexts, including both `using var` and block-form `using (...)` fixer rewrites to `CreateAsyncScope()`.
+- **DI005 Ownership and Boundary Guardrails**: Locked expected behavior for `CreateScope()` passed into helper methods, returned from async methods, synchronously disposed inside async methods, and used inside async anonymous methods.
+- **DI005 Async-Context Precision**: Added no-diagnostic guardrails for synchronous lambdas and synchronous local functions nested inside async methods so future DI005 changes preserve correct executable-boundary behavior.
+
 ## [2.3.4] - 2026-03-31
 
 ### Changed
