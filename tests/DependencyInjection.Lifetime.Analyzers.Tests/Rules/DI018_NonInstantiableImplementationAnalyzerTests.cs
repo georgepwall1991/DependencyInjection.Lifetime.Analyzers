@@ -230,6 +230,54 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
+    public async Task ImplementationInstance_WithOnlyPrivateConstructors_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class PrivateCtorService : IMyService
+            {
+                private PrivateCtorService() { }
+
+                public static PrivateCtorService Create() => new PrivateCtorService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IMyService), PrivateCtorService.Create());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorImplementationInstance_WithOnlyPrivateConstructors_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class PrivateCtorService : IMyService
+            {
+                private PrivateCtorService() { }
+
+                public static PrivateCtorService Create() => new PrivateCtorService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Singleton(typeof(IMyService), PrivateCtorService.Create()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task NoRegistrations_DoesNotReport()
     {
         var source = Usings + """

@@ -506,5 +506,42 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
         await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task ImplementationInstance_WithOverInjectedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                private MyService() { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+
+                public static MyService Create() => new MyService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IMyService), MyService.Create());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }

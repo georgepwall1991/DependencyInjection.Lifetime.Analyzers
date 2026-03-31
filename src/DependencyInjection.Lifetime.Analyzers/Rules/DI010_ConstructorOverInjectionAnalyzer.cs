@@ -59,6 +59,11 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
     {
         foreach (var registration in registrationCollector.AllRegistrations)
         {
+            if (registration.HasImplementationInstance)
+            {
+                continue;
+            }
+
             var implementationType = registration.ImplementationType;
             if (implementationType is null)
             {

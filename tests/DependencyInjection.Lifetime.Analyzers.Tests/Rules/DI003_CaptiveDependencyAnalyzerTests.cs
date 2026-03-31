@@ -951,6 +951,60 @@ public class DI003_CaptiveDependencyAnalyzerTests
         await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task SingletonImplementationInstance_WithScopedConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton(typeof(ISingletonService), new SingletonService(new ScopedService()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorSingletonImplementationInstance_WithScopedConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.Add(ServiceDescriptor.Singleton(
+                        typeof(ISingletonService),
+                        new SingletonService(new ScopedService())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 
     #region Open Generic Constructor Coverage

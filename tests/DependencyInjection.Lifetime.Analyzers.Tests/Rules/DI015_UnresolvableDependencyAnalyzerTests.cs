@@ -1778,6 +1778,62 @@ public class DI015_UnresolvableDependencyAnalyzerTests
         Assert.Contains("IMyService", diagnostic.GetMessage());
     }
 
+    [Fact]
+    public async Task ImplementationInstance_WithMissingConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                private MyService() { }
+
+                public MyService(IMissingDependency dependency) { }
+
+                public static MyService Create() => new MyService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IMyService), MyService.Create());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorImplementationInstance_WithMissingConstructorDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                private MyService() { }
+
+                public MyService(IMissingDependency dependency) { }
+
+                public static MyService Create() => new MyService();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Singleton(typeof(IMyService), MyService.Create()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 
     private static async Task<ImmutableArray<Diagnostic>> GetDiagnosticsAsync(

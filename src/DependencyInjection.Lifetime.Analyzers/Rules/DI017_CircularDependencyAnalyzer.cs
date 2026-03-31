@@ -69,7 +69,9 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
 
         foreach (var registration in registrations)
         {
-            if (registration.ImplementationType is null || registration.FactoryExpression is not null)
+            if (registration.HasImplementationInstance ||
+                registration.ImplementationType is null ||
+                registration.FactoryExpression is not null)
             {
                 continue;
             }
@@ -167,7 +169,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                if (depRegistration.FactoryExpression is not null)
+                if (depRegistration.FactoryExpression is not null || depRegistration.HasImplementationInstance)
                 {
                     // Factory makes this node opaque — conservatively skip
                     continue;
@@ -334,6 +336,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
             var cycleType = cyclePath[i];
             var registration = allRegistrations.LastOrDefault(r =>
                 SymbolEqualityComparer.Default.Equals(r.ServiceType, cycleType) &&
+                !r.HasImplementationInstance &&
                 r.ImplementationType is not null &&
                 r.FactoryExpression is null);
 

@@ -69,7 +69,8 @@ internal sealed class DependencyResolutionEngine
         ServiceRegistration registration,
         bool assumeFrameworkServicesRegistered)
     {
-        if (registration.ImplementationType is null ||
+        if (registration.HasImplementationInstance ||
+            registration.ImplementationType is null ||
             !IsServiceImplementationCompatible(registration.ServiceType, registration.ImplementationType))
         {
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
@@ -295,6 +296,14 @@ internal sealed class DependencyResolutionEngine
                 var unknownFactoryResult = ResolutionResult.Resolvable(ResolutionConfidence.Unknown);
                 resolutionCache[lookupKey] = unknownFactoryResult;
                 return unknownFactoryResult;
+            }
+
+            if (candidate.HasImplementationInstance)
+            {
+                resolutionPath.Remove(lookupKey);
+                var instanceResult = ResolutionResult.Resolvable(ResolutionConfidence.High);
+                resolutionCache[lookupKey] = instanceResult;
+                return instanceResult;
             }
 
             if (candidate.ImplementationType is null)

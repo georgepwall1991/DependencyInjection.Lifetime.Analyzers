@@ -52,7 +52,7 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             // Skip factory registrations — the factory is responsible for construction
-            if (registration.FactoryExpression is not null)
+            if (registration.FactoryExpression is not null || registration.HasImplementationInstance)
             {
                 continue;
             }

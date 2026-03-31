@@ -24,6 +24,11 @@ public sealed class ServiceRegistration
     public ExpressionSyntax? FactoryExpression { get; }
 
     /// <summary>
+    /// Gets whether this registration is backed by a pre-built implementation instance.
+    /// </summary>
+    public bool HasImplementationInstance { get; }
+
+    /// <summary>
     /// Gets the key of the registration if it is a keyed service.
     /// </summary>
     public object? Key { get; }
@@ -50,6 +55,7 @@ public sealed class ServiceRegistration
         INamedTypeSymbol serviceType,
         INamedTypeSymbol? implementationType,
         ExpressionSyntax? factoryExpression,
+        bool hasImplementationInstance,
         object? key,
         bool isKeyed,
         ServiceLifetime lifetime,
@@ -58,6 +64,7 @@ public sealed class ServiceRegistration
         ServiceType = serviceType;
         ImplementationType = implementationType;
         FactoryExpression = factoryExpression;
+        HasImplementationInstance = hasImplementationInstance;
         Key = key;
         IsKeyed = isKeyed;
         Lifetime = lifetime;

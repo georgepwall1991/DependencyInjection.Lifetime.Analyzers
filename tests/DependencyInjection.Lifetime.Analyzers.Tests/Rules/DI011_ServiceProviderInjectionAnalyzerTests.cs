@@ -522,6 +522,64 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task ImplementationInstance_WithIServiceProviderConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class FakeProvider : IServiceProvider
+            {
+                public object? GetService(Type serviceType) => null;
+            }
+
+            public class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IMyService), new MyService(new FakeProvider()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorImplementationInstance_WithIServiceScopeFactoryConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class FakeScopeFactory : IServiceScopeFactory
+            {
+                public IServiceScope CreateScope() => throw new NotImplementedException();
+            }
+
+            public class MyService : IMyService
+            {
+                public MyService(IServiceScopeFactory scopeFactory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Singleton(
+                        typeof(IMyService),
+                        new MyService(new FakeScopeFactory())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task UnregisteredService_NoDiagnostic()
     {
         var source = Usings + """
