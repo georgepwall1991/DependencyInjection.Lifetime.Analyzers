@@ -252,4 +252,166 @@ public class DI005_AsyncScopeRequiredCodeFixTests
         await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, "DI005_UseCreateAsyncScope");
     }
+
+    [Fact]
+    public async Task CodeFix_ReplacesProviderCreateScopeWithCreateAsyncScope_UsingVarDeclaration()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _provider.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using var scope = _provider.CreateAsyncScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 27, 15, 50)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public async Task CodeFix_ReplacesProviderCreateScopeWithCreateAsyncScope_UsingStatement()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using (var scope = _provider.CreateScope())
+                    {
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using (var scope = _provider.CreateAsyncScope())
+                    {
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 28, 15, 51)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForReturnedScope()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task<IServiceScope> CreateScopeAsync()
+                {
+                    await Task.Delay(100);
+                    return _scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(16, 16, 16, 43)
+            .WithArguments("CreateScopeAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI005_UseCreateAsyncScope");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForPassedToMethod()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    UseScope(_scopeFactory.CreateScope());
+                    await Task.Delay(100);
+                }
+
+                private void UseScope(IServiceScope scope) { }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 18, 15, 45)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI005_UseCreateAsyncScope");
+    }
 }

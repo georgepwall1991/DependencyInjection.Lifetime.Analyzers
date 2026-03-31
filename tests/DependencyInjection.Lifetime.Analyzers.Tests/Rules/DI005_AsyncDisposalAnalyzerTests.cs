@@ -198,6 +198,157 @@ public class DI005_AsyncDisposalAnalyzerTests
                 .WithArguments("ProcessAsync"));
     }
 
+    [Fact]
+    public async Task IServiceProvider_CreateScope_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _provider.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(15, 27, 15, 50)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
+    public async Task CreateScope_PassedToMethod_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    UseScope(_scopeFactory.CreateScope());
+                    await Task.Delay(100);
+                }
+
+                private void UseScope(IServiceScope scope) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(15, 18, 15, 45)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
+    public async Task CreateScope_WithExplicitDispose_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(15, 21, 15, 48)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
+    public async Task CreateScope_ReturnedFromAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task<IServiceScope> CreateScopeAsync()
+                {
+                    await Task.Delay(100);
+                    return _scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(16, 16, 16, 43)
+                .WithArguments("CreateScopeAsync"));
+    }
+
+    [Fact]
+    public async Task CreateScope_InAsyncAnonymousMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Setup()
+                {
+                    Func<Task> f = async delegate
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        await Task.Delay(100);
+                    };
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(17, 31, 17, 58)
+                .WithArguments(""));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (False Positives)
@@ -273,6 +424,77 @@ public class DI005_AsyncDisposalAnalyzerTests
             """;
 
         // This is a sync method that returns Task - no async keyword, so sync disposal is OK
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task IServiceProvider_CreateScope_InSyncMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    using var scope = _provider.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_InSyncLambdaInsideAsyncMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    Func<IServiceScope> f = () => _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_InSyncLocalFunctionInsideAsyncMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    IServiceScope MakeScope() => _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
