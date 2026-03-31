@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-03-31
+
+### Changed
+
+- **DI002 Scope/Alias Tracking**: Scoped-service escape analysis now follows scopes created before a `using (scope)` statement, recognizes provider aliases, and stays quiet after safe alias overwrites instead of keeping stale escape state alive.
+- **DI004 Scope/Alias Disposal Coverage**: Use-after-dispose analysis now recognizes services resolved from predeclared scopes and provider aliases, and it clears stale tracked aliases after safe overwrites to avoid new false positives.
+- **DI009 Registration-Shape Coverage**: Open-generic captive-dependency coverage now has direct tests for `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, and keyed open-generic singleton registrations, plus no-diagnostic guardrails for mismatched keys and ineffective `TryAddSingleton(...)`.
+- **Analyzer Health Snapshot**: Refreshed the rule-health scoring after the DI002/DI004/DI009 hardening pass and rolled the direct-test counts forward to the current suite.
+
 ## [2.3.9] - 2026-03-31
 
 ### Changed

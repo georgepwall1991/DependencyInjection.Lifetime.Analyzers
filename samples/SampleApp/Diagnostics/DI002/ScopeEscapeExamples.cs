@@ -40,6 +40,19 @@ public class ScopeEscapeExamples
     }
 
     /// <summary>
+    /// ⚠️ BAD: Service resolved through a provider alias escapes its scope.
+    /// </summary>
+    public IScopedService Bad_ServiceEscapesViaProviderAliasFromPredeclaredScope()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        {
+            var provider = scope.ServiceProvider;
+            // DI002: Service resolved from scope escapes via 'return'
+            return provider.GetRequiredService<IScopedService>();
+        }
+    }
+
+    /// <summary>
     /// ✅ GOOD: Service is used within the scope and not escaped.
     /// </summary>
     public void Good_UsedWithinScope()

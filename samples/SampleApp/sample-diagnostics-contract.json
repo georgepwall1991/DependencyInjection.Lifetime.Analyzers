@@ -57,6 +57,12 @@
           "anchor": "_capturedService = scope.ServiceProvider.GetRequiredService<IScopedService>();",
           "ruleId": "DI002",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "return provider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI002",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": [
@@ -69,6 +75,12 @@
         {
           "filePathContains": "DI002/ScopeEscapeExamples.cs",
           "anchor": "_capturedService = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI002/ScopeEscapeExamples.cs",
+          "anchor": "return provider.GetRequiredService<IScopedService>();",
           "ruleId": "DI007",
           "severity": "note"
         },
@@ -142,6 +154,12 @@
           "anchor": "transient.Process();",
           "ruleId": "DI004",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "escaped.DoWork();",
+          "ruleId": "DI004",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": [
@@ -160,6 +178,12 @@
         {
           "filePathContains": "DI004/UseAfterDisposeExamples.cs",
           "anchor": "transient = scope.ServiceProvider.GetRequiredService<ITransientService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI004/UseAfterDisposeExamples.cs",
+          "anchor": "escaped = provider.GetRequiredService<IScopedService>();",
           "ruleId": "DI007",
           "severity": "note"
         },
@@ -352,6 +376,24 @@
         {
           "filePathContains": "DI009/OpenGenericExamples.cs",
           "anchor": "services.AddSingleton(typeof(IBadRepositoryWithTransient<>), typeof(BadRepositoryWithTransient<>));",
+          "ruleId": "DI009",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.Add(ServiceDescriptor.Singleton(typeof(IDescriptorBadRepository<>), typeof(DescriptorBadRepository<>)));",
+          "ruleId": "DI009",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.TryAddSingleton(typeof(ITryAddBadRepository<>), typeof(TryAddBadRepository<>));",
+          "ruleId": "DI009",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI009/OpenGenericExamples.cs",
+          "anchor": "services.AddKeyedSingleton(typeof(IKeyedBadRepository<>), \"primary\", typeof(KeyedBadRepository<>));",
           "ruleId": "DI009",
           "severity": "warning"
         }

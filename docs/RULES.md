@@ -68,7 +68,7 @@ public void Process()
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived.
+**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including scopes declared before a later `using (scope)` disposal block.
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -149,7 +149,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended.
+**What it catches:** using a service after the scope that produced it has already ended, including services resolved from a predeclared scope variable later disposed via `using (scope)`.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -329,7 +329,7 @@ services.AddScoped<IMyService, DisposableService>();
 
 ## DI009: Open Generic Captive Dependency
 
-**What it catches:** open generic singleton registrations that depend on shorter-lived services.
+**What it catches:** open generic singleton registrations that depend on shorter-lived services, including common registration-shape variants such as `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, and keyed open-generic singleton registrations.
 
 **Why it matters:** every closed generic instance inherits the lifetime mismatch.
 
