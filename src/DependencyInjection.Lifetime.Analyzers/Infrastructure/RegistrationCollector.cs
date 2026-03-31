@@ -505,8 +505,7 @@ public sealed class RegistrationCollector
             // 6. Instance (Argument "instance")
             if (argName == "instance")
             {
-                 if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType &&
-                     instanceType.SpecialType == SpecialType.None)
+                 if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType)
                 {
                      implementationType = instanceType;
                 }
@@ -536,8 +535,7 @@ public sealed class RegistrationCollector
                             key = val;
                             isKeyed = true;
                         }
-                        else if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType &&
-                                 instanceType.SpecialType == SpecialType.None)
+                        else if (semanticModel.GetTypeInfo(expr).Type is INamedTypeSymbol instanceType)
                         {
                              implementationType = instanceType;
                         }
@@ -675,6 +673,7 @@ public sealed class RegistrationCollector
 
         // Pattern 2: Non-generic with Type parameters AddXxx(typeof(TService)) or AddXxx(typeof(TService), typeof(TImpl))
         var typeofArgs = new List<INamedTypeSymbol>();
+        INamedTypeSymbol? instanceImplementationType = null;
         int keyIndex = -1;
 
         for (int i = 0; i < arguments.Count; i++)
@@ -695,6 +694,10 @@ public sealed class RegistrationCollector
                  keyIndex = i;
                  key = ExtractConstantValue(arg.Expression, semanticModel);
             }
+            else if (semanticModel.GetTypeInfo(arg.Expression).Type is INamedTypeSymbol namedType)
+            {
+                instanceImplementationType = namedType;
+            }
         }
 
         if (typeofArgs.Count >= 1)
@@ -703,6 +706,10 @@ public sealed class RegistrationCollector
             if (typeofArgs.Count > 1)
             {
                 implementationType = typeofArgs[1];
+            }
+            else if (instanceImplementationType is not null)
+            {
+                implementationType = instanceImplementationType;
             }
             else if (factoryExpression is null)
             {

@@ -56,45 +56,114 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
 
     private static bool IsCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
     {
-        // Handle Open Generics (unbound)
         if (service.IsUnboundGenericType)
         {
-            // Implementation must also be generic
-            if (!implementation.IsGenericType) return false;
+            return IsOpenGenericCompatible(service, implementation);
+        }
 
-            var originalService = service.OriginalDefinition;
+        if (implementation.IsGenericType && !implementation.IsUnboundGenericType &&
+            service.IsGenericType && !service.IsUnboundGenericType)
+        {
+            return IsClosedGenericCompatible(service, implementation);
+        }
 
-            // Check if implementation (definition) implements service (definition)
-            
-            // 1. Check direct identity (e.g. Add(typeof(Repo<>), typeof(Repo<>))) - usually caught by self-reg check but good for safety
-            if (SymbolEqualityComparer.Default.Equals(implementation.OriginalDefinition, originalService)) return true;
-
-            // 2. Check interfaces
-            foreach (var iface in implementation.OriginalDefinition.AllInterfaces)
-            {
-                if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService)) return true;
-            }
-
-            // 3. Check base classes
-            var current = implementation.OriginalDefinition.BaseType;
-            while (current != null)
-            {
-                if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, originalService)) return true;
-                current = current.BaseType;
-            }
-
+        if (implementation.IsUnboundGenericType && !service.IsGenericType)
+        {
             return false;
         }
 
-        // Standard check for closed types
-        
-        // 1. Check interfaces
         foreach (var iface in implementation.AllInterfaces)
         {
             if (SymbolEqualityComparer.Default.Equals(iface, service)) return true;
         }
 
-        // 2. Check base classes
+        var baseType = implementation.BaseType;
+        while (baseType != null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(baseType, service)) return true;
+            baseType = baseType.BaseType;
+        }
+
+        return false;
+    }
+
+    private static bool IsOpenGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
+    {
+        if (!implementation.IsGenericType) return false;
+
+        // Open generic registrations must pair an open service with an open implementation.
+        if (!implementation.IsUnboundGenericType) return false;
+
+        var implDef = implementation.OriginalDefinition;
+
+        if (implDef.TypeParameters.Length != service.TypeParameters.Length) return false;
+
+        if (SymbolEqualityComparer.Default.Equals(implDef, service.OriginalDefinition)) return true;
+
+        var serviceArity = service.TypeParameters.Length;
+
+        foreach (var iface in implDef.AllInterfaces)
+        {
+            if (MatchesOpenGenericProjection(iface, service, serviceArity)) return true;
+        }
+
+        var current = implDef.BaseType;
+        while (current != null)
+        {
+            if (MatchesOpenGenericProjection(current, service, serviceArity)) return true;
+            current = current.BaseType;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesOpenGenericProjection(
+        INamedTypeSymbol candidate,
+        INamedTypeSymbol service,
+        int serviceArity)
+    {
+        INamedTypeSymbol candidateUnbound;
+        if (candidate.IsUnboundGenericType)
+        {
+            candidateUnbound = candidate;
+        }
+        else if (candidate.IsGenericType)
+        {
+            candidateUnbound = candidate.ConstructUnboundGenericType();
+        }
+        else
+        {
+            return serviceArity == 0;
+        }
+
+        if (!SymbolEqualityComparer.Default.Equals(candidateUnbound, service))
+            return false;
+
+        if (candidate.IsUnboundGenericType)
+        {
+            return candidate.TypeParameters.Length == serviceArity;
+        }
+
+        var typeArgs = candidate.TypeArguments;
+        if (typeArgs.Length != serviceArity) return false;
+
+        for (int i = 0; i < typeArgs.Length; i++)
+        {
+            var arg = typeArgs[i];
+            if (arg is not ITypeParameterSymbol typeParam) return false;
+            if (typeParam.Ordinal != i) return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsClosedGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
+    {
+        foreach (var iface in implementation.AllInterfaces)
+        {
+            if (SymbolEqualityComparer.Default.Equals(iface, service)) return true;
+        }
+
         var baseType = implementation.BaseType;
         while (baseType != null)
         {

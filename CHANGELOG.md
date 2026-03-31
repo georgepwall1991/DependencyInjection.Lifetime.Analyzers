@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-03-31
+
+### Changed
+
+- **DI013 Open-Generic Compatibility Hardening**: Implementation-type mismatch analysis now rejects open-service registrations backed by closed generic implementations and validates open-generic projection ordering and arity more precisely across interface and base-type mappings.
+- **DI013 Registration-Shape Coverage**: Added direct guardrails for `ServiceDescriptor.Singleton(...)`, `ServiceDescriptor.Describe(...)`, keyed registrations, `TryAddSingleton(...)`, implementation-instance registrations, and other collector-fed registration shapes so compatibility checks stay aligned with the registrations the analyzers actually understand.
+- **Analyzer Health Snapshot**: Added `docs/ANALYZER_HEALTH.md` with per-rule scoring, pass recommendations, and current verification status to make future hardening priorities explicit.
+
 ## [2.3.5] - 2026-03-31
 
 ### Changed
