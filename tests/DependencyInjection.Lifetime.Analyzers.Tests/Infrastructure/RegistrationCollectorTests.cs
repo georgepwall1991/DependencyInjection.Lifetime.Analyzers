@@ -343,6 +343,68 @@ public class RegistrationCollectorTests
         Assert.Equal("MyService", registration.ImplementationType.Name);
     }
 
+    [Fact]
+    public void AnalyzeInvocation_GenericSingleTypeArgWithImplementationInstance_TracksInstanceType()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(new MyService());
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        Assert.Single(collector.Registrations);
+        var registration = collector.Registrations.First();
+        Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("MyService", registration.ImplementationType.Name);
+        Assert.True(registration.HasImplementationInstance);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_GenericSingleTypeArgWithNamedImplementationInstance_TracksInstanceType()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(implementationInstance: new MyService());
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        Assert.Single(collector.Registrations);
+        var registration = collector.Registrations.First();
+        Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("MyService", registration.ImplementationType.Name);
+        Assert.True(registration.HasImplementationInstance);
+    }
+
     #endregion
 
     #region AnalyzeInvocation - typeof Pattern
@@ -409,6 +471,40 @@ public class RegistrationCollectorTests
         Assert.Equal("MyService", registration.ServiceType.Name);
         Assert.NotNull(registration.ImplementationType);
         Assert.Equal("MyService", registration.ImplementationType!.Name);
+        Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_TypeofPatternWithImplementationInstance_TracksInstanceType()
+    {
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IMyService), new MyService());
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        Assert.Single(collector.OrderedRegistrations);
+        Assert.Single(collector.Registrations);
+
+        var registration = collector.Registrations.First();
+        Assert.Equal("IMyService", registration.ServiceType.Name);
+        Assert.NotNull(registration.ImplementationType);
+        Assert.Equal("MyService", registration.ImplementationType!.Name);
+        Assert.True(registration.HasImplementationInstance);
         Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
     }
 
