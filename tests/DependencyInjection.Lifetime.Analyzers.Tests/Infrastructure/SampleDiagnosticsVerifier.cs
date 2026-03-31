@@ -15,6 +15,12 @@ public static class SampleDiagnosticsVerifier
         Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
             "..", "..", "..", "..", ".."));
+    private static readonly string AnalyzerProjectPath =
+        Path.Combine(
+            RepoRoot,
+            "src",
+            "DependencyInjection.Lifetime.Analyzers",
+            "DependencyInjection.Lifetime.Analyzers.csproj");
 
     public static SampleVerificationResult VerifySampleApp()
     {
@@ -67,16 +73,32 @@ public static class SampleDiagnosticsVerifier
 
     private static BuildOutput RunDotnetBuild(string projectPath, string sarifPath)
     {
+        var analyzerBuild = RunDotnetCommand(
+            $"build \"{AnalyzerProjectPath}\" --configuration Release");
+
+        if (!analyzerBuild.Success)
+            return analyzerBuild;
+
+        return RunDotnetCommand(
+            $"build \"{projectPath}\" -t:Rebuild --configuration Release" +
+            $" -p:BuildProjectReferences=false" +
+            $" -p:RunAnalyzersDuringBuild=true" +
+            $" \"-p:ErrorLog={sarifPath}\"");
+    }
+
+    private static BuildOutput RunDotnetCommand(string arguments)
+    {
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"build \"{projectPath}\" -t:Rebuild --configuration Release" +
-                        $" -p:RunAnalyzersDuringBuild=true" +
-                        $" \"-p:ErrorLog={sarifPath}\"",
+            Arguments = $"{arguments} --disable-build-servers -m:1",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            WorkingDirectory = RepoRoot,
         };
+
+        psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
 
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEnd();
