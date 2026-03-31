@@ -32,7 +32,7 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             source,
             AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
-                .WithLocation(7, 24));
+                .WithLocation(7, 33));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             source,
             AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
-                .WithLocation(7, 24));
+                .WithLocation(7, 33));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             source,
             AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
-                .WithLocation(11, 13));
+                .WithLocation(11, 22));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             source,
             AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
-                .WithLocation(11, 13));
+                .WithLocation(11, 22));
     }
 
     [Fact]
@@ -126,7 +126,60 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             source,
             AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
-                .WithLocation(9, 13));
+                .WithLocation(9, 22));
+    }
+
+    [Fact]
+    public async Task VariableIndirection_WithBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var sc = services;
+                    sc.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(8, 12));
+    }
+
+    [Fact]
+    public async Task TopLevelStatements_WithBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            var builder = new FakeBuilder();
+            var services = builder.Services;
+            services.BuildServiceProvider();
+
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI016_BuildServiceProviderMisuseAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = Microsoft.CodeAnalysis.Testing.ReferenceAssemblies.Net.Net60
+                .AddPackages([
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0"),
+                ]),
+        };
+        test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(5, 10));
+
+        await test.RunAsync();
     }
 
     #endregion
@@ -246,6 +299,28 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TopLevelStatements_WithStandaloneServiceCollection_NoDiagnostic()
+    {
+        var source = Usings + """
+            IServiceCollection services = new ServiceCollection();
+            services.BuildServiceProvider();
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI016_BuildServiceProviderMisuseAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = Microsoft.CodeAnalysis.Testing.ReferenceAssemblies.Net.Net60
+                .AddPackages([
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0"),
+                ]),
+        };
+        test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
+
+        await test.RunAsync();
     }
 
     #endregion

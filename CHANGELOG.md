@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.9] - 2026-03-31
+
+### Changed
+
+- **DI016 Minimal-Hosting Coverage**: BuildServiceProvider misuse detection now recognizes top-level registration code that flows from a builder-style `.Services` property, closing the missed-diagnostic gap for minimal-hosting registration composition without expanding the rule to every top-level `IServiceCollection` usage.
+- **DI016 Diagnostic Precision**: DI016 now reports on the `BuildServiceProvider` member name instead of highlighting the full invocation, producing tighter squiggles in the IDE and test output.
+- **DI016 Regression Coverage**: Added tests for `IServiceCollection` variable indirection, top-level `.Services` aliases, and a top-level standalone `new ServiceCollection()` no-diagnostic guardrail so the rule stays conservative.
+
 ## [2.3.8] - 2026-03-31
 
 ### Changed
