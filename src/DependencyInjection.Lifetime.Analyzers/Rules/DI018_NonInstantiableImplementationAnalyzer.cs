@@ -100,18 +100,31 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
             return "type is abstract";
         }
 
+        // Structs always have an implicit parameterless constructor, so they
+        // are always instantiable by the DI container — matches CanSelfBind.
+        if (type.TypeKind == TypeKind.Struct)
+        {
+            return null;
+        }
+
         // No public constructors — matches CanSelfBind in DependencyResolutionEngine
         // which requires public constructors for activation.
-        // Skip unbound generics — Roslyn reports their constructors differently
-        // when type parameters are involved, leading to false positives.
-        if (!type.IsUnboundGenericType &&
-            type.TypeKind == TypeKind.Class &&
-            !type.InstanceConstructors.Any(c =>
-                c.DeclaredAccessibility == Accessibility.Public))
+        if (type.TypeKind == TypeKind.Class &&
+            !HasPublicConstructorForRegistration(type))
         {
             return "type has no accessible constructors";
         }
 
         return null;
+    }
+
+    private static bool HasPublicConstructorForRegistration(INamedTypeSymbol type)
+    {
+        // Open generic registrations are validated on the generic type definition
+        // rather than CanSelfBind semantics, so constructor visibility must be
+        // read from OriginalDefinition for unbound generic types.
+        var typeToCheck = type.IsUnboundGenericType ? type.OriginalDefinition : type;
+        return typeToCheck.InstanceConstructors.Any(c =>
+            c.DeclaredAccessibility == Accessibility.Public);
     }
 }

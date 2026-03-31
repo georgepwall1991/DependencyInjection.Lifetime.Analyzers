@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.3.7
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.3.8
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.3.7">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.3.8">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.3.7" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.3.8" />
 ```
 
 Then reference it from the project file:
@@ -768,7 +768,7 @@ public sealed class PaymentService : IPaymentService
 
 ## DI018: Non-Instantiable Implementation Type
 
-**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or types without accessible constructors.
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or concrete classes with no public constructors.
 
 **Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
 
@@ -778,10 +778,15 @@ public sealed class PaymentService : IPaymentService
 
 ```csharp
 public interface IMyService { }
-public abstract class BadAbstractService : IMyService { }
+public sealed class BadPrivateCtorService : IMyService
+{
+    private BadPrivateCtorService() { }
+}
 
-services.AddSingleton<IMyService, BadAbstractService>();
+services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
+
+DI018 also reports abstract classes, interfaces, and static classes used as implementation types.
 
 **Better pattern:**
 

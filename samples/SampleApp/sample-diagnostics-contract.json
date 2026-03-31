@@ -535,6 +535,12 @@
           "anchor": "services.AddSingleton<IMyService, BadAbstractService>();",
           "ruleId": "DI018",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI018/NonInstantiableImplementationExamples.cs",
+          "anchor": "services.AddSingleton<IPrivateCtorService, BadPrivateCtorService>();",
+          "ruleId": "DI018",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": [

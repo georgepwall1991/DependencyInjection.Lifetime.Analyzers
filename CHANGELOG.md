@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.8] - 2026-03-31
+
+### Changed
+
+- **DI018 Open-Generic Activatability**: Non-instantiable implementation detection now checks unbound generic registrations against the generic type definition, so open generic implementations with only private, internal, or protected constructors are reported instead of slipping through to runtime activation failures.
+- **DI018 Registration-Shape Coverage**: Added direct guardrails for keyed registrations, `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, `ServiceDescriptor.Describe(...)`, `typeof(...)` registrations, and factory/implementation-instance silence so DI018 stays aligned with the collector paths the analyzers actually support.
+- **DI018 Sample and Docs Parity**: Expanded the DI018 sample, contract, and rule docs to include constructor-accessibility failures in addition to abstract implementations, and refreshed the analyzer health snapshot to reflect the stronger coverage.
+
 ## [2.3.7] - 2026-03-31
 
 ### Changed
