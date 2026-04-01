@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.2
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.3
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.2">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.3">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.2" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.3" />
 ```
 
 Then reference it from the project file:
@@ -456,7 +456,7 @@ services.AddScoped<IMyService, DisposableService>();
 
 ## DI009: Open Generic Captive Dependency
 
-**What it catches:** open generic singleton registrations that depend on shorter-lived services, including `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, and keyed open-generic singleton registrations.
+**What it catches:** open generic singleton registrations that depend on shorter-lived services, including `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, keyed open-generic singleton registrations, and `IEnumerable<T>` constructor captures where the element service is shorter-lived.
 
 **Why it matters:** every closed generic instance inherits the lifetime mismatch.
 
@@ -479,6 +479,8 @@ public sealed class Repository<T> : IRepository<T>
 ```csharp
 services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 ```
+
+DI009 follows the single likely activation constructor the container can actually use. Optional/default-value parameters are treated as activatable during that selection, and ambiguous equally-greedy constructor sets stay silent instead of guessing.
 
 **Code Fix:** Yes. Can adjust lifetime for open generic registrations.
 
@@ -578,6 +580,8 @@ services.AddScoped<IMyService, MyService>();
 
 - `TryAdd*` calls after an `Add*` already registered that service.
 - Duplicate `Add*` registrations where later entries override earlier ones.
+
+DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
 
@@ -710,7 +714,7 @@ DI015 is intentionally conservative to keep false positives low:
 
 ## DI016: BuildServiceProvider Misuse
 
-**What it catches:** `BuildServiceProvider()` calls while composing registrations (for example in `ConfigureServices`, `IServiceCollection` extension registration methods, or registration lambdas).
+**What it catches:** `BuildServiceProvider()` calls while composing registrations (for example in `ConfigureServices`, `IServiceCollection` extension registration methods, registration lambdas, or builder-style `.Services` helper flows).
 
 **Why it matters:** building a second provider during registration can duplicate singleton instances and produce lifetime inconsistencies.
 
@@ -743,6 +747,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 - It only reports symbol-confirmed DI `BuildServiceProvider()` calls in registration contexts.
 - It does not report provider-factory methods that intentionally return `IServiceProvider`.
+- It recognizes assignable `IServiceCollection` abstractions and same-boundary helper/alias flows from `.Services`, but it does not warn on standalone top-level `new ServiceCollection()` composition roots.
 
 ---
 

@@ -152,6 +152,11 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 wrapperMethods.Add(observed.ContainingMethod);
             }
 
+            if (observed.Kind == StepKind.WrapperCall && observed.TargetWrapper is not null)
+            {
+                wrapperMethods.Add(observed.TargetWrapper);
+            }
+
             if (!groupedObservations.TryGetValue(observed.ContainingMethod, out var list))
             {
                 list = new List<ObservedInvocation>();
@@ -223,7 +228,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         var invocationLocation = locationKey.Value;
 
         var normalizedTarget = NormalizeMethod(targetMethod);
-        var isWrapperMethod = IsSourceServiceCollectionWrapperMethod(containingMethod);
+        var isWrapperMethod = IsContainedServiceCollectionWrapperMethod(containingMethod);
         var flowKey = isWrapperMethod
             ? null
             : GetRootFlowKey(observation.Invocation, observation.SemanticModel);
@@ -311,6 +316,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
         ref int order)
     {
+        var barrierVersionByFlow = new Dictionary<string, int>();
+
         foreach (var step in steps)
         {
             switch (step.Kind)
@@ -318,39 +325,47 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 case StepKind.DirectRegistration:
                     AppendAlignedRegistrations(
                         step.Location,
-                        step.FlowKey!,
+                        CreateBarrierScopedFlowKey(
+                            step.FlowKey!,
+                            GetBarrierVersion(barrierVersionByFlow, step.FlowKey!)),
                         registrationsByLocation,
                         alignedRegistrations,
                         ref order);
                     break;
 
                 case StepKind.WrapperCall:
-                    ExpandWrapperRegistrations(
+                    var wrapperFlowKey = step.FlowKey!;
+                    var barrierVersion = GetBarrierVersion(barrierVersionByFlow, wrapperFlowKey);
+                    barrierVersion = ExpandWrapperRegistrations(
                         step.TargetWrapper!,
-                        step.FlowKey!,
+                        wrapperFlowKey,
                         registrationsByLocation,
                         alignedRegistrations,
+                        barrierVersion,
                         ref order,
                         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
+                    barrierVersionByFlow[wrapperFlowKey] = barrierVersion;
                     break;
 
                 case StepKind.OpaqueWrapper:
+                    barrierVersionByFlow[step.FlowKey!] = GetBarrierVersion(barrierVersionByFlow, step.FlowKey!) + 1;
                     break;
             }
         }
     }
 
-    private void ExpandWrapperRegistrations(
+    private int ExpandWrapperRegistrations(
         IMethodSymbol wrapperMethod,
         string flowKey,
         Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
         ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
+        int barrierVersion,
         ref int order,
         HashSet<IMethodSymbol> wrapperStack)
     {
         if (!wrapperStack.Add(wrapperMethod))
         {
-            return;
+            return barrierVersion + 1;
         }
 
         if (_wrapperStepsByMethod.TryGetValue(wrapperMethod, out var steps))
@@ -362,29 +377,32 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     case StepKind.DirectRegistration:
                         AppendAlignedRegistrations(
                             step.Location,
-                            flowKey,
+                            CreateBarrierScopedFlowKey(flowKey, barrierVersion),
                             registrationsByLocation,
                             alignedRegistrations,
                             ref order);
                         break;
 
                     case StepKind.WrapperCall:
-                        ExpandWrapperRegistrations(
+                        barrierVersion = ExpandWrapperRegistrations(
                             step.TargetWrapper!,
                             flowKey,
                             registrationsByLocation,
                             alignedRegistrations,
+                            barrierVersion,
                             ref order,
                             wrapperStack);
                         break;
 
                     case StepKind.OpaqueWrapper:
+                        barrierVersion++;
                         break;
                 }
             }
         }
 
         wrapperStack.Remove(wrapperMethod);
+        return barrierVersion;
     }
 
     private static void AppendAlignedRegistrations(
@@ -481,6 +499,12 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         return GetServiceCollectionReceiverKey(invocation, semanticModel);
     }
 
+    private bool IsContainedServiceCollectionWrapperMethod(IMethodSymbol method)
+    {
+        return method.DeclaringSyntaxReferences.Length > 0 &&
+               IsCustomServiceCollectionExtension(method);
+    }
+
     private bool IsCustomServiceCollectionExtension(IMethodSymbol method)
     {
         var originalMethod = method.ReducedFrom ?? method;
@@ -538,8 +562,10 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
     private bool IsSourceServiceCollectionWrapperMethod(IMethodSymbol method)
     {
-        return method.DeclaringSyntaxReferences.Length > 0 &&
-               IsCustomServiceCollectionExtension(method);
+        var originalMethod = method.ReducedFrom ?? method;
+        return HasExecutableBody(originalMethod) &&
+               !IsKnownServiceCollectionExtensionsType(originalMethod.ContainingType) &&
+               originalMethod.Parameters.Any(parameter => IsServiceCollectionFlowType(parameter.Type));
     }
 
     private bool IsKnownServiceCollectionExtensionsType(INamedTypeSymbol? type)
@@ -630,8 +656,14 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             return null;
         }
 
-        var receiverSymbol = semanticModel.GetSymbolInfo(receiver).Symbol;
-        return receiverSymbol is not null ? CreateFlowKey(receiverSymbol) : receiver.ToString();
+        return TryGetNormalizedServiceCollectionFlowKey(
+            receiver,
+            semanticModel,
+            invocation.SpanStart,
+            new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+            out var flowKey)
+            ? flowKey
+            : null;
     }
 
     internal static bool TryGetServiceCollectionReceiverExpression(
@@ -643,15 +675,21 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
         {
-            receiver = memberAccess.Expression;
-            return true;
+            if (IsServiceCollectionReceiver(memberAccess.Expression, semanticModel))
+            {
+                receiver = memberAccess.Expression;
+                return true;
+            }
         }
 
         if (invocation.Expression is MemberBindingExpressionSyntax &&
             invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
         {
-            receiver = conditionalAccess.Expression;
-            return true;
+            if (IsServiceCollectionReceiver(conditionalAccess.Expression, semanticModel))
+            {
+                receiver = conditionalAccess.Expression;
+                return true;
+            }
         }
 
         var symbolInfo = semanticModel.GetSymbolInfo(invocation);
@@ -666,6 +704,16 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         if (originalMethod.IsExtensionMethod && invocation.ArgumentList.Arguments.Count > 0)
         {
             receiver = invocation.ArgumentList.Arguments[0].Expression;
+            return true;
+        }
+
+        if (TryGetTrackedServiceCollectionArgumentExpression(
+                invocation,
+                semanticModel,
+                originalMethod,
+                out var argumentExpression))
+        {
+            receiver = argumentExpression;
             return true;
         }
 
@@ -697,6 +745,275 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         return primaryLocation != null
             ? symbol.Kind + ":" + symbol.Name + ":" + primaryLocation.SourceTree?.FilePath + ":" + primaryLocation.SourceSpan.Start
             : symbol.Kind + ":" + symbol.Name + ":" + symbol.ContainingType?.ToDisplayString();
+    }
+
+    private static string CreateExpressionFlowKey(ExpressionSyntax expression)
+    {
+        return "Expr:" + expression.SyntaxTree.FilePath + ":" + expression.SpanStart;
+    }
+
+    private static string CreateBarrierScopedFlowKey(string flowKey, int barrierVersion)
+    {
+        return barrierVersion == 0 ? flowKey : flowKey + "|barrier:" + barrierVersion;
+    }
+
+    private static int GetBarrierVersion(Dictionary<string, int> barrierVersionByFlow, string flowKey)
+    {
+        return barrierVersionByFlow.TryGetValue(flowKey, out var barrierVersion)
+            ? barrierVersion
+            : 0;
+    }
+
+    private static bool TryGetTrackedServiceCollectionArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        IMethodSymbol targetMethod,
+        out ExpressionSyntax argumentExpression)
+    {
+        argumentExpression = null!;
+
+        var candidateExpressions = new List<ExpressionSyntax>();
+        foreach (var parameter in targetMethod.Parameters)
+        {
+            if (!IsServiceCollectionLikeParameterType(parameter.Type))
+            {
+                continue;
+            }
+
+            var candidate = GetInvocationArgumentExpression(invocation, targetMethod, parameter);
+            if (candidate is null || !IsServiceCollectionReceiver(candidate, semanticModel))
+            {
+                continue;
+            }
+
+            candidateExpressions.Add(candidate);
+        }
+
+        if (candidateExpressions.Count == 0)
+        {
+            return false;
+        }
+
+        if (candidateExpressions.Count == 1)
+        {
+            argumentExpression = candidateExpressions[0];
+            return true;
+        }
+
+        string? sharedFlowKey = null;
+        foreach (var candidateExpression in candidateExpressions)
+        {
+            if (!TryGetNormalizedServiceCollectionFlowKey(
+                    candidateExpression,
+                    semanticModel,
+                    invocation.SpanStart,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                    out var candidateFlowKey))
+            {
+                return false;
+            }
+
+            if (sharedFlowKey is null)
+            {
+                sharedFlowKey = candidateFlowKey;
+                argumentExpression = candidateExpression;
+                continue;
+            }
+
+            if (!string.Equals(sharedFlowKey, candidateFlowKey, System.StringComparison.Ordinal))
+            {
+                argumentExpression = null!;
+                return false;
+            }
+        }
+
+        return sharedFlowKey is not null;
+    }
+
+    private static ExpressionSyntax? GetInvocationArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol targetMethod,
+        IParameterSymbol parameter)
+    {
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.Text == parameter.Name)
+            {
+                return argument.Expression;
+            }
+        }
+
+        var parameterIndex = targetMethod.Parameters.IndexOf(parameter);
+        return parameterIndex >= 0 && parameterIndex < invocation.ArgumentList.Arguments.Count
+            ? invocation.ArgumentList.Arguments[parameterIndex].Expression
+            : null;
+    }
+
+    private static bool IsServiceCollectionLikeParameterType(ITypeSymbol type)
+    {
+        if (IsServiceCollectionTypeByName(type))
+        {
+            return true;
+        }
+
+        return type.AllInterfaces.Any(IsServiceCollectionTypeByName);
+    }
+
+    private static bool HasExecutableBody(IMethodSymbol method)
+    {
+        foreach (var syntaxReference in method.DeclaringSyntaxReferences)
+        {
+            switch (syntaxReference.GetSyntax())
+            {
+                case MethodDeclarationSyntax { Body: not null }:
+                case MethodDeclarationSyntax { ExpressionBody: not null }:
+                case LocalFunctionStatementSyntax { Body: not null }:
+                case LocalFunctionStatementSyntax { ExpressionBody: not null }:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNormalizedServiceCollectionFlowKey(
+        ExpressionSyntax receiver,
+        SemanticModel semanticModel,
+        int position,
+        HashSet<ISymbol> visitedSymbols,
+        out string flowKey)
+    {
+        flowKey = null!;
+        receiver = UnwrapExpression(receiver);
+
+        if (receiver is ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax)
+        {
+            flowKey = CreateExpressionFlowKey(receiver);
+            return true;
+        }
+
+        if (receiver is MemberAccessExpressionSyntax memberAccess &&
+            TryGetNormalizedServiceCollectionFlowKey(
+                memberAccess.Expression,
+                semanticModel,
+                position,
+                visitedSymbols,
+                out var baseFlowKey))
+        {
+            var memberSymbol = semanticModel.GetSymbolInfo(memberAccess.Name).Symbol ??
+                               semanticModel.GetSymbolInfo(memberAccess).Symbol;
+            if (memberSymbol is IPropertySymbol or IFieldSymbol)
+            {
+                flowKey = baseFlowKey + "." + memberSymbol.Name;
+                return true;
+            }
+        }
+
+        var receiverSymbol = semanticModel.GetSymbolInfo(receiver).Symbol;
+        if (receiverSymbol is ILocalSymbol localSymbol)
+        {
+            if (!visitedSymbols.Add(localSymbol))
+            {
+                return false;
+            }
+
+            if (TryGetLocalAliasSourceExpression(localSymbol, semanticModel, position, out var aliasSource) &&
+                TryGetNormalizedServiceCollectionFlowKey(
+                    aliasSource,
+                    semanticModel,
+                    position,
+                    visitedSymbols,
+                    out flowKey))
+            {
+                return true;
+            }
+
+            visitedSymbols.Remove(localSymbol);
+        }
+
+        if (receiverSymbol is not null)
+        {
+            flowKey = CreateFlowKey(receiverSymbol);
+            return true;
+        }
+
+        flowKey = CreateExpressionFlowKey(receiver);
+        return true;
+    }
+
+    private static bool TryGetLocalAliasSourceExpression(
+        ILocalSymbol localSymbol,
+        SemanticModel semanticModel,
+        int position,
+        out ExpressionSyntax expression)
+    {
+        expression = null!;
+
+        var useEnclosingSymbol = NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(position) as IMethodSymbol);
+        if (useEnclosingSymbol is null)
+        {
+            return false;
+        }
+
+        var latestAssignment = localSymbol.DeclaringSyntaxReferences
+            .Select(reference => reference.GetSyntax())
+            .OfType<VariableDeclaratorSyntax>()
+            .Where(declarator =>
+                declarator.Initializer is not null &&
+                declarator.SpanStart < position &&
+                SymbolEqualityComparer.Default.Equals(
+                    NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(declarator.SpanStart) as IMethodSymbol),
+                    useEnclosingSymbol))
+            .Select(declarator => new
+            {
+                Expression = declarator.Initializer!.Value,
+                SpanStart = declarator.Initializer!.Value.SpanStart
+            })
+            .Concat(
+                semanticModel.SyntaxTree.GetRoot().DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(assignment =>
+                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
+                        assignment.SpanStart < position &&
+                        SymbolEqualityComparer.Default.Equals(
+                            semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                            localSymbol) &&
+                        SymbolEqualityComparer.Default.Equals(
+                            NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(assignment.SpanStart) as IMethodSymbol),
+                            useEnclosingSymbol))
+                    .Select(assignment => new
+                    {
+                        Expression = assignment.Right,
+                        SpanStart = assignment.Right.SpanStart
+                    }))
+            .OrderBy(candidate => candidate.SpanStart)
+            .LastOrDefault();
+
+        if (latestAssignment is null)
+        {
+            return false;
+        }
+
+        expression = latestAssignment.Expression;
+        return true;
+    }
+
+    private static ExpressionSyntax UnwrapExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
     }
 
     private static IEnumerable<LocationKey> GetRegistrationLocations(IEnumerable<Location> registrationLocations)
