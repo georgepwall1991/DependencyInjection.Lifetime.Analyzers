@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.5] - 2026-04-01
+
+### Changed
+
+- **DI012 Ignored TryAdd Code Fix**: Added a narrow, real code fix for the `TryAddIgnored` variant of DI012 that removes redundant ignored `TryAdd*` registrations when they appear as standalone statements, including wrapper-method cases, while leaving duplicate-registration scenarios diagnostic-only.
+
 ## [2.4.4] - 2026-04-01
 
 ### Changed

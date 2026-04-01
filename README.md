@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.4
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.5
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.4">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.5">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.4" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.5" />
 ```
 
 Then reference it from the project file:
@@ -149,7 +149,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI009](#di009-open-generic-captive-dependency) | Open generic captive dependency | Warning | Yes |
 | [DI010](#di010-constructor-over-injection) | Constructor over-injection | Info | No |
 | [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Info | No |
-| [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | No |
+| [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | Yes |
 | [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
@@ -599,7 +599,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 **Better pattern:** decide and signal intent clearly: `TryAdd*` first, or explicit override with comments/tests.
 
-**Code Fix:** No.
+**Code Fix:** Yes for ignored `TryAdd*` calls that are standalone statements; the fixer removes the redundant ignored registration. Duplicate override cases remain manual.
 
 ---
 
