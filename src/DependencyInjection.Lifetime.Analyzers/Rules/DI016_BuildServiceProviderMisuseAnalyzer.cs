@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -31,6 +32,7 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 "Microsoft.Extensions.DependencyInjection.IServiceCollection");
             var iServiceProviderType = compilationContext.Compilation.GetTypeByMetadataName(
                 "System.IServiceProvider");
+            var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
             if (iServiceCollectionType is null)
             {
                 return;
@@ -40,7 +42,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 operationContext => AnalyzeInvocation(
                     operationContext,
                     iServiceCollectionType,
-                    iServiceProviderType),
+                    iServiceProviderType,
+                    semanticModelsByTree),
                 OperationKind.Invocation);
         });
     }
@@ -48,7 +51,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
     private static void AnalyzeInvocation(
         OperationAnalysisContext context,
         INamedTypeSymbol iServiceCollectionType,
-        INamedTypeSymbol? iServiceProviderType)
+        INamedTypeSymbol? iServiceProviderType,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         var invocation = (IInvocationOperation)context.Operation;
         if (!IsBuildServiceProviderInvocation(invocation, iServiceCollectionType))
@@ -59,7 +63,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         if (!IsRegistrationContext(
                 invocation,
                 iServiceCollectionType,
-                iServiceProviderType))
+                iServiceProviderType,
+                semanticModelsByTree))
         {
             return;
         }
@@ -101,7 +106,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
     private static bool IsRegistrationContext(
         IInvocationOperation invocation,
         INamedTypeSymbol iServiceCollectionType,
-        INamedTypeSymbol? iServiceProviderType)
+        INamedTypeSymbol? iServiceProviderType,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         var syntax = invocation.Syntax;
         var semanticModel = invocation.SemanticModel;
@@ -126,7 +132,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                         receiverExpression,
                         semanticModel,
                         iServiceCollectionType,
-                        iServiceProviderType))
+                        iServiceProviderType,
+                        semanticModelsByTree))
                 {
                     return true;
                 }
@@ -158,7 +165,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                         receiverExpression,
                         semanticModel,
                         iServiceCollectionType,
-                        iServiceProviderType))
+                        iServiceProviderType,
+                        semanticModelsByTree))
                 {
                     return true;
                 }
@@ -179,7 +187,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                     receiverExpression,
                     semanticModel,
                     iServiceCollectionType,
-                    iServiceProviderType);
+                    iServiceProviderType,
+                    semanticModelsByTree);
             }
 
             if (node is ConstructorDeclarationSyntax)
@@ -239,7 +248,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
             iServiceCollectionType,
             invocation.Syntax.SyntaxTree.GetRoot(),
             depth: 0,
-            new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+            new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+            new ConcurrentDictionary<SyntaxTree, SemanticModel>());
     }
 
     private static bool IsServicesPropertySource(
@@ -248,7 +258,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         INamedTypeSymbol iServiceCollectionType,
         SyntaxNode boundary,
         int depth,
-        HashSet<ISymbol> visitedSymbols)
+        HashSet<ISymbol> visitedSymbols,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (depth > 8)
         {
@@ -263,7 +274,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 iServiceCollectionType,
                 boundary,
                 depth + 1,
-                visitedSymbols);
+                visitedSymbols,
+                semanticModelsByTree);
         }
 
         if (expression is MemberAccessExpressionSyntax memberAccess &&
@@ -284,7 +296,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 iServiceCollectionType,
                 boundary,
                 depth + 1,
-                visitedSymbols);
+                visitedSymbols,
+                semanticModelsByTree);
         }
 
         if (expression is InvocationExpressionSyntax invocationExpression)
@@ -295,7 +308,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 iServiceCollectionType,
                 boundary,
                 depth + 1,
-                visitedSymbols);
+                visitedSymbols,
+                semanticModelsByTree);
         }
 
         return false;
@@ -307,7 +321,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         ExpressionSyntax receiverExpression,
         SemanticModel semanticModel,
         INamedTypeSymbol iServiceCollectionType,
-        INamedTypeSymbol? iServiceProviderType)
+        INamedTypeSymbol? iServiceProviderType,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (ReturnsIServiceProvider(methodSymbol, iServiceProviderType))
         {
@@ -321,7 +336,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                    iServiceCollectionType,
                    boundarySyntax,
                    depth: 0,
-                   new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+                   new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                   semanticModelsByTree);
     }
 
     private static bool TryGetReceiverExpression(
@@ -373,7 +389,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         INamedTypeSymbol iServiceCollectionType,
         SyntaxNode boundary,
         int depth,
-        HashSet<ISymbol> visitedSymbols)
+        HashSet<ISymbol> visitedSymbols,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (!visitedSymbols.Add(localSymbol))
         {
@@ -425,7 +442,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                     iServiceCollectionType,
                     boundary,
                     depth,
-                    visitedSymbols))
+                    visitedSymbols,
+                    semanticModelsByTree))
             {
                 return false;
             }
@@ -440,7 +458,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         INamedTypeSymbol iServiceCollectionType,
         SyntaxNode callerBoundary,
         int depth,
-        HashSet<ISymbol> visitedSymbols)
+        HashSet<ISymbol> visitedSymbols,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         var symbolInfo = semanticModel.GetSymbolInfo(invocationExpression);
         var methodSymbol = symbolInfo.Symbol as IMethodSymbol ??
@@ -459,10 +478,10 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         foreach (var syntaxReference in methodSymbol.DeclaringSyntaxReferences)
         {
             var declarationSyntax = syntaxReference.GetSyntax();
-            if (declarationSyntax.SyntaxTree != semanticModel.SyntaxTree)
-            {
-                continue;
-            }
+            var declarationSemanticModel = GetSemanticModel(
+                declarationSyntax.SyntaxTree,
+                semanticModel.Compilation,
+                semanticModelsByTree);
 
             if (TryGetReturnedExpressions(declarationSyntax, out var returnExpressions) &&
                 AreAllReturnExpressionsServicesSources(
@@ -471,11 +490,12 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                     invocationExpression,
                     semanticModel,
                     declarationSyntax,
-                    semanticModel,
+                    declarationSemanticModel,
                     callerBoundary,
                     iServiceCollectionType,
                     depth,
-                    visitedSymbols))
+                    visitedSymbols,
+                    semanticModelsByTree))
             {
                 return true;
             }
@@ -537,7 +557,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         SyntaxNode callerBoundary,
         INamedTypeSymbol iServiceCollectionType,
         int depth,
-        HashSet<ISymbol> visitedSymbols)
+        HashSet<ISymbol> visitedSymbols,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
         if (returnExpressions.Count == 0)
         {
@@ -555,7 +576,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                         iServiceCollectionType,
                         callerBoundary,
                         depth,
-                        visitedSymbols))
+                        visitedSymbols,
+                        semanticModelsByTree))
                 {
                     return false;
                 }
@@ -569,7 +591,8 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                     iServiceCollectionType,
                     declarationSyntax,
                     depth,
-                    visitedSymbols))
+                    visitedSymbols,
+                    semanticModelsByTree))
             {
                 return false;
             }
@@ -608,6 +631,16 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
 
         argumentExpression = null!;
         return false;
+    }
+
+    private static SemanticModel GetSemanticModel(
+        SyntaxTree syntaxTree,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        #pragma warning disable RS1030
+        return semanticModelsByTree.GetOrAdd(syntaxTree, tree => compilation.GetSemanticModel(tree));
+        #pragma warning restore RS1030
     }
 
     private static IEnumerable<SyntaxNode> EnumerateBoundaryNodes(SyntaxNode boundary)

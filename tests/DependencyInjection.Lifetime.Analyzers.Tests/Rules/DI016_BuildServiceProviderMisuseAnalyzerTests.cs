@@ -200,6 +200,38 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task HelperMethodReturningBuilderServices_FromDifferentFile_ReportsDiagnostic()
+    {
+        var caller = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    SharedHelpers.GetServices(builder).{|#0:BuildServiceProvider|}();
+                }
+            }
+            """;
+
+        var helper = Usings + """
+            public static class SharedHelpers
+            {
+                public static IServiceCollection GetServices(FakeBuilder builder) => builder.Services;
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            [("Caller.cs", caller), ("Helper.cs", helper)],
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+    }
+
+    [Fact]
     public async Task TopLevelStatements_WithBuildServiceProviderCall_ReportsDiagnostic()
     {
         var source = Usings + """
