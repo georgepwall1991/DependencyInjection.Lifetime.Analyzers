@@ -4,7 +4,7 @@ Date: 2026-04-01
 
 Validation:
 - `dotnet test DependencyInjection.Lifetime.Analyzers.sln`
-- Result: `602/602` tests passing
+- Result: `603/603` tests passing
 
 Scoring:
 - `10/10` = strong implementation, strong tests, no obvious short-term hardening need.
@@ -29,7 +29,7 @@ Scoring factors:
 | DI007 | Info | 22 | 8/10 | No | Informational by design and already looks noise-hardened. Good factory and lambda handling for the current scope. |
 | DI008 | Warning | 19 | 8/10 | No | Solid disposable transient coverage across generic registrations, `typeof`, `IDisposable`, and `IAsyncDisposable`. |
 | DI009 | Warning | 18 | 8/10 | No | Stronger now. Direct coverage includes `TryAddSingleton`, `ServiceDescriptor.Singleton`, keyed open-generic singleton paths, constructor-selection guardrails, and ineffective-`TryAdd` silence. |
-| DI010 | Info | 23 | 9.5/10 | No | Strong current state after the DI010 hardening pass. The rule now follows likely activation constructors, covers conservative factory paths, uses symbol-accurate exclusions, and supports `.editorconfig` threshold overrides. |
+| DI010 | Info | 24 | 9.5/10 | No | Strong current state after the DI010 hardening pass. The rule now follows likely activation constructors, covers conservative factory paths, uses symbol-accurate exclusions, and supports `.editorconfig` threshold overrides. |
 | DI011 | Info | 19 | 9/10 | No | Strong current state. Uses likely-activation-constructor logic, has good allowance coverage, and now stays quiet for valid implementation-instance registrations. |
 | DI012 | Info | 26 | 8/10 | No | Strong registration-history rule. `TryAdd`, duplicates, wrappers, keyed variants, and `ServiceDescriptor` shapes are covered. |
 | DI013 | Error | 51 | 9/10 | No | Strong current state after the DI013 hardening pass. Open-generic projection checks, collector-fed registration shapes, and instance-backed mismatches still have broad direct coverage. |
