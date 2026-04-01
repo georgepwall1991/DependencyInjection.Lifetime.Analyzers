@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.2" />
 ```
 
 Then reference it from the project file:
@@ -195,7 +195,7 @@ public void Process()
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases and scopes disposed later via `using (scope)`.
+**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -276,7 +276,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases and scopes disposed later via `using (scope)`.
+**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 

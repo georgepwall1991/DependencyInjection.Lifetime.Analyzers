@@ -41,7 +41,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            var methods = new ConcurrentBag<MethodDeclarationSyntax>();
+            var executableRoots = new ConcurrentBag<SyntaxNode>();
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
 
             compilationContext.RegisterSyntaxNodeAction(
@@ -60,43 +60,53 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             compilationContext.RegisterSyntaxNodeAction(
                 syntaxContext =>
                 {
-                    methods.Add((MethodDeclarationSyntax)syntaxContext.Node);
+                    executableRoots.Add(syntaxContext.Node);
                     semanticModelsByTree.TryAdd(
                         syntaxContext.SemanticModel.SyntaxTree,
                         syntaxContext.SemanticModel);
                 },
-                SyntaxKind.MethodDeclaration);
+                ExecutableSyntaxHelper.ExecutableRootKinds);
 
             compilationContext.RegisterCompilationEndAction(
                 endContext =>
                 {
-                    foreach (var method in methods)
+                    foreach (var executableRoot in executableRoots)
                     {
-                        if (!semanticModelsByTree.TryGetValue(method.SyntaxTree, out var semanticModel))
+                        if (!semanticModelsByTree.TryGetValue(executableRoot.SyntaxTree, out var semanticModel))
                         {
                             continue;
                         }
 
-                        AnalyzeMethod(endContext, method, semanticModel, wellKnownTypes, registrationCollector);
+                        AnalyzeExecutableRoot(
+                            endContext,
+                            executableRoot,
+                            semanticModel,
+                            wellKnownTypes,
+                            registrationCollector);
                     }
                 });
         });
     }
 
-    private static void AnalyzeMethod(
+    private static void AnalyzeExecutableRoot(
         CompilationAnalysisContext context,
-        MethodDeclarationSyntax method,
+        SyntaxNode executableRoot,
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
         RegistrationCollector registrationCollector)
     {
+        if (!ExecutableSyntaxHelper.TryGetExecutableBody(executableRoot, out var executableBody))
+        {
+            return;
+        }
+
         var reportedSpans = new HashSet<TextSpan>();
 
-        foreach (var usingStmt in method.DescendantNodes().OfType<UsingStatementSyntax>())
+        foreach (var usingStmt in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody).OfType<UsingStatementSyntax>())
         {
             AnalyzeUsingStatement(
                 context,
-                method,
+                executableBody,
                 usingStmt,
                 semanticModel,
                 registrationCollector,
@@ -104,7 +114,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 reportedSpans);
         }
 
-        foreach (var localDecl in method.DescendantNodes().OfType<LocalDeclarationStatementSyntax>())
+        foreach (var localDecl in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody).OfType<LocalDeclarationStatementSyntax>())
         {
             if (localDecl.UsingKeyword == default)
             {
@@ -113,7 +123,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             AnalyzeUsingDeclaration(
                 context,
-                method,
+                executableBody,
                 localDecl,
                 semanticModel,
                 registrationCollector,
@@ -124,7 +134,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeUsingStatement(
         CompilationAnalysisContext context,
-        MethodDeclarationSyntax containingMethod,
+        SyntaxNode executableBody,
         UsingStatementSyntax usingStmt,
         SemanticModel semanticModel,
         RegistrationCollector registrationCollector,
@@ -140,7 +150,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         if (usingStmt.Statement is not null)
         {
-            foreach (var node in usingStmt.Statement.DescendantNodes())
+            foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(usingStmt.Statement))
             {
                 TrackProviderAlias(node, semanticModel, scopeSymbol, providerAliases);
                 TrackServiceAlias(node, semanticModel, serviceVariables);
@@ -175,7 +185,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         var usingEndPosition = usingStmt.Span.End;
         ReportUsageAfterPosition(
             context,
-            containingMethod,
+            executableBody,
             semanticModel,
             serviceVariables,
             usingEndPosition,
@@ -184,7 +194,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeUsingDeclaration(
         CompilationAnalysisContext context,
-        MethodDeclarationSyntax containingMethod,
+        SyntaxNode executableBody,
         LocalDeclarationStatementSyntax localDecl,
         SemanticModel semanticModel,
         RegistrationCollector registrationCollector,
@@ -204,7 +214,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         var providerAliases = new Dictionary<ILocalSymbol, ILocalSymbol>(SymbolEqualityComparer.Default);
         var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
 
-        foreach (var node in containingBlock.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(containingBlock))
         {
             if (node.SpanStart < localDecl.SpanStart)
             {
@@ -243,7 +253,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         var blockEndPosition = containingBlock.Span.End;
         ReportUsageAfterPosition(
             context,
-            containingMethod,
+            executableBody,
             semanticModel,
             serviceVariables,
             blockEndPosition,
@@ -252,13 +262,13 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
     private static void ReportUsageAfterPosition(
         CompilationAnalysisContext context,
-        MethodDeclarationSyntax containingMethod,
+        SyntaxNode executableBody,
         SemanticModel semanticModel,
         Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
         int position,
         HashSet<TextSpan> reportedSpans)
     {
-        foreach (var node in containingMethod.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (node.SpanStart < position)
             {

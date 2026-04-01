@@ -68,7 +68,7 @@ public void Process()
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including scopes declared before a later `using (scope)` disposal block.
+**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including scopes declared before a later `using (scope)` disposal block and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -149,7 +149,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including services resolved from a predeclared scope variable later disposed via `using (scope)`.
+**What it catches:** using a service after the scope that produced it has already ended, including services resolved from a predeclared scope variable later disposed via `using (scope)` and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
