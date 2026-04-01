@@ -821,4 +821,38 @@ public class DI009_OpenGenericLifetimeMismatchCodeFixTests
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI009_ChangeToScoped");
     }
 
+    [Fact]
+    public async Task ServiceDescriptorWithIdentifierBackedLifetime_DoesNotCrash()
+    {
+        // When the lifetime is supplied via a const identifier rather than a direct enum member,
+        // the analyzer cannot resolve the lifetime statically. This test documents that behavior
+        // and ensures no crash. The fixer defensively uses ServiceLifetime.X member access for
+        // SimpleNameSyntax in case the analyzer is enhanced to handle this case later.
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IScopedService { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                private const ServiceLifetime singleton = ServiceLifetime.Singleton;
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.Add(new ServiceDescriptor(typeof(IRepository<>), typeof(Repository<>), singleton));
+                }
+            }
+
+            public class ScopedService : IScopedService { }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
 }

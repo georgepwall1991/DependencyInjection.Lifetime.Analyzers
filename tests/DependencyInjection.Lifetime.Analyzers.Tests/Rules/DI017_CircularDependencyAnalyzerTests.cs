@@ -454,6 +454,48 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task CircularDependency_ConstructorWithScalarParams_StillReportsCycle()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafe { }
+
+            public class Safe : ISafe { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+                public ServiceA(ISafe safe, string name) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ISafe, Safe>();
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        // ServiceA(ISafe, string) is NOT resolvable because string isn't in the container.
+        // The only resolvable constructor is ServiceA(IServiceB), which creates a cycle.
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(26, 9, 26, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
     public async Task NoRegistrations_DoesNotReport()
     {
         var source = Usings + """

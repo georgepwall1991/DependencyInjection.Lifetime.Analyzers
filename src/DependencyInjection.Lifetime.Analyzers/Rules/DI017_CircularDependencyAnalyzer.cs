@@ -270,12 +270,40 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         Dictionary<ServiceLookupKey, List<ServiceRegistration>> registrationsByService,
         WellKnownTypes? wellKnownTypes)
     {
-        if (ShouldSkipParameter(parameter, wellKnownTypes) || IsFrameworkProvidedParameter(parameter.Type, wellKnownTypes))
+        // Optional/default-value params don't block constructor selection
+        if (parameter.HasExplicitDefaultValue || parameter.IsOptional)
         {
             return true;
         }
 
-        if (parameter.Type is not INamedTypeSymbol dependencyType)
+        var type = parameter.Type;
+
+        // IEnumerable<T> is always resolvable (empty collection)
+        if (type is INamedTypeSymbol { IsGenericType: true } enumerableType &&
+            enumerableType.ConstructedFrom.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+        {
+            return true;
+        }
+
+        // Value types, primitives, and string are NOT resolvable by DI —
+        // a constructor requiring these cannot be selected by the runtime
+        if (type.IsValueType || type.SpecialType != SpecialType.None)
+        {
+            return false;
+        }
+
+        // IServiceProvider, IServiceScopeFactory, etc. are always provided
+        if (wellKnownTypes is not null && wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(type))
+        {
+            return true;
+        }
+
+        if (IsFrameworkProvidedParameter(type, wellKnownTypes))
+        {
+            return true;
+        }
+
+        if (type is not INamedTypeSymbol dependencyType)
         {
             return false;
         }
@@ -578,7 +606,9 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
             return typeName;
         }
 
-        return $"{typeName}|key:{serviceLookupKey.Key ?? "null"}";
+        var keyValue = serviceLookupKey.Key;
+        var keyTypeName = keyValue?.GetType().Name ?? "null";
+        return $"{typeName}|key({keyTypeName}):{keyValue ?? "null"}";
     }
 
     /// <summary>

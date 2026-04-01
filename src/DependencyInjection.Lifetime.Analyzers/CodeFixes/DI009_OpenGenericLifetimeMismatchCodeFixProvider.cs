@@ -387,10 +387,15 @@ public sealed class DI009_OpenGenericLifetimeMismatchCodeFixProvider : CodeFixPr
                     .WithTriviaFrom(memberAccess.Name));
         }
 
-        if (originalExpression is SimpleNameSyntax simpleName)
+        if (originalExpression is SimpleNameSyntax)
         {
-            return SyntaxFactory.IdentifierName(newLifetime.ToString())
-                .WithTriviaFrom(simpleName);
+            // The original expression is a bare identifier (e.g., a const variable).
+            // Replace with fully qualified member access to ensure compilable output.
+            return SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.IdentifierName("ServiceLifetime"),
+                    SyntaxFactory.IdentifierName(newLifetime.ToString()))
+                .WithTriviaFrom(originalExpression);
         }
 
         return SyntaxFactory.ParseExpression(
