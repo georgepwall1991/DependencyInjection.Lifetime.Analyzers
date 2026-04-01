@@ -13,13 +13,33 @@ public static class AnalyzerVerifier<TAnalyzer>
     where TAnalyzer : DiagnosticAnalyzer, new()
 {
     /// <summary>
-    /// Custom reference assemblies combining Net60 with DI.Abstractions as a NuGet package.
+    /// Reference assemblies using .NET 6 with the DI 6.0 packages.
     /// </summary>
-    private static readonly ReferenceAssemblies ReferenceAssembliesWithDi =
+    public static ReferenceAssemblies ReferenceAssembliesWithDi60 { get; } =
         ReferenceAssemblies.Net.Net60
             .AddPackages([
                 new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
                 new PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0")
+            ]);
+
+    /// <summary>
+    /// Reference assemblies using .NET 8 with the DI 8.0 packages.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithDi80 { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0"),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "8.0.0")
+            ]);
+
+    /// <summary>
+    /// Reference assemblies using .NET 8 with the latest DI packages used by the test project.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithLatestDi { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2")
             ]);
 
     /// <summary>
@@ -30,6 +50,16 @@ public static class AnalyzerVerifier<TAnalyzer>
         ReferenceAssemblies.Net.Net80
             .AddPackages([
                 new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0")
+            ]);
+
+    /// <summary>
+    /// Reference assemblies with the latest keyed DI APIs used by the test project.
+    /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithLatestKeyedDi { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2")
             ]);
 
     /// <summary>
@@ -122,7 +152,7 @@ public static class AnalyzerVerifier<TAnalyzer>
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
             TestCode = source,
-            ReferenceAssemblies = ReferenceAssembliesWithDi
+            ReferenceAssemblies = ReferenceAssembliesWithDi60
         };
 
         if (!string.IsNullOrWhiteSpace(editorConfig))
@@ -138,7 +168,7 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
-            ReferenceAssemblies = ReferenceAssembliesWithDi
+            ReferenceAssemblies = ReferenceAssembliesWithDi60
         };
 
         foreach (var (filename, source) in sources)

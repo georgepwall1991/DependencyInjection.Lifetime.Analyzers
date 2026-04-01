@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags:
+      - 'v*'
   pull_request:
     branches: [main, master]
 
@@ -28,6 +30,20 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+
+      - name: Validate tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PROJECT_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          echo "Tag version: $TAG_VERSION"
+          echo "Project version: $PROJECT_VERSION"
+
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "Tag version does not match project version."
+            exit 1
+          fi
 
       - name: Verify version-synced README install snippets
         run: node tools/generate-growth-assets.mjs sync-readme --check
@@ -79,7 +95,7 @@ jobs:
         run: cp ./coverage/report/badge_linecoverage.svg .github/badges/coverage.svg
 
       - name: Commit coverage badge
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -94,14 +110,62 @@ jobs:
           recreate: true
           path: ./coverage/report/SummaryGithub.md
 
-      - name: Pack
+      - name: Clean package artifacts
+        run: rm -f ./artifacts/*.nupkg
+
+      - name: Generate curated release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node tools/generate-growth-assets.mjs release-notes --version "${GITHUB_REF_NAME#v}" --output-dir ./artifacts/release-notes
+
+      - name: Pack branch package
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: dotnet pack --no-build --configuration Release --output ./artifacts
+
+      - name: Pack release candidate package
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node tools/pack-package-with-release-notes.mjs \
+            --project src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj \
+            --configuration Release \
+            --output ./artifacts \
+            --release-notes-file ./artifacts/release-notes/package-release-notes.txt
 
       - name: Upload NuGet package artifact
         uses: actions/upload-artifact@v4
         with:
           name: nuget-package
           path: ./artifacts/*.nupkg
+          retention-days: 7
+
+      - name: Upload release package artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: ./artifacts/*.nupkg
+          retention-days: 7
+
+      - name: Upload release notes artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ./artifacts/release-notes
+          retention-days: 7
+
+      - name: Prepare release metadata
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p ./artifacts/release-metadata
+          printf '%s\n' "${GITHUB_REF_NAME}" > ./artifacts/release-metadata/tag.txt
+          printf '%s\n' "${GITHUB_REF_NAME#v}" > ./artifacts/release-metadata/version.txt
+
+      - name: Upload release metadata artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: ./artifacts/release-metadata
           retention-days: 7
 
       - name: Generate docs site

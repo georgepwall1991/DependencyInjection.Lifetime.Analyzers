@@ -14,13 +14,12 @@ namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
 /// <summary>
 /// Code fix provider for DI002: Scoped service escapes its scope lifetime.
-/// Offers fixes to prevent the service from outliving its scope.
+/// Offers explicit suppression when the escape is intentional and has been reviewed.
 /// </summary>
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(DI002_ScopeEscapeCodeFixProvider))]
 [Shared]
 public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
 {
-    private const string AddTodoEquivalenceKey = "DI002_AddTodo";
     private const string SuppressEquivalenceKey = "DI002_Suppress";
 
     /// <inheritdoc />
@@ -52,22 +51,6 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
             return;
         }
 
-        // Register "Add TODO comment" fix (only if a TODO isn't already present)
-        var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
-        var hasTodo = containingStatement?.GetLeadingTrivia()
-            .Any(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia) &&
-                      t.ToString().Contains("TODO: DI002")) ?? false;
-
-        if (!hasTodo)
-        {
-            context.RegisterCodeFix(
-                CodeAction.Create(
-                    title: Resources.DI002_FixTitle_AddTodo,
-                    createChangedDocument: c => AddTodoCommentAsync(context.Document, invocation, c),
-                    equivalenceKey: AddTodoEquivalenceKey),
-                diagnostic);
-        }
-
         // Register "Suppress with pragma" fix
         context.RegisterCodeFix(
             CodeAction.Create(
@@ -75,48 +58,6 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
                 createChangedDocument: c => SuppressWithPragmaAsync(context.Document, invocation, c),
                 equivalenceKey: SuppressEquivalenceKey),
             diagnostic);
-    }
-
-    private static async Task<Document> AddTodoCommentAsync(
-        Document document,
-        InvocationExpressionSyntax invocation,
-        CancellationToken cancellationToken)
-    {
-        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        if (root is null)
-        {
-            return document;
-        }
-
-        // Find the containing statement
-        var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
-        if (containingStatement is null)
-        {
-            return document;
-        }
-
-        // Get the leading trivia and indentation
-        var leadingTrivia = containingStatement.GetLeadingTrivia();
-        var indentation = leadingTrivia.LastOrDefault(t => t.IsKind(SyntaxKind.WhitespaceTrivia));
-
-        // Create TODO comment
-        var todoComment = SyntaxFactory.Comment(
-            "// TODO: DI002 - Service resolved from scope will be disposed when scope ends. " +
-            "Consider returning scope with service or restructuring.");
-        var newLine = SyntaxFactory.CarriageReturnLineFeed;
-
-        // Build new trivia list
-        var newTrivia = SyntaxFactory.TriviaList(
-            leadingTrivia.Concat(new[]
-            {
-                todoComment,
-                newLine,
-                indentation
-            }));
-
-        var newStatement = containingStatement.WithLeadingTrivia(newTrivia);
-
-        return document.WithSyntaxRoot(root.ReplaceNode(containingStatement, newStatement));
     }
 
     private static async Task<Document> SuppressWithPragmaAsync(

@@ -65,9 +65,6 @@
   </data>
 
   <!-- DI002: Scope Escape -->
-  <data name="DI002_FixTitle_AddTodo" xml:space="preserve">
-    <value>Add TODO comment</value>
-  </data>
   <data name="DI002_FixTitle_Suppress" xml:space="preserve">
     <value>Suppress with #pragma</value>
   </data>
