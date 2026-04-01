@@ -383,6 +383,17 @@ public sealed class ReportingService
 
 **Better pattern:** split into focused collaborators and inject smaller abstractions.
 
+For normal type registrations, DI010 evaluates the constructor(s) the container could realistically activate instead of every accessible constructor. It also covers straightforward factory registrations that directly return `new MyService(...)` or `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on more dynamic factories.
+
+By default, DI010 reports when a constructor has more than `4` meaningful dependencies. It ignores primitives/value types, optional parameters, provider-plumbing types already covered by `DI011`, and common framework abstractions such as `ILogger<T>`, `IOptions<T>`, and `IConfiguration`.
+
+Configure the threshold in `.editorconfig`:
+
+```ini
+[*.cs]
+dotnet_code_quality.DI010.max_dependencies = 5
+```
+
 **Code Fix:** No. Design decision required.
 
 ---

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-04-01
+
+### Changed
+
+- **DI010 Runtime-Faithful Constructor Selection**: Constructor over-injection now analyzes the constructor set the container could actually activate instead of every accessible constructor, reducing false positives on multi-constructor services where only a shorter constructor is resolvable.
+- **DI010 Conservative Factory Coverage**: The analyzer now covers straightforward factory registrations that directly construct the service and `ActivatorUtilities.CreateInstance<T>(sp)` factory paths, while staying quiet for more dynamic factory bodies it cannot classify confidently.
+- **DI010 Symbol-Accurate Exclusions and Config**: Logging, options, configuration, and provider-plumbing exclusions now use exact symbols instead of simple names, optional/default-value parameters are ignored, and the dependency threshold is configurable through `.editorconfig` with `dotnet_code_quality.DI010.max_dependencies`.
+- **DI010 Regression Coverage and Health**: Added direct tests for constructor selection, factory registrations, namespace-accurate exclusions, optional parameters, and threshold overrides, and refreshed the analyzer health snapshot to reflect the stronger rule quality.
+
 ## [2.4.0] - 2026-03-31
 
 ### Changed

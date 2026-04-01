@@ -53,6 +53,36 @@ public sealed class WellKnownTypes
     /// </summary>
     public INamedTypeSymbol? ServiceCollectionServiceExtensions { get; }
 
+    /// <summary>
+    /// Gets the IConfiguration type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IConfiguration { get; }
+
+    /// <summary>
+    /// Gets the ILogger type symbol.
+    /// </summary>
+    public INamedTypeSymbol? ILogger { get; }
+
+    /// <summary>
+    /// Gets the ILogger{T} type symbol.
+    /// </summary>
+    public INamedTypeSymbol? ILoggerOfT { get; }
+
+    /// <summary>
+    /// Gets the IOptions{T} type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IOptionsOfT { get; }
+
+    /// <summary>
+    /// Gets the IOptionsSnapshot{T} type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IOptionsSnapshotOfT { get; }
+
+    /// <summary>
+    /// Gets the IOptionsMonitor{T} type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IOptionsMonitorOfT { get; }
+
     private WellKnownTypes(
         INamedTypeSymbol? serviceProvider,
         INamedTypeSymbol? serviceScopeFactory,
@@ -62,7 +92,13 @@ public sealed class WellKnownTypes
         INamedTypeSymbol? asyncDisposable,
         INamedTypeSymbol? keyedServiceProvider,
         INamedTypeSymbol? serviceCollection,
-        INamedTypeSymbol? serviceCollectionServiceExtensions)
+        INamedTypeSymbol? serviceCollectionServiceExtensions,
+        INamedTypeSymbol? configuration,
+        INamedTypeSymbol? logger,
+        INamedTypeSymbol? loggerOfT,
+        INamedTypeSymbol? optionsOfT,
+        INamedTypeSymbol? optionsSnapshotOfT,
+        INamedTypeSymbol? optionsMonitorOfT)
     {
         IServiceProvider = serviceProvider;
         IServiceScopeFactory = serviceScopeFactory;
@@ -73,6 +109,12 @@ public sealed class WellKnownTypes
         IKeyedServiceProvider = keyedServiceProvider;
         IServiceCollection = serviceCollection;
         ServiceCollectionServiceExtensions = serviceCollectionServiceExtensions;
+        IConfiguration = configuration;
+        ILogger = logger;
+        ILoggerOfT = loggerOfT;
+        IOptionsOfT = optionsOfT;
+        IOptionsSnapshotOfT = optionsSnapshotOfT;
+        IOptionsMonitorOfT = optionsMonitorOfT;
     }
 
     /// <summary>
@@ -90,6 +132,12 @@ public sealed class WellKnownTypes
         var keyedServiceProvider = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider");
         var serviceCollection = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceCollection");
         var serviceCollectionServiceExtensions = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions");
+        var configuration = compilation.GetTypeByMetadataName("Microsoft.Extensions.Configuration.IConfiguration");
+        var logger = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger");
+        var loggerOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILogger`1");
+        var optionsOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptions`1");
+        var optionsSnapshotOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptionsSnapshot`1");
+        var optionsMonitorOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptionsMonitor`1");
 
         // Return null if we don't have the basic types needed for analysis
         if (serviceProvider is null && serviceScopeFactory is null)
@@ -106,7 +154,13 @@ public sealed class WellKnownTypes
             asyncDisposable,
             keyedServiceProvider,
             serviceCollection,
-            serviceCollectionServiceExtensions);
+            serviceCollectionServiceExtensions,
+            configuration,
+            logger,
+            loggerOfT,
+            optionsOfT,
+            optionsSnapshotOfT,
+            optionsMonitorOfT);
     }
 
     /// <summary>
@@ -171,6 +225,49 @@ public sealed class WellKnownTypes
     public bool IsServiceCollectionServiceExtensions(ITypeSymbol? type)
     {
         return type is not null && SymbolEqualityComparer.Default.Equals(type, ServiceCollectionServiceExtensions);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IConfiguration.
+    /// </summary>
+    public bool IsConfiguration(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IConfiguration);
+    }
+
+    /// <summary>
+    /// Checks if the given type is ILogger or ILogger{T}.
+    /// </summary>
+    public bool IsLogger(ITypeSymbol? type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(type, ILogger))
+        {
+            return true;
+        }
+
+        return type is INamedTypeSymbol { IsGenericType: true } namedType &&
+               SymbolEqualityComparer.Default.Equals(namedType.ConstructedFrom, ILoggerOfT);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IOptions{T}, IOptionsSnapshot{T}, or IOptionsMonitor{T}.
+    /// </summary>
+    public bool IsOptionsAbstraction(ITypeSymbol? type)
+    {
+        if (type is not INamedTypeSymbol { IsGenericType: true } namedType)
+        {
+            return false;
+        }
+
+        var constructedFrom = namedType.ConstructedFrom;
+        return SymbolEqualityComparer.Default.Equals(constructedFrom, IOptionsOfT) ||
+               SymbolEqualityComparer.Default.Equals(constructedFrom, IOptionsSnapshotOfT) ||
+               SymbolEqualityComparer.Default.Equals(constructedFrom, IOptionsMonitorOfT);
     }
 
     /// <summary>

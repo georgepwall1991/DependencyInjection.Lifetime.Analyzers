@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -95,6 +96,34 @@ internal static class FactoryAnalysis
         implementationType = nonGenericNamedType;
         hasExplicitConstructorArguments = invocation.ArgumentList.Arguments.Count > 2;
         return true;
+    }
+
+    public static bool TryGetFactoryReturnExpression(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        out ExpressionSyntax returnExpression)
+    {
+        returnExpression = null!;
+
+        var unwrappedFactoryExpression = UnwrapFactoryExpression(factoryExpression);
+        switch (unwrappedFactoryExpression)
+        {
+            case SimpleLambdaExpressionSyntax simpleLambda:
+                return TryGetReturnedExpression(simpleLambda.Body, out returnExpression);
+            case ParenthesizedLambdaExpressionSyntax parenthesizedLambda:
+                return TryGetReturnedExpression(parenthesizedLambda.Body, out returnExpression);
+            case AnonymousMethodExpressionSyntax anonymousMethod:
+                return anonymousMethod.Body is not null &&
+                       TryGetReturnedExpression(anonymousMethod.Body, out returnExpression);
+        }
+
+        if (!IsMethodGroupExpression(unwrappedFactoryExpression, semanticModel) ||
+            !TryGetFactoryMethodBodyNode(unwrappedFactoryExpression, semanticModel, out var bodyNode))
+        {
+            return false;
+        }
+
+        return TryGetReturnedExpression(bodyNode, out returnExpression);
     }
 
     private static ExpressionSyntax UnwrapFactoryExpression(ExpressionSyntax expression)
@@ -205,5 +234,24 @@ internal static class FactoryAnalysis
         }
 
         return null;
+    }
+
+    private static bool TryGetReturnedExpression(
+        SyntaxNode bodyNode,
+        out ExpressionSyntax returnExpression)
+    {
+        switch (bodyNode)
+        {
+            case ExpressionSyntax expression:
+                returnExpression = expression;
+                return true;
+            case BlockSyntax { Statements.Count: 1 } blockSyntax
+                when blockSyntax.Statements[0] is ReturnStatementSyntax { Expression: not null } returnStatement:
+                returnExpression = returnStatement.Expression;
+                return true;
+            default:
+                returnExpression = null!;
+                return false;
+        }
     }
 }
