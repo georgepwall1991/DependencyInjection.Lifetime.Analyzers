@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-01 (post-v2.4.3, includes uncommitted DI009/DI017 work)
-**Version:** 2.4.3
-**Test result:** 641/641 passing (up from 629)
+**Date:** 2026-04-01 (post-hardening pass, PRs #32-#34 merged)
+**Version:** 2.4.3+
+**Test result:** 658/658 passing (up from 629 pre-pass)
 **Analyzers:** 18 (DI001-DI018)
 **Code fix providers:** 9
 
@@ -10,28 +10,28 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 23 | 6 | 8 | 7 | Disposal edge cases remain |
-| DI002 | Scope Escape | Warn | 27 | 2 | 9 | 5 | Fixer coverage critically weak |
+| DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
+| DI002 | Scope Escape | Warn | 27 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property sink |
 | DI003 | Captive Dependency | Warn | 31 | 8 | 9 | 8 | Solid both sides |
 | DI004 | Use After Dispose | Warn | 29 | -- | 9 | -- | Strong after boundary hardening |
 | DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
 | DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
 | DI008 | Disposable Transient | Warn | 19 | 13 | 8 | 9 | Solid coverage both sides |
-| DI009 | Open Generic Mismatch | Warn | 22 | 14 | 9 | 9 | Major fix refactor adds confidence |
+| DI009 | Open Generic Mismatch | Warn | 22 | 15 | 9 | 9 | Refactored with RegistrationKind/LifetimeKind, defensive SimpleNameSyntax fix |
 | DI010 | Constructor Over-Injection | Info | 24 | -- | 9.5 | -- | Strongest info-level rule |
 | DI011 | Service Provider Injection | Info | 19 | -- | 9 | -- | Activation-constructor logic |
 | DI012 | Conditional Registration | Info | 30 | -- | 9 | -- | Complex flow, recently hardened |
 | DI013 | Implementation Mismatch | Error | 51 | -- | 9 | -- | Most comprehensive tests |
-| DI014 | Root Provider Not Disposed | Warn | 13 | 4 | 8 | 7 | Limited fixer coverage |
+| DI014 | Root Provider Not Disposed | Warn | 13 | 8 | 8 | 8.5 | Hardened: IsAsyncMethod bug fixed, async local fn, chained builders |
 | DI015 | Unresolvable Dependency | Warn | 53 | 10 | 9 | 8 | One of strongest overall |
-| DI016 | BuildServiceProvider Misuse | Warn | 18 | -- | 9 | -- | Builder-flow hardened |
-| DI017 | Circular Dependency | Warn | 13 | -- | 8.5 | -- | ServiceLookupKey migration WIP |
+| DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
+| DI017 | Circular Dependency | Warn | 15 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 8.7/10. Fixer mean 7.8/10.
+**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.4/10.
 
 ## Scoring Methodology
 
@@ -49,17 +49,17 @@
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 8/10** | Tests: 23 | **Fixer: 7/10** | Fix Tests: 6
+**Analyzer: 8/10** | Tests: 23 | **Fixer: 8.5/10** | Fix Tests: 11
 
-Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Fixer wraps in `using` statement. Remaining debt: disposal-proof edge cases (conditional paths, exception flows) are the most plausible source of future false positives.
+Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Fixer wraps in `using`/`await using` statement. Post-hardening: added tests for nested scopes, IServiceProvider entry, explicit type declarations, trivia preservation with leading comments, and async anonymous method delegates. Remaining debt: disposal-proof edge cases (conditional paths, exception flows).
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 9/10** | Tests: 27 | **Fixer: 5/10** | Fix Tests: 2
+**Analyzer: 9/10** | Tests: 27 | **Fixer: 7/10** | Fix Tests: 5
 
 Strong analyzer after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, and predeclared scopes. Remaining analyzer debt is conservative sink breadth, not entry coverage.
 
-**Fixer is the weakest in the repo.** Only 2 code fix tests, and both only exercise the `DI002_Suppress` action -- the `DI002_AddTodo` action (TODO comment insertion) is completely untested. The two tests also cover only `return` and field-assignment sink forms. The fixer does not inspect registration shapes (it operates on statement-level trivia), so the actual uncovered surface is action coverage, statement-shape coverage, and trivia/formatting behavior. Low blast radius since the fixer only inserts suppression/comment trivia (no behavior-changing rewrites).
+Post-hardening: both `DI002_AddTodo` and `DI002_Suppress` actions are now tested. Fixed a duplicate TODO bug where the fixer would insert a new TODO comment on every iterative application because it didn't check for existing TODOs. Added property assignment sink coverage for suppress action. The fixer does not inspect registration shapes (it operates on statement-level trivia). Low blast radius since the fixer only inserts suppression/comment trivia.
 
 ### DI003 -- Captive Dependency (Warning)
 
@@ -99,9 +99,9 @@ Solid coverage across generic registrations, `typeof`, `IDisposable`, and `IAsyn
 
 ### DI009 -- Open Generic Lifetime Mismatch (Warning)
 
-**Analyzer: 9/10** | Tests: 22 | **Fixer: 9/10** | Fix Tests: 14
+**Analyzer: 9/10** | Tests: 22 | **Fixer: 9/10** | Fix Tests: 15
 
-Strong analyzer after constructor/collection hardening. Handles optional/default-value constructor selection, ambiguous equally-greedy constructor silence, and `IEnumerable<T>` captures. Major code fix refactor in progress (+542 implementation lines) with `RegistrationKind`/`LifetimeKind` enum extraction and comprehensive regression suite (+641 uncommitted test lines). Fixer score reflects the uncommitted state.
+Strong analyzer after constructor/collection hardening. Handles optional/default-value constructor selection, ambiguous equally-greedy constructor silence, and `IEnumerable<T>` captures. Code fix refactored with `RegistrationKind`/`LifetimeKind` enum extraction and comprehensive regression suite. Defensive fix: `CreateServiceLifetimeExpression` now emits `ServiceLifetime.X` member access (not bare identifier) for `SimpleNameSyntax`, preventing uncompilable output for const-backed lifetime identifiers.
 
 ### DI010 -- Constructor Over-Injection (Info)
 
@@ -129,9 +129,9 @@ Most comprehensive test file in the repo. Covers open-generic projection checks,
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
-**Analyzer: 8/10** | Tests: 13 | **Fixer: 7/10** | Fix Tests: 4
+**Analyzer: 8/10** | Tests: 13 | **Fixer: 8.5/10** | Fix Tests: 8
 
-Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`. Limited fixer test coverage -- only 4 tests for a disposal-related fix.
+Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered. Added tests for async local function inside sync method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
@@ -141,15 +141,15 @@ Second most comprehensive test file. Broad support for keyed, factory, wrapper, 
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
-**Analyzer: 9/10** | Tests: 18
+**Analyzer: 9/10** | Tests: 19
 
 Strong after builder-flow hardening. Covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases, helper methods that forward builder-style flows, and provider-factory guardrails. No code fix -- the correct alternative varies by context.
 
 ### DI017 -- Circular Dependency (Warning)
 
-**Analyzer: 8.5/10** | Tests: 13
+**Analyzer: 9/10** | Tests: 15
 
-Much healthier after stable effective-registration ordering and mixed instance-plus-constructed graph coverage. Uncommitted work migrates cycle path tracking to `ServiceLookupKey` for keyed service support (+67 implementation lines, +52 test lines). `knownNoCycle` memoization prevents exponential blowup at scale. No code fix -- breaking cycles requires architectural decisions.
+Significantly hardened. Cycle detection uses stable effective registrations with `ServiceLookupKey` for keyed service support. `knownNoCycle` memoization prevents exponential blowup at scale. Post-hardening fixes: `IsDirectlyResolvableConstructorParameter` no longer treats scalar types (`string`, `int`, etc.) as resolvable — a constructor requiring non-DI params cannot be selected by the runtime, preventing false-negative cycle suppression. `GetGlobalLookupKeyDisplayName` now includes the key's runtime type name in the canonical string to prevent dedup collisions between `int` key `1` and `string` key `"1"`. No code fix -- breaking cycles requires architectural decisions.
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
@@ -161,14 +161,14 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 | Fixer | Fix Tests | Score | Risk Assessment |
 |-------|-----------|-------|-----------------|
-| DI001 (Scope Disposal) | 6 | 7 | **High** -- behavior-changing `using`/`await using` rewrite with thin test coverage |
-| DI002 (Scope Escape) | 2 | **5** | Moderate -- weakest test count but trivia-only fix (low blast radius) |
+| DI001 (Scope Disposal) | 11 | 8.5 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates) |
+| DI002 (Scope Escape) | 5 | 7 | Low -- both actions tested, duplicate TODO bug fixed, property sink covered |
 | DI003 (Captive Dependency) | 8 | 8 | Low -- solid shape coverage |
 | DI005 (Async Scope) | 9 | 8 | Low -- narrow transformation, well-tested |
 | DI006 (Static Provider Cache) | 14 | 9 | Low -- more tests than analyzer |
 | DI008 (Disposable Transient) | 13 | 9 | Low -- strong shape coverage |
-| DI009 (Open Generic Mismatch) | 14 | 9 | Low -- major refactor with comprehensive regression suite |
-| DI014 (Root Provider) | 4 | 7 | **High** -- behavior-changing `using` rewrite with only 4 tests |
+| DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
+| DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
 | DI015 (Unresolvable Dependency) | 10 | 8 | Low -- solid registration generation |
 
 **Rules without code fixes:** DI004, DI007, DI010, DI011, DI012, DI013, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
@@ -192,33 +192,38 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 641 |
-| Analyzer tests | 489 |
-| Code fix tests | 80 |
-| Infrastructure tests | 73 |
-| Analyzer mean score | 8.7/10 |
-| Fixer mean score | 7.8/10 |
-| Rules at 9+ | 13/18 (72%) |
-| Rules needing pass | 0 analyzers, 3 fixers (DI001, DI002, DI014) |
+| Total tests | 658 |
+| Analyzer tests | 512 |
+| Code fix tests | 93 |
+| Infrastructure tests | 77 |
+| Analyzer mean score | 8.8/10 |
+| Fixer mean score | 8.4/10 |
+| Rules at 9+ | 14/18 (78%) |
+| Fixers at 8+ | 8/9 (89%) |
+| Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
 | Skipped tests | 0 |
+
+## Bugs Found During Hardening
+
+| PR | Bug | Severity | Rule |
+|----|-----|----------|------|
+| #32 | DI017 constructor selection treated scalar params as resolvable, suppressing real cycles | Medium | DI017 |
+| #32 | DI009 fixer emitted bare identifier for SimpleNameSyntax lifetime, producing uncompilable code | Medium | DI009 |
+| #32 | DI017 keyed cycle dedup collapsed keys with same string representation (int `1` vs string `"1"`) | Medium | DI017 |
+| #33 | DI014 `IsAsyncMethod` checked method before nearest callable, wrong `using`/`await using` in nested async | Medium | DI014 |
+| #34 | DI002 fixer didn't check for existing TODO, causing duplicate TODOs on iterative application | Low | DI002 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| DI009/DI017 uncommitted | 1,236 lines of improvements sitting in working tree | **High** |
-| DI001 fixer | 6 tests for a behavior-changing rewrite (`using`/`await using` wrapping) -- highest correctness risk among fixers | **High** |
-| DI014 fixer | 4 tests for a behavior-changing rewrite (`using` wrapping) -- high correctness risk, thin coverage | **High** |
-| DI002 fixer | Only 2 tests, `DI002_AddTodo` action entirely untested -- but trivia-only fix has low blast radius | Medium |
-| DI001 analyzer | Disposal edge cases are the most plausible false-positive source | Low |
+| DI002 fixer | Score 7/10 — lowest fixer score but low blast radius (trivia-only) | Low |
+| DI001 analyzer | Disposal edge cases remain the most plausible false-positive source | Low |
 | DI014 analyzer | Root-provider ownership edge cases | Low |
-| DI017 analyzer | Graph-shape precision and keyed-path breadth | Low |
 
 ## Recommended Next Actions
 
-1. **Merge DI009/DI017 uncommitted work** -- 1,236 lines of improvements and +12 tests in working tree
-2. **Harden DI001 fixer** -- behavior-changing rewrite (`using`/`await using`) with only 6 tests; add scenarios for nested scopes, conditional disposal, exception flows, and complex statement shapes
-3. **Harden DI014 fixer** -- behavior-changing rewrite (`using` wrapping) with only 4 tests; add coverage for field assignment, property returns, and shadowed provider patterns
-4. **Harden DI002 fixer** -- score 5/10, only 2 tests; add coverage for the untested `DI002_AddTodo` action, additional sink forms (property assignment, lambda capture, out parameter), and trivia/formatting edge cases
-5. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) and DI013 (type mismatch) have high severity with no automated fix
+1. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) and DI013 (type mismatch) have high severity with no automated fix
+2. **DI002 fixer line-ending consistency** -- the AddTodo action uses `SyntaxFactory.CarriageReturnLineFeed` producing `\r\n` in files that use `\n`; low priority but a known inconsistency
+3. **Expand DI002 fixer sink coverage** -- lambda capture, out parameter, and local variable aliasing sinks are untested
