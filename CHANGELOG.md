@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.6] - 2026-04-02
+
+### Changed
+
+- **Code Fix Inventory Guardrails**: Added parity tests that compare the README rule index against the reflected code-fix provider inventory, ensuring documented fixable rules stay aligned with shipped `FixableDiagnosticIds` and that providers only advertise public diagnostics.
+
 ## [2.4.5] - 2026-04-01
 
 ### Changed
