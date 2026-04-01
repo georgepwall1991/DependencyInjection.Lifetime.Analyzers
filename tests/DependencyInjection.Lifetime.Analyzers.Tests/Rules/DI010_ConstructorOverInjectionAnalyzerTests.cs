@@ -196,6 +196,256 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
                 .WithArguments("MyService", 5));
     }
 
+    [Fact]
+    public async Task Constructor_WithLongestResolvableConstructor_ReportsSingleDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+            public interface IDep6 { }
+            public class Dep6 : IDep6 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1) { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5, IDep6 d6) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(35, 9)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task FactoryRegistration_WithDirectObjectCreation_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(sp => new MyService(
+                        sp.GetRequiredService<IDep1>(),
+                        sp.GetRequiredService<IDep2>(),
+                        sp.GetRequiredService<IDep3>(),
+                        sp.GetRequiredService<IDep4>(),
+                        sp.GetRequiredService<IDep5>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithSpan(29, 9, 34, 45)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task FactoryRegistration_WithActivatorUtilitiesCreateInstance_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(sp => ActivatorUtilities.CreateInstance<MyService>(sp));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(29, 9)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task FactoryRegistration_WithMethodGroupReturningDirectObjectCreation_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(CreateMyService);
+                }
+
+                private static MyService CreateMyService(IServiceProvider sp)
+                {
+                    return new MyService(
+                        (IDep1)sp.GetService(typeof(IDep1)),
+                        (IDep2)sp.GetService(typeof(IDep2)),
+                        (IDep3)sp.GetService(typeof(IDep3)),
+                        (IDep4)sp.GetService(typeof(IDep4)),
+                        (IDep5)sp.GetService(typeof(IDep5)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(29, 9)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task Constructor_WithUserDefinedLoggerTypeInDifferentNamespace_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace MyApp.Logging
+            {
+                public interface ILogger<T> { }
+            }
+
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(
+                    IDep1 d1,
+                    IDep2 d2,
+                    IDep3 d3,
+                    IDep4 d4,
+                    IDep5 d5,
+                    MyApp.Logging.ILogger<MyService> logger) { }
+            }
+
+            public sealed class MyServiceLogger : MyApp.Logging.ILogger<MyService> { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<MyApp.Logging.ILogger<MyService>, MyServiceLogger>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(43, 9)
+                .WithArguments("MyService", 6));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -265,8 +515,10 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
     public async Task Constructor_WithILoggerExcluded_NoDiagnostic()
     {
         var source = Usings + """
-            // Simulating ILogger<T> pattern (analyzer should exclude types named ILogger)
-            public interface ILogger<T> { }
+            namespace Microsoft.Extensions.Logging
+            {
+                public interface ILogger<T> { }
+            }
 
             public interface IDep1 { }
             public class Dep1 : IDep1 { }
@@ -280,7 +532,12 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
             public interface IMyService { }
             public class MyService : IMyService
             {
-                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, ILogger<MyService> logger) { }
+                public MyService(
+                    IDep1 d1,
+                    IDep2 d2,
+                    IDep3 d3,
+                    IDep4 d4,
+                    Microsoft.Extensions.Logging.ILogger<MyService> logger) { }
             }
 
             public class Startup
@@ -296,7 +553,6 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
             }
             """;
 
-        // ILogger<T> should be excluded from the count
         await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
@@ -304,8 +560,11 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
     public async Task Constructor_WithIOptionsExcluded_NoDiagnostic()
     {
         var source = Usings + """
-            // Simulating IOptions<T> pattern (analyzer should exclude types named IOptions)
-            public interface IOptions<T> { }
+            namespace Microsoft.Extensions.Options
+            {
+                public interface IOptions<T> { }
+            }
+
             public class MyOptions { }
 
             public interface IDep1 { }
@@ -320,7 +579,12 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
             public interface IMyService { }
             public class MyService : IMyService
             {
-                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IOptions<MyOptions> options) { }
+                public MyService(
+                    IDep1 d1,
+                    IDep2 d2,
+                    IDep3 d3,
+                    IDep4 d4,
+                    Microsoft.Extensions.Options.IOptions<MyOptions> options) { }
             }
 
             public class Startup
@@ -336,7 +600,51 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
             }
             """;
 
-        // IOptions<T> should be excluded from the count
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithIConfigurationExcluded_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Configuration
+            {
+                public interface IConfiguration { }
+            }
+
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(
+                    IDep1 d1,
+                    IDep2 d2,
+                    IDep3 d3,
+                    IDep4 d4,
+                    Microsoft.Extensions.Configuration.IConfiguration configuration) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
@@ -420,6 +728,224 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithOnlyShorterResolvableConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1) { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithOptionalFifthDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5 = null) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task FactoryRegistration_WithComplexBody_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1) { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(sp =>
+                    {
+                        if (DateTime.UtcNow.Ticks > 0)
+                        {
+                            return new MyService(
+                                sp.GetRequiredService<IDep1>(),
+                                sp.GetRequiredService<IDep2>(),
+                                sp.GetRequiredService<IDep3>(),
+                                sp.GetRequiredService<IDep4>(),
+                                sp.GetRequiredService<IDep5>());
+                        }
+
+                        return new MyService(sp.GetRequiredService<IDep1>());
+                    });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithEditorConfigThresholdOfFive_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI010.max_dependencies = 5
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source, editorConfig);
+    }
+
+    [Fact]
+    public async Task Constructor_WithEditorConfigThresholdOfThree_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI010.max_dependencies = 3
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(26, 9)
+                .WithArguments("MyService", 4));
     }
 
     [Fact]
