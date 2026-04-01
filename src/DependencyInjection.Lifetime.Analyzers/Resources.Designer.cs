@@ -133,6 +133,14 @@ internal static class Resources
     internal static string DI009_FixTitle_UpgradeDependency =>
         ResourceManager.GetString("DI009_FixTitle_UpgradeDependency", Culture) ?? "Change dependency to Singleton";
 
+    // DI012: Conditional Registration Misuse
+
+    /// <summary>
+    /// Looks up a localized string: Remove ignored TryAdd registration
+    /// </summary>
+    internal static string DI012_FixTitle_RemoveIgnoredRegistration =>
+        ResourceManager.GetString("DI012_FixTitle_RemoveIgnoredRegistration", Culture) ?? "Remove ignored TryAdd registration";
+
     // DI015: Unresolvable Dependency
 
     /// <summary>
