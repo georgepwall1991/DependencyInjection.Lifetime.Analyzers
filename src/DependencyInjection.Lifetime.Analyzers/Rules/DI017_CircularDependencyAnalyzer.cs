@@ -82,7 +82,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var cyclePath = new List<INamedTypeSymbol>();
+            var cyclePath = new List<ServiceLookupKey>();
             var visiting = new HashSet<ServiceLookupKey>();
 
             if (DetectCycle(
@@ -103,7 +103,12 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
                 // Report on the canonical (lexicographically smallest) registration in the cycle
                 var canonicalRegistration = FindCanonicalRegistration(cyclePath, registrations, registration);
 
-                var cycleDescription = FormatCycleFromRegistration(cyclePath, canonicalRegistration.ServiceType);
+                var cycleDescription = FormatCycleFromRegistration(
+                    cyclePath,
+                    new ServiceLookupKey(
+                        canonicalRegistration.ServiceType,
+                        canonicalRegistration.Key,
+                        canonicalRegistration.IsKeyed));
 
                 var diagnostic = Diagnostic.Create(
                     DiagnosticDescriptors.CircularDependency,
@@ -122,10 +127,10 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         Dictionary<ServiceLookupKey, List<ServiceRegistration>> registrationsByService,
         WellKnownTypes? wellKnownTypes,
         HashSet<ServiceLookupKey> visiting,
-        List<INamedTypeSymbol> cyclePath,
+        List<ServiceLookupKey> cyclePath,
         HashSet<ServiceLookupKey> knownNoCycle)
     {
-        cyclePath.Add(serviceKey.Type);
+        cyclePath.Add(serviceKey);
 
         if (!visiting.Add(serviceKey))
         {
@@ -140,8 +145,8 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        // Walk constructors that DI would consider (respects [ActivatorUtilitiesConstructor]).
-        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
+        // Walk constructors that DI would most likely select for activation.
+        var constructors = GetLikelyCycleConstructors(implementationType, registrationsByService, wellKnownTypes);
 
         foreach (var constructor in constructors)
         {
@@ -233,6 +238,71 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static IEnumerable<IMethodSymbol> GetLikelyCycleConstructors(
+        INamedTypeSymbol implementationType,
+        Dictionary<ServiceLookupKey, List<ServiceRegistration>> registrationsByService,
+        WellKnownTypes? wellKnownTypes)
+    {
+        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType).ToList();
+        if (constructors.Count <= 1)
+        {
+            return constructors;
+        }
+
+        var resolvableConstructors = constructors
+            .Where(constructor => constructor.Parameters.All(parameter =>
+                IsDirectlyResolvableConstructorParameter(parameter, registrationsByService, wellKnownTypes)))
+            .ToList();
+
+        if (resolvableConstructors.Count == 0)
+        {
+            return [];
+        }
+
+        var selectedParameterCount = resolvableConstructors.Max(constructor => constructor.Parameters.Length);
+        return resolvableConstructors.Where(constructor => constructor.Parameters.Length == selectedParameterCount);
+    }
+
+    private static bool IsDirectlyResolvableConstructorParameter(
+        IParameterSymbol parameter,
+        Dictionary<ServiceLookupKey, List<ServiceRegistration>> registrationsByService,
+        WellKnownTypes? wellKnownTypes)
+    {
+        if (ShouldSkipParameter(parameter, wellKnownTypes) || IsFrameworkProvidedParameter(parameter.Type, wellKnownTypes))
+        {
+            return true;
+        }
+
+        if (parameter.Type is not INamedTypeSymbol dependencyType)
+        {
+            return false;
+        }
+
+        var (key, isKeyed) = GetServiceKey(parameter);
+        return FindRegistration(new ServiceLookupKey(dependencyType, key, isKeyed), registrationsByService) is not null;
+    }
+
+    private static bool IsFrameworkProvidedParameter(ITypeSymbol type, WellKnownTypes? wellKnownTypes) =>
+        wellKnownTypes is not null &&
+        (wellKnownTypes.IsConfiguration(type) ||
+         wellKnownTypes.IsLogger(type) ||
+         wellKnownTypes.IsOptionsAbstraction(type) ||
+         IsFrameworkProvidedByName(type));
+
+    private static bool IsFrameworkProvidedByName(ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol namedType)
+        {
+            return false;
+        }
+
+        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
+        return (namedType.Name == "ILoggerFactory" && namespaceName == "Microsoft.Extensions.Logging") ||
+               (namedType.Name is "IHostEnvironment" or "IWebHostEnvironment" &&
+                (namespaceName == "Microsoft.Extensions.Hosting" ||
+                 namespaceName == "Microsoft.AspNetCore.Hosting"));
     }
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)
@@ -348,7 +418,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
     /// service type name, ensuring deterministic reporting order.
     /// </summary>
     private static ServiceRegistration FindCanonicalRegistration(
-        List<INamedTypeSymbol> cyclePath,
+        List<ServiceLookupKey> cyclePath,
         List<ServiceRegistration> allRegistrations,
         ServiceRegistration fallback)
     {
@@ -358,11 +428,11 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         // Extract the cycle members (excluding the repeated tail element)
-        var lastType = cyclePath[cyclePath.Count - 1];
+        var lastService = cyclePath[cyclePath.Count - 1];
         var cycleStart = -1;
         for (var i = 0; i < cyclePath.Count - 1; i++)
         {
-            if (SymbolEqualityComparer.Default.Equals(cyclePath[i], lastType))
+            if (cyclePath[i].Equals(lastService))
             {
                 cycleStart = i;
                 break;
@@ -380,9 +450,11 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
 
         for (var i = cycleStart; i < cyclePath.Count - 1; i++)
         {
-            var cycleType = cyclePath[i];
+            var cycleService = cyclePath[i];
             var registration = allRegistrations.LastOrDefault(r =>
-                SymbolEqualityComparer.Default.Equals(r.ServiceType, cycleType) &&
+                SymbolEqualityComparer.Default.Equals(r.ServiceType, cycleService.Type) &&
+                Equals(r.Key, cycleService.Key) &&
+                r.IsKeyed == cycleService.IsKeyed &&
                 !r.HasImplementationInstance &&
                 r.ImplementationType is not null &&
                 r.FactoryExpression is null);
@@ -407,8 +479,8 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
     /// Formats the cycle description starting from the given service type.
     /// </summary>
     private static string FormatCycleFromRegistration(
-        List<INamedTypeSymbol> cyclePath,
-        INamedTypeSymbol startType)
+        List<ServiceLookupKey> cyclePath,
+        ServiceLookupKey startService)
     {
         if (cyclePath.Count < 2)
         {
@@ -416,11 +488,11 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         // Find the start of the cycle portion
-        var lastType = cyclePath[cyclePath.Count - 1];
+        var lastService = cyclePath[cyclePath.Count - 1];
         var cycleStart = -1;
         for (var i = 0; i < cyclePath.Count - 1; i++)
         {
-            if (SymbolEqualityComparer.Default.Equals(cyclePath[i], lastType))
+            if (cyclePath[i].Equals(lastService))
             {
                 cycleStart = i;
                 break;
@@ -430,19 +502,18 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         if (cycleStart < 0)
         {
             return string.Join(" -> ",
-                cyclePath.Select(t => t.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+                cyclePath.Select(FormatServiceLookupKey));
         }
 
         // Extract cycle members
-        var cycleMembers = new List<INamedTypeSymbol>();
+        var cycleMembers = new List<ServiceLookupKey>();
         for (var i = cycleStart; i < cyclePath.Count - 1; i++)
         {
             cycleMembers.Add(cyclePath[i]);
         }
 
         // Rotate so the canonical start type is first
-        var startIndex = cycleMembers.FindIndex(t =>
-            SymbolEqualityComparer.Default.Equals(t, startType));
+        var startIndex = cycleMembers.FindIndex(service => service.Equals(startService));
         if (startIndex > 0)
         {
             var rotated = cycleMembers.Skip(startIndex)
@@ -455,10 +526,10 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         cycleMembers.Add(cycleMembers[0]);
 
         return string.Join(" -> ",
-            cycleMembers.Select(t => t.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+            cycleMembers.Select(FormatServiceLookupKey));
     }
 
-    private static string GetCanonicalCycleKey(List<INamedTypeSymbol> cyclePath)
+    private static string GetCanonicalCycleKey(List<ServiceLookupKey> cyclePath)
     {
         // Find the cycle portion (from first repeated element to end)
         if (cyclePath.Count < 2)
@@ -466,11 +537,11 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
             return string.Empty;
         }
 
-        var lastType = cyclePath[cyclePath.Count - 1];
+        var lastService = cyclePath[cyclePath.Count - 1];
         var cycleStart = -1;
         for (var i = 0; i < cyclePath.Count - 1; i++)
         {
-            if (SymbolEqualityComparer.Default.Equals(cyclePath[i], lastType))
+            if (cyclePath[i].Equals(lastService))
             {
                 cycleStart = i;
                 break;
@@ -486,11 +557,28 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         var cycleMembers = new List<string>();
         for (var i = cycleStart; i < cyclePath.Count - 1; i++)
         {
-            cycleMembers.Add(DependencyResolutionEngine.GetGlobalTypeDisplayName(cyclePath[i]));
+            cycleMembers.Add(GetGlobalLookupKeyDisplayName(cyclePath[i]));
         }
 
         cycleMembers.Sort();
         return string.Join("|", cycleMembers);
+    }
+
+    private static string FormatServiceLookupKey(ServiceLookupKey serviceLookupKey) =>
+        DependencyResolutionEngine.FormatDependencyName(
+            serviceLookupKey.Type,
+            serviceLookupKey.Key,
+            serviceLookupKey.IsKeyed);
+
+    private static string GetGlobalLookupKeyDisplayName(ServiceLookupKey serviceLookupKey)
+    {
+        var typeName = DependencyResolutionEngine.GetGlobalTypeDisplayName(serviceLookupKey.Type);
+        if (!serviceLookupKey.IsKeyed)
+        {
+            return typeName;
+        }
+
+        return $"{typeName}|key:{serviceLookupKey.Key ?? "null"}";
     }
 
     /// <summary>
