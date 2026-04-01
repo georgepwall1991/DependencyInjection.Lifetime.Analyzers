@@ -87,37 +87,43 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             var genericDefinition = registration.ImplementationType.OriginalDefinition;
             var constructors = ConstructorSelection.GetLikelyActivationConstructors(
                 genericDefinition,
-                parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
+                parameter => IsResolvableConstructorParameter(parameter, resolutionEngine))
+                .ToList();
+
+            // Multiple equally-greedy activation candidates are ambiguous at runtime.
+            // Stay quiet rather than reporting a captive dependency on a constructor
+            // the container may not actually select.
+            if (constructors.Count != 1)
+            {
+                continue;
+            }
 
             foreach (var constructor in constructors)
             {
                 foreach (var parameter in constructor.Parameters)
                 {
-                    var parameterType = GetNonGenericTypeFromParameter(parameter.Type);
-                    if (parameterType is null)
+                    if (!TryGetDependencyInfo(
+                            parameter.Type,
+                            GetServiceKey(parameter),
+                            registrationCollector,
+                            out var dependencyType,
+                            out var dependencyLifetime) ||
+                        dependencyLifetime is not { } dependencyLifetimeValue)
                     {
-                        continue;
-                    }
-
-                    var (key, isKeyed) = GetServiceKey(parameter);
-                    var dependencyLifetime = registrationCollector.GetLifetime(parameterType, key, isKeyed);
-                    if (dependencyLifetime is null)
-                    {
-                        // Unknown dependency - don't report
                         continue;
                     }
 
                     // Check for captive dependency: singleton capturing scoped or transient
-                    if (dependencyLifetime.Value > ServiceLifetime.Singleton)
+                    if (dependencyLifetimeValue > ServiceLifetime.Singleton)
                     {
-                        var lifetimeName = dependencyLifetime.Value.ToString().ToLowerInvariant();
+                        var lifetimeName = dependencyLifetimeValue.ToString().ToLowerInvariant();
                         var diagnostic = Diagnostic.Create(
                             DiagnosticDescriptors.OpenGenericLifetimeMismatch,
                             registration.Location,
                             ImmutableDictionary<string, string?>.Empty.Add(DependencyLifetimePropertyName, lifetimeName),
                             registration.ImplementationType.Name,
                             lifetimeName,
-                            parameterType.Name);
+                            dependencyType.Name);
 
                         context.ReportDiagnostic(diagnostic);
                     }
@@ -130,6 +136,11 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         IParameterSymbol parameter,
         DependencyResolutionEngine resolutionEngine)
     {
+        if (parameter.HasExplicitDefaultValue || parameter.IsOptional)
+        {
+            return true;
+        }
+
         var (key, isKeyed) = GetServiceKey(parameter);
         return resolutionEngine.ResolveServiceRequest(
                 parameter.Type,
@@ -137,6 +148,60 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 isKeyed,
                 assumeFrameworkServicesRegistered: true)
             .IsResolvable;
+    }
+
+    private static bool TryGetDependencyInfo(
+        ITypeSymbol parameterType,
+        (object? key, bool isKeyed) serviceKey,
+        RegistrationCollector registrationCollector,
+        out INamedTypeSymbol dependencyType,
+        out ServiceLifetime? dependencyLifetime)
+    {
+        dependencyType = null!;
+        dependencyLifetime = null;
+
+        if (TryGetEnumerableElementType(parameterType, out var elementType))
+        {
+            dependencyType = elementType;
+            dependencyLifetime = registrationCollector.GetLifetime(elementType, serviceKey.key, serviceKey.isKeyed);
+            return dependencyLifetime is not null;
+        }
+
+        var nonGenericType = GetNonGenericTypeFromParameter(parameterType);
+        if (nonGenericType is null)
+        {
+            return false;
+        }
+
+        dependencyType = nonGenericType;
+        dependencyLifetime = registrationCollector.GetLifetime(nonGenericType, serviceKey.key, serviceKey.isKeyed);
+        return dependencyLifetime is not null;
+    }
+
+    private static bool TryGetEnumerableElementType(
+        ITypeSymbol parameterType,
+        out INamedTypeSymbol elementType)
+    {
+        elementType = null!;
+
+        if (parameterType is not INamedTypeSymbol
+            {
+                IsGenericType: true,
+                TypeArguments.Length: 1
+            } namedType)
+        {
+            return false;
+        }
+
+        if (namedType.Name != "IEnumerable" ||
+            namedType.ContainingNamespace.ToDisplayString() != "System.Collections.Generic" ||
+            namedType.TypeArguments[0] is not INamedTypeSymbol namedElementType)
+        {
+            return false;
+        }
+
+        elementType = namedElementType;
+        return true;
     }
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter)

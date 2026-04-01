@@ -279,6 +279,95 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 .WithArguments("IMyService", "line 12"));
     }
 
+    [Fact]
+    public async Task TryAddSingleton_AfterAddSingleton_ThroughLocalAlias_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var alias = services;
+                    services.AddSingleton<IMyService, MyService>();
+                    alias.TryAddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(13, 9)
+                .WithArguments("IMyService", "line 12"));
+    }
+
+    [Fact]
+    public async Task TryAddSingleton_AfterInvokedHelperMethodAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    AddPrimary(services);
+                    services.TryAddSingleton<IMyService, MyService2>();
+                }
+
+                private static void AddPrimary(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(13, 9)
+                .WithArguments("IMyService", "line 18"));
+    }
+
+    [Fact]
+    public async Task TryAddSingleton_AfterInvokedLocalFunctionAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    AddPrimary(services);
+                    services.TryAddSingleton<IMyService, MyService2>();
+                    return;
+
+                    static void AddPrimary(IServiceCollection services)
+                    {
+                        services.AddSingleton<IMyService, MyService1>();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(13, 9)
+                .WithArguments("IMyService", "line 18"));
+    }
+
     #endregion
 
     #region Should Report Diagnostic - Duplicate Add
@@ -735,6 +824,37 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
                 .WithSpan("B.cs", 7, 9, 7, 78)
                 .WithArguments("IMyService", "line 7"));
+    }
+
+    [Fact]
+    public async Task TryAddSingleton_AfterOpaqueHelperBarrier_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+            public interface IRegistrar
+            {
+                void Configure(IServiceCollection services);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, IRegistrar registrar)
+                {
+                    AddPrimary(services);
+                    registrar.Configure(services);
+                    services.TryAddSingleton<IMyService, MyService2>();
+                }
+
+                private static void AddPrimary(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     #endregion

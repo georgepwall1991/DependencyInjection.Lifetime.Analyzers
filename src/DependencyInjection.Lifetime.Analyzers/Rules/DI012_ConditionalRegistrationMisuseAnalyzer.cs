@@ -81,11 +81,16 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
             return;
         }
 
-        var effectiveOrderedRegistrations = invocationObservations.IsDefaultOrEmpty
+        var reachabilityAnalyzer = invocationObservations.IsDefaultOrEmpty
+            ? null
+            : ServiceCollectionReachabilityAnalyzer.Create(
+                context.Compilation,
+                invocationObservations,
+                orderedRegistrations);
+
+        var effectiveOrderedRegistrations = reachabilityAnalyzer is null
             ? OrderedRegistrationOrdering.SortBySourceLocation(orderedRegistrations)
-            : ServiceCollectionReachabilityAnalyzer
-                .Create(context.Compilation, invocationObservations, orderedRegistrations)
-                .AlignOrderedRegistrationsToRootFlows(orderedRegistrations);
+            : reachabilityAnalyzer.AlignOrderedRegistrationsToRootFlows(orderedRegistrations);
 
         // Group registrations by service type and key (keyed services should be treated independently)
         var registrationsByServiceType = effectiveOrderedRegistrations
@@ -99,13 +104,14 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         {
             // The registrations are already grouped in either stable source order (for direct
             // flows) or root-flow execution order (for invoked wrappers/helpers).
-            AnalyzeServiceTypeRegistrations(context, group.ToList());
+            AnalyzeServiceTypeRegistrations(context, group.ToList(), reachabilityAnalyzer);
         }
     }
 
     private static void AnalyzeServiceTypeRegistrations(
         CompilationAnalysisContext context,
-        List<OrderedRegistration> registrations)
+        List<OrderedRegistration> registrations,
+        ServiceCollectionReachabilityAnalyzer? reachabilityAnalyzer)
     {
         if (registrations.Count < 2)
         {
@@ -120,12 +126,22 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         for (var i = 0; i < registrations.Count; i++)
         {
             var current = registrations[i];
+            var currentHasOpaquePredecessor =
+                reachabilityAnalyzer?.HasOpaquePredecessor(current.Location) == true;
 
             if (!current.IsTryAdd)
             {
                 // This is an Add* registration
                 if (firstAddRegistration is null)
                 {
+                    firstAddRegistration = current;
+                }
+                else if (currentHasOpaquePredecessor &&
+                         reachabilityAnalyzer?.HasOpaquePredecessor(firstAddRegistration.Location) != true)
+                {
+                    // An opaque wrapper/helper call may have changed the effective order.
+                    // Treat this registration as the new baseline instead of comparing
+                    // across the uncertainty boundary.
                     firstAddRegistration = current;
                 }
                 else
@@ -145,6 +161,13 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 // This is a TryAdd* registration
                 if (firstAddRegistration is not null)
                 {
+                    if (currentHasOpaquePredecessor &&
+                        reachabilityAnalyzer?.HasOpaquePredecessor(firstAddRegistration.Location) != true)
+                    {
+                        firstAddRegistration = null;
+                        continue;
+                    }
+
                     // TryAdd after Add - TryAdd will be ignored
                     var diagnostic = Diagnostic.Create(
                         DiagnosticDescriptors.TryAddIgnored,

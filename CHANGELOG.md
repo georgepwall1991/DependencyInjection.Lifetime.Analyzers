@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-04-01
+
+### Changed
+
+- **DI016 Builder-Flow Hardening**: BuildServiceProvider misuse detection now recognizes assignable `IServiceCollection` abstractions, same-boundary alias reassignment, and helper methods that forward builder-style `.Services` flows, while still staying quiet for provider-factory methods and standalone top-level `ServiceCollection` usage.
+- **DI009 Constructor and Collection Precision**: Open-generic captive-dependency analysis now treats optional/default constructor parameters as activatable during likely-constructor selection, suppresses diagnostics on ambiguous equally-greedy constructors, and reports `IEnumerable<T>` captures against the element service lifetime.
+- **DI012 Flow and Opaque-Barrier Accuracy**: Conditional-registration analysis now follows same-collection local aliases plus source-defined helper/local-function wrappers more reliably, isolates distinct object-created collection flows, and treats source-declared but bodyless registration helpers as opaque ordering barriers instead of speculating across them.
+
 ## [2.4.2] - 2026-04-01
 
 ### Changed

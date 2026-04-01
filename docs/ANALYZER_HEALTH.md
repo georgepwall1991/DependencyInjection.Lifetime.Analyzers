@@ -1,10 +1,10 @@
 # Analyzer Health Snapshot
 
-Date: 2026-04-01
+Date: 2026-04-01 (post-v2.4.3)
 
 Validation:
 - `dotnet test DependencyInjection.Lifetime.Analyzers.sln`
-- Result: `617/617` tests passing
+- Result: `629/629` tests passing
 
 Scoring:
 - `10/10` = strong implementation, strong tests, no obvious short-term hardening need.
@@ -28,23 +28,23 @@ Scoring factors:
 | DI006 | Warning | 11 | 8/10 | No | Simple symbol rule with low ambiguity. Focused tests cover fields, properties, inherited provider types, and static classes. |
 | DI007 | Info | 22 | 8/10 | No | Informational by design and already looks noise-hardened. Good factory and lambda handling for the current scope. |
 | DI008 | Warning | 19 | 8/10 | No | Solid disposable transient coverage across generic registrations, `typeof`, `IDisposable`, and `IAsyncDisposable`. |
-| DI009 | Warning | 18 | 8/10 | No | Stronger now. Direct coverage includes `TryAddSingleton`, `ServiceDescriptor.Singleton`, keyed open-generic singleton paths, constructor-selection guardrails, and ineffective-`TryAdd` silence. |
+| DI009 | Warning | 22 | 9/10 | No | Strong current state after the constructor/collection hardening pass. It now handles optional/default-value constructor selection, ambiguous equally-greedy constructor silence, and `IEnumerable<T>` captures on top of the earlier `TryAddSingleton`, `ServiceDescriptor.Singleton`, keyed, and ineffective-`TryAdd` coverage. |
 | DI010 | Info | 24 | 9.5/10 | No | Strong current state after the DI010 hardening pass. The rule now follows likely activation constructors, covers conservative factory paths, uses symbol-accurate exclusions, and supports `.editorconfig` threshold overrides. |
 | DI011 | Info | 19 | 9/10 | No | Strong current state. Uses likely-activation-constructor logic, has good allowance coverage, and now stays quiet for valid implementation-instance registrations. |
-| DI012 | Info | 26 | 8/10 | No | Strong registration-history rule. `TryAdd`, duplicates, wrappers, keyed variants, and `ServiceDescriptor` shapes are covered. |
+| DI012 | Info | 30 | 9/10 | No | Strong current state after the flow/barrier hardening pass. It now follows same-collection aliases, source-defined helper/local-function wrappers, distinct object-created collection flows, keyed variants, `ServiceDescriptor` shapes, and opaque ordering barriers more reliably. |
 | DI013 | Error | 51 | 9/10 | No | Strong current state after the DI013 hardening pass. Open-generic projection checks, collector-fed registration shapes, and instance-backed mismatches still have broad direct coverage. |
 | DI014 | Warning | 13 | 8/10 | No | Concrete lifetime rule with decent coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. |
 | DI015 | Warning | 53 | 9/10 | No | One of the strongest analyzers in the repo. Broad support for keyed, factory, wrapper, open-generic, and now implementation-instance scenarios. |
-| DI016 | Warning | 14 | 8/10 | No | Improved after the DI016 hardening pass. Top-level builder-style `.Services` registration flows are now covered, standalone top-level `ServiceCollection` usage has a no-diagnostic guardrail, and direct regression coverage is in better shape. |
+| DI016 | Warning | 18 | 9/10 | No | Strong current state after the builder-flow hardening pass. It now covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases including later assignment, helper methods that forward builder-style `.Services` flows, and still keeps provider-factory and standalone top-level `ServiceCollection` guardrails. |
 | DI017 | Warning | 11 | 8/10 | No | Much healthier now. Cycle detection uses stable effective registrations instead of concurrent discovery order, and mixed instance-plus-constructed graphs have direct coverage. |
 | DI018 | Warning | 28 | 9/10 | No | Strong current state. Open-generic constructor checks now use the generic definition, and direct coverage spans keyed registrations, `TryAdd`, `ServiceDescriptor.Singleton`/`Describe`, factory and instance silence, constructor accessibility matrices, and sample/docs parity. |
 
 ## Suggested Pass Order
 
-No urgent targeted hardening pass stands out after the 2026-04-01 re-pass. If I had to force one anyway, I would start with DI016 because it remains the most heuristic registration-context rule, then DI009 if constructor-selection-sensitive open-generic coverage turns out to have more edge cases, then DI012 if wrapper/registration-history flow grows again.
+No urgent targeted hardening pass stands out after the 2026-04-01 post-v2.4.3 re-pass. The previous DI016, DI009, and DI012 priority set looks materially healthier now. If I had to force one anyway, I would start with DI001 or DI014 for remaining lifetime/disposal edge debt, then look at DI017 for more cycle-precision polish.
 
 ## Watchlist
 
-- DI016: materially healthier now, but still a heuristic rule, so keep an eye on future registration-shape drift rather than scheduling an immediate pass.
-- DI009: current registration-shape coverage is much better, but constructor-selection-sensitive open-generic behavior is still worth watching over time.
-- DI012: registration-history accuracy is in a good place, but wrapper flow and collector-shape growth are the areas most likely to need the next precision pass.
+- DI001: disposal-proof edge cases are still the most plausible place for future leak false positives or misses.
+- DI014: root-provider ownership is a narrower rule, but explicit-disposal edge cases are still worth keeping on the radar.
+- DI017: cycle detection is healthier now, but graph-shape precision and keyed-path breadth are the next likely refinement area.
