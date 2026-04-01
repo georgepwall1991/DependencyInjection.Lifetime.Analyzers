@@ -192,20 +192,24 @@ public class Program
     }
 
     [Fact]
-    public async Task Fixes_Await_Using_In_Async_Method_With_BuildServiceProvider()
+    public async Task Fixes_Await_Using_In_Async_LocalFunction_InsideSyncMethod()
     {
-        // DI014 fixer detects async method and uses await using
+        // The fixer must check the nearest enclosing callable, not the outer method.
+        // An async local function inside a sync method should get await using.
         var test = @"
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 
 public class Program
 {
-    public async Task MainAsync()
+    public void Main()
     {
-        var services = new ServiceCollection();
-        var provider = services.BuildServiceProvider();
-        await Task.Delay(100);
+        async Task SetupAsync()
+        {
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+            await Task.Delay(100);
+        }
     }
 }";
 
@@ -215,16 +219,19 @@ using Microsoft.Extensions.DependencyInjection;
 
 public class Program
 {
-    public async Task MainAsync()
+    public void Main()
     {
-        var services = new ServiceCollection();
-        await using var provider = services.BuildServiceProvider();
-        await Task.Delay(100);
+        async Task SetupAsync()
+        {
+            var services = new ServiceCollection();
+            await using var provider = services.BuildServiceProvider();
+            await Task.Delay(100);
+        }
     }
 }";
 
         var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
-            .WithLocation(10, 24);
+            .WithLocation(12, 28);
 
         await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
     }

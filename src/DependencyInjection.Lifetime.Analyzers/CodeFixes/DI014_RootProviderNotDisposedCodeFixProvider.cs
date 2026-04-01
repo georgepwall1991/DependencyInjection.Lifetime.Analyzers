@@ -90,30 +90,23 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         return editor.GetChangedDocument();
     }
 
-    private bool IsAsyncMethod(SyntaxNode node)
+    private static bool IsAsyncMethod(SyntaxNode node)
     {
-        var method = node.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
-        if (method != null)
+        // Walk ancestors and return the asyncness of the NEAREST enclosing callable,
+        // not the first method declaration (which may be an outer non-async wrapper).
+        foreach (var ancestor in node.Ancestors())
         {
-            return method.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
-        }
-
-        var localFunction = node.Ancestors().OfType<LocalFunctionStatementSyntax>().FirstOrDefault();
-        if (localFunction != null)
-        {
-            return localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
-        }
-
-        var lambda = node.Ancestors().OfType<LambdaExpressionSyntax>().FirstOrDefault();
-        if (lambda != null)
-        {
-            return lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
-        }
-
-        var anonymousMethod = node.Ancestors().OfType<AnonymousMethodExpressionSyntax>().FirstOrDefault();
-        if (anonymousMethod != null)
-        {
-            return anonymousMethod.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+            switch (ancestor)
+            {
+                case LocalFunctionStatementSyntax localFunction:
+                    return localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+                case LambdaExpressionSyntax lambda:
+                    return lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+                case AnonymousMethodExpressionSyntax anonymousMethod:
+                    return anonymousMethod.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+                case MethodDeclarationSyntax method:
+                    return method.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+            }
         }
 
         return false;
