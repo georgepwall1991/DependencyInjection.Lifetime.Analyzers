@@ -1,15 +1,7 @@
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
 using System.Threading.Tasks;
 using DependencyInjection.Lifetime.Analyzers.CodeFixes;
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CodeActions;
-using Microsoft.CodeAnalysis.CodeFixes;
-using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.CodeFixes;
@@ -183,114 +175,117 @@ public class DI002_ScopeEscapeCodeFixTests
     #region Add TODO Comment Fix
 
     [Fact]
-    public async Task CodeFix_OffersBothActions_ReturnEscape()
+    public async Task CodeFix_AddsTodoComment_ReturnEscape()
     {
-        // Verifies both DI002_AddTodo and DI002_Suppress actions are registered.
-        // The AddTodo code path was entirely untested prior to this.
-        var source = Usings + """
-            public interface IMyService { }
+        // Tests the DI002_AddTodo code path, which was entirely untested.
+        // Uses @"" strings to match the \r\n the fixer's SyntaxFactory.CarriageReturnLineFeed produces.
+        var source = @"
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 
-            public class MyClass
-            {
-                private readonly IServiceScopeFactory _scopeFactory;
+public interface IMyService { }
 
-                public MyClass(IServiceScopeFactory scopeFactory)
-                {
-                    _scopeFactory = scopeFactory;
-                }
+public class MyClass
+{
+    private readonly IServiceScopeFactory _scopeFactory;
 
-                public IMyService GetService()
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    return scope.ServiceProvider.GetRequiredService<IMyService>();
-                }
-            }
+    public MyClass(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
+    }
 
-            public class Startup
-            {
-                public void ConfigureServices(IServiceCollection services)
-                {
-                    services.AddScoped<IMyService, ScopedMyService>();
-                }
-            }
+    public IMyService GetService()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<IMyService>();
+    }
+}
 
-            public class ScopedMyService : IMyService { }
-            """;
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddScoped<IMyService, ScopedMyService>();
+    }
+}
 
-        var actions = await GetRegisteredCodeActionsAsync(source);
-        Assert.Contains(actions, a => a.EquivalenceKey == "DI002_AddTodo");
-        Assert.Contains(actions, a => a.EquivalenceKey == "DI002_Suppress");
+public class ScopedMyService : IMyService { }
+";
+
+        var fixedSource = source.Replace(
+            "        return scope.ServiceProvider.GetRequiredService<IMyService>();",
+            "        // TODO: DI002 - Service resolved from scope will be disposed when scope ends. Consider returning scope with service or restructuring.\r\n        return scope.ServiceProvider.GetRequiredService<IMyService>();");
+
+        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(20, 16)
+            .WithArguments("return");
+
+        // The diagnostic remains after applying the TODO fix (shifted down 1 line by the comment)
+        var remaining = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(21, 16)
+            .WithArguments("return");
+
+        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .VerifyNonRemovingCodeFixAsync(source, expected, fixedSource, "DI002_AddTodo", remaining);
     }
 
     [Fact]
-    public async Task CodeFix_OffersBothActions_FieldAssignment()
+    public async Task CodeFix_AddsTodoComment_FieldAssignment()
     {
-        var source = Usings + """
-            public interface IMyService { }
+        var source = @"
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 
-            public class MyClass
-            {
-                private readonly IServiceScopeFactory _scopeFactory;
-                private IMyService _service;
+public interface IMyService { }
 
-                public MyClass(IServiceScopeFactory scopeFactory)
-                {
-                    _scopeFactory = scopeFactory;
-                }
+public class MyClass
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private IMyService _service;
 
-                public void Initialize()
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    _service = scope.ServiceProvider.GetRequiredService<IMyService>();
-                }
-            }
-
-            public class Startup
-            {
-                public void ConfigureServices(IServiceCollection services)
-                {
-                    services.AddScoped<IMyService, ScopedMyService>();
-                }
-            }
-
-            public class ScopedMyService : IMyService { }
-            """;
-
-        var actions = await GetRegisteredCodeActionsAsync(source);
-        Assert.Contains(actions, a => a.EquivalenceKey == "DI002_AddTodo");
-        Assert.Contains(actions, a => a.EquivalenceKey == "DI002_Suppress");
+    public MyClass(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
     }
 
-    private static async Task<List<CodeAction>> GetRegisteredCodeActionsAsync(string source)
+    public void Initialize()
     {
-        var references = new ReferenceAssemblies("net8.0",
-                new PackageIdentity("Microsoft.NETCore.App.Ref", "8.0.0"), System.IO.Path.Combine("ref", "net8.0"))
-            .AddPackages([new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0")]);
-        var metadataRefs = await references.ResolveAsync(LanguageNames.CSharp, default);
-        var workspace = new AdhocWorkspace();
-        var project = workspace.AddProject("TestProject", LanguageNames.CSharp)
-            .WithMetadataReferences(metadataRefs);
-        var document = project.AddDocument("Test.cs", source);
-        var compilation = await document.Project.GetCompilationAsync();
-        Assert.NotNull(compilation);
+        using var scope = _scopeFactory.CreateScope();
+        _service = scope.ServiceProvider.GetRequiredService<IMyService>();
+    }
+}
 
-        var analyzer = new DI002_ScopeEscapeAnalyzer();
-        var diagnostics = await compilation!
-            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(analyzer))
-            .GetAnalyzerDiagnosticsAsync();
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddScoped<IMyService, ScopedMyService>();
+    }
+}
 
-        var diagnostic = diagnostics.First(d => d.Id == DiagnosticIds.ScopedServiceEscapes);
+public class ScopedMyService : IMyService { }
+";
 
-        var actions = new List<CodeAction>();
-        var codeFix = new DI002_ScopeEscapeCodeFixProvider();
-        var context = new CodeFixContext(
-            document,
-            diagnostic,
-            (action, _) => actions.Add(action),
-            default);
+        var fixedSource = source.Replace(
+            "        _service = scope.ServiceProvider.GetRequiredService<IMyService>();",
+            "        // TODO: DI002 - Service resolved from scope will be disposed when scope ends. Consider returning scope with service or restructuring.\r\n        _service = scope.ServiceProvider.GetRequiredService<IMyService>();");
 
-        await codeFix.RegisterCodeFixesAsync(context);
-        return actions;
+        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(21, 20)
+            .WithArguments("_service");
+
+        var remaining = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(22, 20)
+            .WithArguments("_service");
+
+        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .VerifyNonRemovingCodeFixAsync(source, expected, fixedSource, "DI002_AddTodo", remaining);
     }
 
     #endregion
