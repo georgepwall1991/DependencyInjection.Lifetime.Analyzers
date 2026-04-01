@@ -4,7 +4,7 @@ Date: 2026-04-01
 
 Validation:
 - `dotnet test DependencyInjection.Lifetime.Analyzers.sln`
-- Result: `603/603` tests passing
+- Result: `617/617` tests passing
 
 Scoring:
 - `10/10` = strong implementation, strong tests, no obvious short-term hardening need.
@@ -21,9 +21,9 @@ Scoring factors:
 | ID | Severity | Rule tests | Score | Needs pass | Current state |
 | --- | --- | --- | --- | --- | --- |
 | DI001 | Warning | 23 | 8/10 | No | Mature disposal rule. Operation-based tracking covers lambdas, fields, conditionals, and nested scopes. |
-| DI002 | Warning | 20 | 8/10 | No | 8/10 still feels right after the re-pass. The recent alias and predeclared-scope hardening landed well; the remaining debt is mainly the method-only entry surface and fairly syntax-shaped escape sinks. |
+| DI002 | Warning | 27 | 9/10 | No | Strong current state after the executable-boundary hardening pass. It now covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, and predeclared scopes without crossing nested executable boundaries. Remaining debt is mostly conservative sink breadth, not entry coverage. |
 | DI003 | Warning | 31 | 9/10 | No | Strong runtime-correctness rule. Instance-backed registrations are now explicitly excluded from constructor analysis, and direct + `ServiceDescriptor` regressions are covered. |
-| DI004 | Warning | 22 | 8/10 | No | 8/10 still feels right after the re-pass. The recent alias/predeclared-scope work and overwrite guardrails materially improved it; the remaining risk is mostly method-only coverage and nested-boundary/dataflow complexity. |
+| DI004 | Warning | 29 | 9/10 | No | Strong current state after the executable-boundary hardening pass. It now covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, and predeclared scopes while keeping post-disposal reasoning inside the owning executable boundary. Remaining risk is broader dataflow complexity, not basic boundary coverage. |
 | DI005 | Warning | 17 | 8/10 | No | Narrow rule with a clear trigger. Async methods, lambdas, local functions, and `IServiceProvider.CreateScope()` are covered well enough. |
 | DI006 | Warning | 11 | 8/10 | No | Simple symbol rule with low ambiguity. Focused tests cover fields, properties, inherited provider types, and static classes. |
 | DI007 | Info | 22 | 8/10 | No | Informational by design and already looks noise-hardened. Good factory and lambda handling for the current scope. |
@@ -41,11 +41,10 @@ Scoring factors:
 
 ## Suggested Pass Order
 
-No urgent targeted hardening pass stands out after the 2026-04-01 re-pass. If I had to force one anyway, I would start with a combined DI002/DI004 entry-surface widening pass, then revisit DI016 if heuristic registration-context drift shows up again, then DI009 if constructor-selection-sensitive open-generic coverage turns out to have more edge cases.
+No urgent targeted hardening pass stands out after the 2026-04-01 re-pass. If I had to force one anyway, I would start with DI016 because it remains the most heuristic registration-context rule, then DI009 if constructor-selection-sensitive open-generic coverage turns out to have more edge cases, then DI012 if wrapper/registration-history flow grows again.
 
 ## Watchlist
 
-- DI002: materially healthier now, but it still only enters through ordinary methods and mainly recognizes direct return/field/property-style escape sinks.
-- DI004: materially healthier now, but it still only enters through ordinary methods and its post-disposal reasoning is inherently sensitive to nested boundaries and broader cross-block flow.
 - DI016: materially healthier now, but still a heuristic rule, so keep an eye on future registration-shape drift rather than scheduling an immediate pass.
 - DI009: current registration-shape coverage is much better, but constructor-selection-sensitive open-generic behavior is still worth watching over time.
+- DI012: registration-history accuracy is in a good place, but wrapper flow and collector-shape growth are the areas most likely to need the next precision pass.

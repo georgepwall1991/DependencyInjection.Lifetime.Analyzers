@@ -40,7 +40,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            var methods = new ConcurrentBag<MethodDeclarationSyntax>();
+            var executableRoots = new ConcurrentBag<SyntaxNode>();
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
 
             compilationContext.RegisterSyntaxNodeAction(
@@ -59,47 +59,57 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             compilationContext.RegisterSyntaxNodeAction(
                 syntaxContext =>
                 {
-                    methods.Add((MethodDeclarationSyntax)syntaxContext.Node);
+                    executableRoots.Add(syntaxContext.Node);
                     semanticModelsByTree.TryAdd(
                         syntaxContext.SemanticModel.SyntaxTree,
                         syntaxContext.SemanticModel);
                 },
-                SyntaxKind.MethodDeclaration);
+                ExecutableSyntaxHelper.ExecutableRootKinds);
 
             compilationContext.RegisterCompilationEndAction(
                 endContext =>
                 {
-                    foreach (var method in methods)
+                    foreach (var executableRoot in executableRoots)
                     {
-                        if (!semanticModelsByTree.TryGetValue(method.SyntaxTree, out var semanticModel))
+                        if (!semanticModelsByTree.TryGetValue(executableRoot.SyntaxTree, out var semanticModel))
                         {
                             continue;
                         }
 
-                        AnalyzeMethod(endContext, method, semanticModel, wellKnownTypes, registrationCollector);
+                        AnalyzeExecutableRoot(
+                            endContext,
+                            executableRoot,
+                            semanticModel,
+                            wellKnownTypes,
+                            registrationCollector);
                     }
                 });
         });
     }
 
-    private static void AnalyzeMethod(
+    private static void AnalyzeExecutableRoot(
         CompilationAnalysisContext context,
-        MethodDeclarationSyntax method,
+        SyntaxNode executableRoot,
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
         RegistrationCollector registrationCollector)
     {
-        var scopeVariables = CollectScopeVariables(method, semanticModel, wellKnownTypes);
+        if (!ExecutableSyntaxHelper.TryGetExecutableBody(executableRoot, out var executableBody))
+        {
+            return;
+        }
+
+        var scopeVariables = CollectScopeVariables(executableBody, semanticModel, wellKnownTypes);
         if (scopeVariables.Count == 0)
         {
             return;
         }
 
-        var providerAliases = CollectScopeProviderAliases(method, semanticModel, scopeVariables);
+        var providerAliases = CollectScopeProviderAliases(executableBody, semanticModel, scopeVariables);
         var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         var reportedSpans = new HashSet<TextSpan>();
 
-        foreach (var node in method.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (node is not InvocationExpressionSyntax invocation ||
                 !TryGetResolutionLifetime(
@@ -147,7 +157,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        foreach (var node in method.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             TrackServiceAlias(node, semanticModel, serviceVariables);
 
@@ -180,13 +190,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     }
 
     private static HashSet<ILocalSymbol> CollectScopeVariables(
-        MethodDeclarationSyntax method,
+        SyntaxNode executableBody,
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes)
     {
         var scopeVariables = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
 
-        foreach (var node in method.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (node is LocalDeclarationStatementSyntax localDecl &&
                 (localDecl.UsingKeyword != default || localDecl.AwaitKeyword != default))
@@ -213,13 +223,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     }
 
     private static Dictionary<ILocalSymbol, ILocalSymbol> CollectScopeProviderAliases(
-        MethodDeclarationSyntax method,
+        SyntaxNode executableBody,
         SemanticModel semanticModel,
         HashSet<ILocalSymbol> scopeVariables)
     {
         var providerAliases = new Dictionary<ILocalSymbol, ILocalSymbol>(SymbolEqualityComparer.Default);
 
-        foreach (var node in method.DescendantNodes())
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (node is LocalDeclarationStatementSyntax localDeclaration)
             {

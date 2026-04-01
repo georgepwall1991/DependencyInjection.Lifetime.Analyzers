@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-04-01
+
+### Changed
+
+- **DI002 Executable-Root Coverage**: Scoped-service escape analysis now runs across constructors, accessors, local functions, lambdas, and anonymous methods instead of only ordinary methods, while still keeping escape tracking local to the current executable boundary.
+- **DI004 Executable-Root Coverage**: Use-after-dispose analysis now follows the same broader executable-root set, including constructor and accessor bodies plus local and anonymous functions, without speculating across nested executable boundaries.
+- **DI002/DI004 Regression Guardrails**: Added direct should-report and should-not-report coverage for constructor, property-getter, local-function, anonymous-method, and nested-boundary cases so the widened entry surface stays conservative.
+
 ## [2.4.1] - 2026-04-01
 
 ### Changed
