@@ -52,13 +52,21 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
             return;
         }
 
-        // Register "Add TODO comment" fix
-        context.RegisterCodeFix(
-            CodeAction.Create(
-                title: Resources.DI002_FixTitle_AddTodo,
-                createChangedDocument: c => AddTodoCommentAsync(context.Document, invocation, c),
-                equivalenceKey: AddTodoEquivalenceKey),
-            diagnostic);
+        // Register "Add TODO comment" fix (only if a TODO isn't already present)
+        var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
+        var hasTodo = containingStatement?.GetLeadingTrivia()
+            .Any(t => t.IsKind(SyntaxKind.SingleLineCommentTrivia) &&
+                      t.ToString().Contains("TODO: DI002")) ?? false;
+
+        if (!hasTodo)
+        {
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: Resources.DI002_FixTitle_AddTodo,
+                    createChangedDocument: c => AddTodoCommentAsync(context.Document, invocation, c),
+                    equivalenceKey: AddTodoEquivalenceKey),
+                diagnostic);
+        }
 
         // Register "Suppress with pragma" fix
         context.RegisterCodeFix(
