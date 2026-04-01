@@ -146,4 +146,156 @@ public class Program
 
         await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
     }
+
+    [Fact]
+    public async Task Fixes_Multiple_BuildServiceProvider_Calls()
+    {
+        var test = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        var services1 = new ServiceCollection();
+        var provider1 = services1.BuildServiceProvider();
+
+        var services2 = new ServiceCollection();
+        var provider2 = services2.BuildServiceProvider();
+    }
+}";
+
+        var fixtest = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        var services1 = new ServiceCollection();
+        using var provider1 = services1.BuildServiceProvider();
+
+        var services2 = new ServiceCollection();
+        using var provider2 = services2.BuildServiceProvider();
+    }
+}";
+
+        var expected = new[]
+        {
+            VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(9, 25),
+            VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(12, 25)
+        };
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
+
+    [Fact]
+    public async Task Fixes_Await_Using_In_Async_Method_With_BuildServiceProvider()
+    {
+        // DI014 fixer detects async method and uses await using
+        var test = @"
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task MainAsync()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        await Task.Delay(100);
+    }
+}";
+
+        var fixtest = @"
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task MainAsync()
+    {
+        var services = new ServiceCollection();
+        await using var provider = services.BuildServiceProvider();
+        await Task.Delay(100);
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(10, 24);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
+
+    [Fact]
+    public async Task Fixes_Using_In_Local_Function()
+    {
+        var test = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        void SetupServices()
+        {
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+        }
+    }
+}";
+
+        var fixtest = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        void SetupServices()
+        {
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+        }
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(11, 28);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
+
+    [Fact]
+    public async Task Fixes_Chained_BuildServiceProvider()
+    {
+        var test = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        var provider = new ServiceCollection().BuildServiceProvider();
+    }
+}";
+
+        var fixtest = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        using var provider = new ServiceCollection().BuildServiceProvider();
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(8, 24);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
 }
