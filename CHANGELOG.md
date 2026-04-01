@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-04-01
+
+### Changed
+
+- **Analyzer Health Guardrails**: Added full diagnostic inventory parity coverage for public IDs, severities, descriptors, and shipped/unshipped release tracking so new diagnostics cannot drift silently from test and release metadata.
+- **CI/Release Provenance Hardening**: CI now validates release tags against the project version, updates the coverage badge on the repository default branch, and publishes release-tag artifacts that the release workflow promotes directly to NuGet and GitHub Releases instead of rebuilding.
+- **Compatibility Smoke Coverage**: Added a focused DI-version smoke matrix around DI016, DI017, and DI018 plus reusable reference-assembly sets in the verifier so representative analyzer scenarios stay covered across supported package combinations.
+- **Code Fix Policy Cleanup**: DI016 remains diagnostic-only, and DI002 now offers only explicit pragma suppression instead of acknowledgement/TODO-style actions.
+
 ## [2.4.3] - 2026-04-01
 
 ### Changed

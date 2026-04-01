@@ -52,12 +52,6 @@ internal static class Resources
     // DI002: Scope Escape
 
     /// <summary>
-    /// Looks up a localized string: Add TODO comment
-    /// </summary>
-    internal static string DI002_FixTitle_AddTodo =>
-        ResourceManager.GetString("DI002_FixTitle_AddTodo", Culture) ?? "Add TODO comment";
-
-    /// <summary>
     /// Looks up a localized string: Suppress with #pragma
     /// </summary>
     internal static string DI002_FixTitle_Suppress =>
