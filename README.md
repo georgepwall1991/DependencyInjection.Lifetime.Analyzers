@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.5
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.6
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.5">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.6">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.5" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.6" />
 ```
 
 Then reference it from the project file:
