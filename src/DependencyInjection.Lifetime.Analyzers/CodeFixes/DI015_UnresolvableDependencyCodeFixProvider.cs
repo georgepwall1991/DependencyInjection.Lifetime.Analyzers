@@ -31,11 +31,15 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
         public RegistrationFixTarget(
             TextSpan invocationSpan,
             string missingDependencyTypeName,
-            ServiceLifetime lifetime)
+            ServiceLifetime lifetime,
+            bool isKeyed,
+            string? keyLiteral)
         {
             InvocationSpan = invocationSpan;
             MissingDependencyTypeName = missingDependencyTypeName;
             Lifetime = lifetime;
+            IsKeyed = isKeyed;
+            KeyLiteral = keyLiteral;
         }
 
         public TextSpan InvocationSpan { get; }
@@ -43,6 +47,10 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
         public string MissingDependencyTypeName { get; }
 
         public ServiceLifetime Lifetime { get; }
+
+        public bool IsKeyed { get; }
+
+        public string? KeyLiteral { get; }
     }
 
     /// <inheritdoc />
@@ -78,7 +86,13 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
         Diagnostic diagnostic,
         CancellationToken cancellationToken)
     {
-        if (!TryParseDiagnosticProperties(diagnostic, out var missingDependencyTypeName, out var lifetime))
+        if (!TryParseDiagnosticProperties(
+                diagnostic,
+                out var missingDependencyTypeName,
+                out var lifetime,
+                out var isKeyed,
+                out var keyLiteral,
+                out var sourceKind))
         {
             return null;
         }
@@ -91,22 +105,29 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
         }
 
         var node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
-        var invocation = node as InvocationExpressionSyntax ?? node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
-        if (!IsSafeRegistrationSite(invocation, semanticModel))
+        var invocation = FindRegistrationInvocation(node, sourceKind, semanticModel);
+        if (!IsSafeRegistrationSite(invocation, semanticModel) ||
+            (isKeyed && string.IsNullOrWhiteSpace(keyLiteral)))
         {
             return null;
         }
 
-        return new RegistrationFixTarget(invocation!.Span, missingDependencyTypeName, lifetime);
+        return new RegistrationFixTarget(invocation!.Span, missingDependencyTypeName, lifetime, isKeyed, keyLiteral);
     }
 
     private static bool TryParseDiagnosticProperties(
         Diagnostic diagnostic,
         out string missingDependencyTypeName,
-        out ServiceLifetime lifetime)
+        out ServiceLifetime lifetime,
+        out bool isKeyed,
+        out string? keyLiteral,
+        out DependencySourceKind sourceKind)
     {
         missingDependencyTypeName = string.Empty;
         lifetime = ServiceLifetime.Scoped;
+        isKeyed = false;
+        keyLiteral = null;
+        sourceKind = DependencySourceKind.ConstructorParameter;
 
         if (!diagnostic.Properties.TryGetValue(
                 DI015_UnresolvableDependencyAnalyzer.MissingDependencyTypeNamePropertyName,
@@ -130,8 +151,7 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
             !diagnostic.Properties.TryGetValue(
                 DI015_UnresolvableDependencyAnalyzer.MissingDependencyIsKeyedPropertyName,
                 out var isKeyedText) ||
-            !bool.TryParse(isKeyedText, out var isKeyed) ||
-            isKeyed ||
+            !bool.TryParse(isKeyedText, out isKeyed) ||
             !diagnostic.Properties.TryGetValue(
                 DI015_UnresolvableDependencyAnalyzer.RegistrationLifetimePropertyName,
                 out var lifetimeText) ||
@@ -139,14 +159,36 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
             !diagnostic.Properties.TryGetValue(
                 DI015_UnresolvableDependencyAnalyzer.DependencySourceKindPropertyName,
                 out var sourceKindText) ||
-            !Enum.TryParse(sourceKindText, out DependencySourceKind sourceKind) ||
-            sourceKind != DependencySourceKind.ConstructorParameter)
+            !Enum.TryParse(sourceKindText, out sourceKind) ||
+            sourceKind is not (
+                DependencySourceKind.ConstructorParameter or
+                DependencySourceKind.RequiredServiceCall))
         {
             return false;
         }
 
+        diagnostic.Properties.TryGetValue(
+            DI015_UnresolvableDependencyAnalyzer.MissingDependencyKeyLiteralPropertyName,
+            out keyLiteral);
         missingDependencyTypeName = typeName!;
         return true;
+    }
+
+    private static InvocationExpressionSyntax? FindRegistrationInvocation(
+        SyntaxNode node,
+        DependencySourceKind sourceKind,
+        SemanticModel semanticModel)
+    {
+        var invocation = node as InvocationExpressionSyntax ?? node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+        if (sourceKind == DependencySourceKind.ConstructorParameter)
+        {
+            return invocation;
+        }
+
+        return invocation?
+            .AncestorsAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault(candidate => IsSafeRegistrationSite(candidate, semanticModel));
     }
 
     private static bool IsSafeRegistrationSite(
@@ -212,9 +254,9 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
     {
         var methodName = fixTarget.Lifetime switch
         {
-            ServiceLifetime.Singleton => "AddSingleton",
-            ServiceLifetime.Transient => "AddTransient",
-            _ => "AddScoped"
+            ServiceLifetime.Singleton => fixTarget.IsKeyed ? "AddKeyedSingleton" : "AddSingleton",
+            ServiceLifetime.Transient => fixTarget.IsKeyed ? "AddKeyedTransient" : "AddTransient",
+            _ => fixTarget.IsKeyed ? "AddKeyedScoped" : "AddScoped"
         };
 
         var typeSyntax = SyntaxFactory.ParseTypeName(fixTarget.MissingDependencyTypeName)
@@ -227,7 +269,12 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
                     SyntaxFactory.Identifier(methodName),
                     SyntaxFactory.TypeArgumentList(
                         SyntaxFactory.SingletonSeparatedList(typeSyntax)))),
-            SyntaxFactory.ArgumentList());
+            fixTarget.IsKeyed
+                ? SyntaxFactory.ArgumentList(
+                    SyntaxFactory.SingletonSeparatedList(
+                        SyntaxFactory.Argument(
+                            SyntaxFactory.ParseExpression(fixTarget.KeyLiteral!))))
+                : SyntaxFactory.ArgumentList());
 
         return SyntaxFactory.ExpressionStatement(invocation)
             .WithAdditionalAnnotations(Formatter.Annotation);

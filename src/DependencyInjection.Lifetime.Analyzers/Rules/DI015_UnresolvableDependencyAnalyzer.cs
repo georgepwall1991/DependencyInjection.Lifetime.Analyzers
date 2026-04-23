@@ -26,6 +26,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
     internal const string MissingDependencyPathLengthPropertyName = "MissingDependencyPathLength";
     internal const string MissingDependencyCountPropertyName = "MissingDependencyCount";
     internal const string MissingDependencyIsKeyedPropertyName = "MissingDependencyIsKeyed";
+    internal const string MissingDependencyKeyLiteralPropertyName = "MissingDependencyKeyLiteral";
     internal const string RegistrationLifetimePropertyName = "RegistrationLifetime";
     internal const string DependencySourceKindPropertyName = "DependencySourceKind";
 
@@ -114,14 +115,23 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         var fallbackOpaquePredecessors = BuildEarlierPotentialWrapperLookup(
             observationsByTree,
             allRegistrationLocations);
+        var definitelyRemovedRegistrations = BuildDefinitelyRemovedRegistrationLookup(
+            registrationCollector.AllRegistrations,
+            registrationCollector.OrderedMutations);
         var resolutionEngine = new DependencyResolutionEngine(
             registrationCollector,
             wellKnownTypes,
-            registration => reachabilityAnalyzer.IsReachable(registration.Location));
+            registration => reachabilityAnalyzer.IsReachable(registration.Location) &&
+                            !IsDefinitelyRemoved(registration, definitelyRemovedRegistrations));
 
         foreach (var registration in registrationCollector.AllRegistrations)
         {
             if (!reachabilityAnalyzer.IsReachable(registration.Location))
+            {
+                continue;
+            }
+
+            if (IsDefinitelyRemoved(registration, definitelyRemovedRegistrations))
             {
                 continue;
             }
@@ -183,7 +193,10 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         var requests = FactoryDependencyAnalysis.GetDependencyRequests(
             registration.FactoryExpression,
             semanticModel,
-            wellKnownTypes);
+            wellKnownTypes,
+            registration.IsKeyed ? registration.Key : null,
+            registration.IsKeyed,
+            registration.IsKeyed ? registration.KeyLiteral : null);
 
         foreach (var request in requests)
         {
@@ -244,6 +257,7 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
                 .Add(
                     MissingDependencyIsKeyedPropertyName,
                     missingDependency.IsKeyed.ToString(CultureInfo.InvariantCulture))
+                .Add(MissingDependencyKeyLiteralPropertyName, missingDependency.KeyLiteral)
                 .Add(RegistrationLifetimePropertyName, registrationLifetime.ToString())
                 .Add(DependencySourceKindPropertyName, sourceKind.ToString());
 
@@ -327,6 +341,125 @@ public sealed class DI015_UnresolvableDependencyAnalyzer : DiagnosticAnalyzer
         var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(registrationLocation);
         return reachabilityAnalyzer.HasOpaquePredecessor(registrationLocation) ||
                (locationKey.HasValue && fallbackOpaquePredecessors.Contains(locationKey.Value));
+    }
+
+    private static HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> BuildDefinitelyRemovedRegistrationLookup(
+        IEnumerable<ServiceRegistration> registrations,
+        IEnumerable<OrderedRegistrationMutation> mutations)
+    {
+        var removedRegistrations = new HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey>();
+        var registrationsByTree = registrations
+            .Where(static registration => registration.FlowKey is not null &&
+                                          registration.Location.SourceTree is not null)
+            .GroupBy(static registration => registration.Location.SourceTree!)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderBy(static registration => registration.Location.SourceSpan.Start).ToArray());
+        var mutationsByTree = mutations
+            .Where(static mutation => mutation.FlowKey is not null &&
+                                      mutation.Location.SourceTree is not null)
+            .GroupBy(static mutation => mutation.Location.SourceTree!)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderBy(static mutation => mutation.Location.SourceSpan.Start).ToArray());
+
+        foreach (var tree in registrationsByTree.Keys.Union(mutationsByTree.Keys))
+        {
+            registrationsByTree.TryGetValue(tree, out var orderedRegistrations);
+            mutationsByTree.TryGetValue(tree, out var orderedMutations);
+            orderedRegistrations ??= [];
+            orderedMutations ??= [];
+
+            var activeRegistrations = new List<ServiceRegistration>();
+            var registrationIndex = 0;
+            var mutationIndex = 0;
+
+            while (registrationIndex < orderedRegistrations.Length ||
+                   mutationIndex < orderedMutations.Length)
+            {
+                var nextRegistrationStart = registrationIndex < orderedRegistrations.Length
+                    ? orderedRegistrations[registrationIndex].Location.SourceSpan.Start
+                    : int.MaxValue;
+                var nextMutationStart = mutationIndex < orderedMutations.Length
+                    ? orderedMutations[mutationIndex].Location.SourceSpan.Start
+                    : int.MaxValue;
+
+                if (nextRegistrationStart < nextMutationStart)
+                {
+                    activeRegistrations.Add(orderedRegistrations[registrationIndex]);
+                    registrationIndex++;
+                    continue;
+                }
+
+                ApplyMutation(
+                    orderedMutations[mutationIndex],
+                    activeRegistrations,
+                    removedRegistrations);
+                mutationIndex++;
+            }
+        }
+
+        return removedRegistrations;
+    }
+
+    private static void ApplyMutation(
+        OrderedRegistrationMutation mutation,
+        List<ServiceRegistration> activeRegistrations,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> removedRegistrations)
+    {
+        if (mutation.Kind == RegistrationMutationKind.RemoveAll)
+        {
+            for (var i = activeRegistrations.Count - 1; i >= 0; i--)
+            {
+                if (!CanMutationRemoveRegistration(mutation, activeRegistrations[i]))
+                {
+                    continue;
+                }
+
+                AddRemovedRegistration(activeRegistrations[i], removedRegistrations);
+                activeRegistrations.RemoveAt(i);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < activeRegistrations.Count; i++)
+        {
+            if (!CanMutationRemoveRegistration(mutation, activeRegistrations[i]))
+            {
+                continue;
+            }
+
+            AddRemovedRegistration(activeRegistrations[i], removedRegistrations);
+            activeRegistrations.RemoveAt(i);
+            return;
+        }
+    }
+
+    private static bool CanMutationRemoveRegistration(
+        OrderedRegistrationMutation mutation,
+        ServiceRegistration registration) =>
+        string.Equals(mutation.FlowKey, registration.FlowKey, StringComparison.Ordinal) &&
+        SymbolEqualityComparer.Default.Equals(mutation.ServiceType, registration.ServiceType);
+
+    private static void AddRemovedRegistration(
+        ServiceRegistration registration,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> removedRegistrations)
+    {
+        var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(registration.Location);
+        if (locationKey.HasValue)
+        {
+            removedRegistrations.Add(locationKey.Value);
+        }
+    }
+
+    private static bool IsDefinitelyRemoved(
+        ServiceRegistration registration,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> definitelyRemovedRegistrations)
+    {
+        var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(registration.Location);
+        return locationKey.HasValue &&
+               definitelyRemovedRegistrations.Contains(locationKey.Value);
     }
 
     // Source-defined wrappers are handled by ServiceCollectionReachabilityAnalyzer.

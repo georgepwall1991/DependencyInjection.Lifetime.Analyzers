@@ -11,6 +11,7 @@ internal sealed class DependencyRequest
         ITypeSymbol type,
         object? key,
         bool isKeyed,
+        string? keyLiteral,
         DependencySourceKind sourceKind,
         Location sourceLocation,
         string provenanceStep)
@@ -18,6 +19,7 @@ internal sealed class DependencyRequest
         Type = type;
         Key = key;
         IsKeyed = isKeyed;
+        KeyLiteral = keyLiteral;
         SourceKind = sourceKind;
         SourceLocation = sourceLocation;
         ProvenanceStep = provenanceStep;
@@ -37,6 +39,11 @@ internal sealed class DependencyRequest
     /// Gets whether the dependency is keyed.
     /// </summary>
     public bool IsKeyed { get; }
+
+    /// <summary>
+    /// Gets a C# literal for the key when it can be safely round-tripped into code.
+    /// </summary>
+    public string? KeyLiteral { get; }
 
     /// <summary>
     /// Gets how the dependency was discovered.

@@ -17,6 +17,7 @@ public sealed class RegistrationCollector
     private readonly ConcurrentDictionary<ServiceIdentifier, ServiceRegistration> _registrations;
     private readonly ConcurrentBag<ServiceRegistration> _allRegistrations;
     private readonly ConcurrentBag<OrderedRegistration> _orderedRegistrations;
+    private readonly ConcurrentBag<OrderedRegistrationMutation> _orderedMutations;
     private readonly INamedTypeSymbol? _serviceCollectionType;
     private readonly INamedTypeSymbol? _serviceCollectionServiceExtensionsType;
     private readonly INamedTypeSymbol? _serviceCollectionDescriptorExtensionsType;
@@ -36,6 +37,7 @@ public sealed class RegistrationCollector
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
         _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
+        _orderedMutations = new ConcurrentBag<OrderedRegistrationMutation>();
         _registrationOrder = 0;
     }
 
@@ -115,6 +117,11 @@ public sealed class RegistrationCollector
     /// Gets all ordered registrations for analyzing registration order.
     /// </summary>
     public IEnumerable<OrderedRegistration> OrderedRegistrations => _orderedRegistrations;
+
+    /// <summary>
+    /// Gets source-ordered IServiceCollection mutations that remove earlier registrations.
+    /// </summary>
+    public IEnumerable<OrderedRegistrationMutation> OrderedMutations => _orderedMutations;
 
     /// <summary>
     /// Gets all collected Add* registrations (including duplicates) that include implementation metadata.
@@ -197,6 +204,15 @@ public sealed class RegistrationCollector
         var methodName = methodSymbol.Name;
         var isTryAdd = IsTryAddMethod(methodName);
 
+        if (TryAnalyzeRegistrationMutation(
+                invocation,
+                semanticModel,
+                methodSymbol,
+                methodName))
+        {
+            return;
+        }
+
         // Parse the lifetime from method name
         var lifetime = GetLifetimeFromMethodName(methodName);
 
@@ -256,6 +272,9 @@ public sealed class RegistrationCollector
                 return;
             }
 
+            var keyLiteral = SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var formattedKey)
+                ? formattedKey
+                : null;
             var registration = new ServiceRegistration(
                 serviceType,
                 implementationType,
@@ -264,7 +283,10 @@ public sealed class RegistrationCollector
                 key,
                 isKeyed,
                 lifetime.Value,
-                invocation.GetLocation());
+                invocation.GetLocation(),
+                keyLiteral,
+                flowKey,
+                order);
 
             _allRegistrations.Add(registration);
 
@@ -392,6 +414,74 @@ public sealed class RegistrationCollector
     private static bool IsTryAddMethod(string methodName)
     {
         return methodName.StartsWith("TryAdd");
+    }
+
+    private bool TryAnalyzeRegistrationMutation(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        IMethodSymbol methodSymbol,
+        string methodName)
+    {
+        INamedTypeSymbol? serviceType = null;
+        object? key = null;
+        bool isKeyed = false;
+        RegistrationMutationKind kind;
+
+        if (methodName == "RemoveAll")
+        {
+            kind = RegistrationMutationKind.RemoveAll;
+            serviceType = ExtractRemoveAllServiceType(methodSymbol, invocation, semanticModel);
+        }
+        else if (methodName == "Replace")
+        {
+            kind = RegistrationMutationKind.Replace;
+            (serviceType, _, _, _, _, key, isKeyed) =
+                ExtractFromServiceDescriptor(invocation, semanticModel);
+        }
+        else
+        {
+            return false;
+        }
+
+        if (serviceType is null)
+        {
+            return false;
+        }
+
+        var order = Interlocked.Increment(ref _registrationOrder);
+        var flowKey = ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(invocation, semanticModel);
+        _orderedMutations.Add(
+            new OrderedRegistrationMutation(
+                serviceType,
+                key,
+                isKeyed,
+                invocation.GetLocation(),
+                flowKey,
+                order,
+                kind));
+
+        return true;
+    }
+
+    private static INamedTypeSymbol? ExtractRemoveAllServiceType(
+        IMethodSymbol method,
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        if (method.IsGenericMethod && method.TypeArguments.Length > 0)
+        {
+            return method.TypeArguments[0] as INamedTypeSymbol;
+        }
+
+        var typeExpression =
+            invocation.ArgumentList.Arguments
+                .Select(argument => argument.Expression)
+                .OfType<TypeOfExpressionSyntax>()
+                .FirstOrDefault();
+
+        return typeExpression is null
+            ? null
+            : semanticModel.GetTypeInfo(typeExpression.Type).Type as INamedTypeSymbol;
     }
 
     private (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, bool hasImplementationInstance, ServiceLifetime? lifetime, object? key, bool isKeyed) ExtractFromServiceDescriptor(
@@ -630,7 +720,7 @@ public sealed class RegistrationCollector
     }
 
     private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
-        SyntaxValueHelpers.TryExtractConstantValue(expr, semanticModel, out var value) ? value : null;
+        SyntaxValueHelpers.TryExtractServiceKeyValue(expr, semanticModel, out var value, out _) ? value : null;
 
     private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, bool hasImplementationInstance, object? key) ExtractTypes(
         IMethodSymbol method,

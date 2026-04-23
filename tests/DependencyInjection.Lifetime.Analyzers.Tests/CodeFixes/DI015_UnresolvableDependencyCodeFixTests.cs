@@ -16,6 +16,26 @@ public class DI015_UnresolvableDependencyCodeFixTests
 
         """;
 
+    private const string KeyedUsings = Usings + """
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class FromKeyedServicesAttribute : Attribute
+            {
+                public FromKeyedServicesAttribute(object? key) { }
+            }
+
+            public static class ServiceCollectionServiceExtensions
+            {
+                public static IServiceCollection AddKeyedSingleton<TService>(this IServiceCollection services, object? serviceKey)
+                    where TService : class => services;
+
+                public static T GetRequiredKeyedService<T>(this IServiceProvider provider, object? serviceKey) => default!;
+            }
+        }
+
+        """;
+
     [Fact]
     public async Task CodeFix_AddsMissingSelfBinding_ForDirectConstructorDependency()
     {
@@ -115,15 +135,15 @@ public class DI015_UnresolvableDependencyCodeFixTests
     }
 
     [Fact]
-    public async Task CodeFix_NotOffered_ForFactoryAnchoredDependency()
+    public async Task CodeFix_NotOffered_ForFactoryInterfaceDependency()
     {
         var source = Usings + """
-            public sealed class MissingDependency { }
+            public interface IMissingDependency { }
 
             public interface IMyService { }
             public sealed class MyService : IMyService
             {
-                public MyService(MissingDependency dependency) { }
+                public MyService(IMissingDependency dependency) { }
             }
 
             public sealed class Startup
@@ -131,7 +151,7 @@ public class DI015_UnresolvableDependencyCodeFixTests
                 public void ConfigureServices(IServiceCollection services)
                 {
                     services.AddScoped<IMyService>(
-                        sp => new MyService(sp.GetRequiredService<MissingDependency>()));
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>()));
                 }
             }
             """;
@@ -139,7 +159,7 @@ public class DI015_UnresolvableDependencyCodeFixTests
         var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
             .WithLocation(16, 33)
-            .WithArguments("IMyService", "MissingDependency");
+            .WithArguments("IMyService", "IMissingDependency");
 
         await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
@@ -217,12 +237,12 @@ public class DI015_UnresolvableDependencyCodeFixTests
                 }
             }
 
-            public sealed class MissingDependency { }
+            public interface IMissingDependency { }
 
             public interface IMyService { }
             public sealed class MyService : IMyService
             {
-                public MyService([FromKeyedServices("blue")] MissingDependency dependency) { }
+                public MyService([FromKeyedServices("blue")] IMissingDependency dependency) { }
             }
 
             public sealed class Startup
@@ -236,7 +256,7 @@ public class DI015_UnresolvableDependencyCodeFixTests
 
         var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
-            .WithArguments("IMyService", "MissingDependency (key: blue)");
+            .WithArguments("IMyService", "IMissingDependency (key: blue)");
 
         await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
@@ -370,5 +390,105 @@ public class DI015_UnresolvableDependencyCodeFixTests
 
         await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsKeyedMissingSelfBinding_ForDirectKeyedConstructorDependency()
+    {
+        var source = KeyedUsings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService([FromKeyedServices("blue")] MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = KeyedUsings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService([FromKeyedServices("blue")] MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedSingleton<global::MissingDependency>(@"blue");
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithLocation(31, 9)
+            .WithArguments("IMyService", "MissingDependency (key: blue)");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsMissingSelfBinding_ForDirectFactoryRequiredServiceDependency()
+    {
+        var source = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService>(
+                        sp => new MyService(sp.GetRequiredService<MissingDependency>()));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<global::MissingDependency>();
+                    services.AddScoped<IMyService>(
+                        sp => new MyService(sp.GetRequiredService<MissingDependency>()));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithLocation(16, 33)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
     }
 }

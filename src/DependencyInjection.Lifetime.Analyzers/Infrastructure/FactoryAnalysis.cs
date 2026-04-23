@@ -60,7 +60,7 @@ internal static class FactoryAnalysis
         }
 
         var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
-        if (sourceMethod.Name != "CreateInstance" ||
+        if (sourceMethod.Name is not ("CreateInstance" or "GetServiceOrCreateInstance") ||
             sourceMethod.ContainingType?.Name != "ActivatorUtilities" ||
             sourceMethod.ContainingNamespace.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
         {

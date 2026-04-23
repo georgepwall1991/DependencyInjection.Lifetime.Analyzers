@@ -562,7 +562,7 @@ services.AddScoped<IMissingDependency, MissingDependency>();
 services.AddSingleton<IMyService, MyService>();
 ```
 
-**Code Fix:** No.
+**Code Fix:** Yes. Adds a missing self-binding registration when DI015 can prove a single direct concrete dependency is safe to register. Supports local constructor diagnostics, direct `GetRequiredService<TConcrete>()` factory diagnostics, and keyed self-bindings when the key can be emitted as a C# literal.
 
 ### DI015 strict mode
 
@@ -577,6 +577,10 @@ dotnet_code_quality.DI015.assume_framework_services_registered = false
 DI015 is intentionally conservative to keep false positives low:
 
 - Source-visible `IServiceCollection` wrappers are expanded before DI015 reports missing registrations.
+- `[ServiceKey]` parameters and `IEnumerable<T>` are treated as container-provided.
+- Parameterless `[FromKeyedServices]` inherits the containing keyed registration key when that key is known.
+- `KeyedService.AnyKey` keyed registrations satisfy exact keyed dependency requests.
+- Definite same-flow `RemoveAll(...)` and `Replace(...)` mutations suppress diagnostics for registrations they remove.
 - Dependency cycles are treated as resolvable.
 - Factory registrations without inspectable dependency paths are treated as resolvable.
 - `GetService(...)` and dynamic keyed resolutions are treated as optional/unknown.

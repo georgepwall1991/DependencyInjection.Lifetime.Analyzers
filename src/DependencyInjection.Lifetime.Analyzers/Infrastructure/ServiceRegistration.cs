@@ -34,6 +34,11 @@ public sealed class ServiceRegistration
     public object? Key { get; }
 
     /// <summary>
+    /// Gets a C# literal for the key when it can be safely round-tripped into code.
+    /// </summary>
+    public string? KeyLiteral { get; }
+
+    /// <summary>
     /// Gets whether this registration is keyed.
     /// </summary>
     public bool IsKeyed { get; }
@@ -49,6 +54,16 @@ public sealed class ServiceRegistration
     public Location Location { get; }
 
     /// <summary>
+    /// Gets the analyzed service-collection flow key for this registration.
+    /// </summary>
+    public string? FlowKey { get; }
+
+    /// <summary>
+    /// Gets the order in which this registration was encountered.
+    /// </summary>
+    public int Order { get; }
+
+    /// <summary>
     /// Creates a new service registration.
     /// </summary>
     public ServiceRegistration(
@@ -59,15 +74,21 @@ public sealed class ServiceRegistration
         object? key,
         bool isKeyed,
         ServiceLifetime lifetime,
-        Location location)
+        Location location,
+        string? keyLiteral = null,
+        string? flowKey = null,
+        int order = 0)
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
         FactoryExpression = factoryExpression;
         HasImplementationInstance = hasImplementationInstance;
         Key = key;
+        KeyLiteral = keyLiteral;
         IsKeyed = isKeyed;
         Lifetime = lifetime;
         Location = location;
+        FlowKey = flowKey;
+        Order = order;
     }
 }

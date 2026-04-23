@@ -135,9 +135,9 @@ Concrete lifetime rule with coverage across `using`, explicit dispose, fields, p
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 54 | **Fixer: 8/10** | Fix Tests: 10
+**Analyzer: 9.5/10** | Tests: 62 | **Fixer: 8.8/10** | Fix Tests: 12
 
-Second most comprehensive test file. Broad support for keyed, factory, wrapper, open-generic, strict-mode, and implementation-instance scenarios. Full dependency resolution engine with reachability tracking. Fixer adds missing service registrations with solid coverage.
+One of the strongest overall rules. Broad support for keyed, inherited-key, `AnyKey`, factory, wrapper, open-generic, strict-mode, implementation-instance, and definite registration-mutation scenarios. Full dependency resolution engine with reachability tracking. Fixer adds safe unkeyed and keyed concrete self-bindings, including direct factory-rooted cases.
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
@@ -171,7 +171,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | DI012 (Ignored TryAdd) | 4 | 8 | Low -- narrow standalone-statement removal |
 | DI013 (Implementation Mismatch) | 8 | 8 | Medium -- broad assists are symbol-backed, FixAll disabled |
 | DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
-| DI015 (Unresolvable Dependency) | 10 | 8 | Low -- solid registration generation |
+| DI015 (Unresolvable Dependency) | 12 | 8.8 | Low -- keyed and factory self-binding generation is still tightly gated |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 

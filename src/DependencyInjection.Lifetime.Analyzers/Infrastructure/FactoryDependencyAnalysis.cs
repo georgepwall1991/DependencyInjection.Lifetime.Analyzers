@@ -14,13 +14,22 @@ internal static class FactoryDependencyAnalysis
     public static ImmutableArray<DependencyRequest> GetDependencyRequests(
         ExpressionSyntax factoryExpression,
         SemanticModel semanticModel,
-        WellKnownTypes? wellKnownTypes)
+        WellKnownTypes? wellKnownTypes,
+        object? inheritedKey = null,
+        bool hasInheritedKey = false,
+        string? inheritedKeyLiteral = null)
     {
         var requests = ImmutableArray.CreateBuilder<DependencyRequest>();
+        var keyContext = CreateFactoryKeyContext(
+            factoryExpression,
+            semanticModel,
+            inheritedKey,
+            hasInheritedKey,
+            inheritedKeyLiteral);
 
         foreach (var invocation in FactoryAnalysis.GetFactoryInvocations(factoryExpression, semanticModel))
         {
-            if (TryCreateRequiredServiceRequest(invocation, semanticModel, wellKnownTypes, out var request) ||
+            if (TryCreateRequiredServiceRequest(invocation, semanticModel, wellKnownTypes, keyContext, out var request) ||
                 TryCreateActivatorUtilitiesRequest(invocation, semanticModel, out request))
             {
                 requests.Add(request);
@@ -34,22 +43,25 @@ internal static class FactoryDependencyAnalysis
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         WellKnownTypes? wellKnownTypes,
+        FactoryKeyContext keyContext,
         out DependencyRequest request)
     {
         request = null!;
 
         if (semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation &&
-            TryCreateRequiredServiceRequestFromOperation(invocationOperation, wellKnownTypes, out request))
+            TryCreateRequiredServiceRequestFromOperation(invocationOperation, semanticModel, wellKnownTypes, keyContext, out request))
         {
             return true;
         }
 
-        return TryCreateRequiredServiceRequestFromSyntax(invocation, semanticModel, wellKnownTypes, out request);
+        return TryCreateRequiredServiceRequestFromSyntax(invocation, semanticModel, wellKnownTypes, keyContext, out request);
     }
 
     private static bool TryCreateRequiredServiceRequestFromOperation(
         IInvocationOperation invocationOperation,
+        SemanticModel semanticModel,
         WellKnownTypes? wellKnownTypes,
+        FactoryKeyContext keyContext,
         out DependencyRequest request)
     {
         request = null!;
@@ -63,7 +75,10 @@ internal static class FactoryDependencyAnalysis
 
         var isKeyed = IsKeyedRequiredResolutionMethod(targetMethod);
         object? key = null;
-        if (isKeyed && !TryGetConstantArgumentValue(invocationOperation, "serviceKey", "key", out key))
+        string? keyLiteral = null;
+        if (isKeyed &&
+            (!TryGetArgumentKeyValue(invocationOperation, semanticModel, keyContext, out key, out keyLiteral) ||
+             SyntaxValueHelpers.IsKeyedServiceAnyKey(key)))
         {
             return false;
         }
@@ -72,6 +87,7 @@ internal static class FactoryDependencyAnalysis
             dependencyType,
             key,
             isKeyed,
+            keyLiteral,
             DependencySourceKind.RequiredServiceCall,
             invocationOperation.Syntax.GetLocation(),
             DependencyResolutionEngine.FormatDependencyName(dependencyType, key, isKeyed));
@@ -82,6 +98,7 @@ internal static class FactoryDependencyAnalysis
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         WellKnownTypes? wellKnownTypes,
+        FactoryKeyContext keyContext,
         out DependencyRequest request)
     {
         request = null!;
@@ -95,7 +112,10 @@ internal static class FactoryDependencyAnalysis
 
         var isKeyed = IsKeyedRequiredResolutionMethod(methodSymbol);
         object? key = null;
-        if (isKeyed && !TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, out key))
+        string? keyLiteral = null;
+        if (isKeyed &&
+            (!TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, keyContext, out key, out keyLiteral) ||
+             SyntaxValueHelpers.IsKeyedServiceAnyKey(key)))
         {
             return false;
         }
@@ -104,6 +124,7 @@ internal static class FactoryDependencyAnalysis
             dependencyType,
             key,
             isKeyed,
+            keyLiteral,
             DependencySourceKind.RequiredServiceCall,
             invocation.GetLocation(),
             DependencyResolutionEngine.FormatDependencyName(dependencyType, key, isKeyed));
@@ -131,6 +152,7 @@ internal static class FactoryDependencyAnalysis
             implementationType,
             key: null,
             isKeyed: false,
+            keyLiteral: null,
             DependencySourceKind.ActivatorUtilitiesConstruction,
             invocation.GetLocation(),
             implementationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
@@ -264,9 +286,12 @@ internal static class FactoryDependencyAnalysis
         InvocationExpressionSyntax invocation,
         IMethodSymbol methodSymbol,
         SemanticModel semanticModel,
-        out object? key)
+        FactoryKeyContext keyContext,
+        out object? key,
+        out string? keyLiteral)
     {
         key = null;
+        keyLiteral = null;
 
         var keyExpression =
             GetInvocationArgumentExpression(invocation, methodSymbol, "serviceKey") ??
@@ -282,7 +307,12 @@ internal static class FactoryDependencyAnalysis
             return false;
         }
 
-        if (!SyntaxValueHelpers.TryExtractConstantValue(keyExpression, semanticModel, out key))
+        if (TryGetInheritedFactoryKey(keyExpression, semanticModel, keyContext, out key, out keyLiteral))
+        {
+            return true;
+        }
+
+        if (!SyntaxValueHelpers.TryExtractServiceKeyValue(keyExpression, semanticModel, out key, out keyLiteral))
         {
             return false;
         }
@@ -290,21 +320,35 @@ internal static class FactoryDependencyAnalysis
         return true;
     }
 
-    private static bool TryGetConstantArgumentValue(
+    private static bool TryGetArgumentKeyValue(
         IInvocationOperation invocationOperation,
-        string firstParameterName,
-        string secondParameterName,
-        out object? value)
+        SemanticModel semanticModel,
+        FactoryKeyContext keyContext,
+        out object? value,
+        out string? literal)
     {
         value = null;
+        literal = null;
 
         foreach (var argument in invocationOperation.Arguments)
         {
             var parameterName = argument.Parameter?.Name;
-            if (parameterName != firstParameterName &&
-                parameterName != secondParameterName)
+            if (parameterName != "serviceKey" &&
+                parameterName != "key")
             {
                 continue;
+            }
+
+            if (argument.Value.Syntax is ExpressionSyntax expression &&
+                TryGetInheritedFactoryKey(expression, semanticModel, keyContext, out value, out literal))
+            {
+                return true;
+            }
+
+            if (argument.Value.Syntax is ExpressionSyntax keyExpression &&
+                SyntaxValueHelpers.TryExtractServiceKeyValue(keyExpression, semanticModel, out value, out literal))
+            {
+                return true;
             }
 
             if (!argument.Value.ConstantValue.HasValue)
@@ -313,9 +357,121 @@ internal static class FactoryDependencyAnalysis
             }
 
             value = argument.Value.ConstantValue.Value;
+            literal = SyntaxValueHelpers.TryFormatCSharpLiteral(value, out var formatted)
+                ? formatted
+                : null;
             return true;
         }
 
+        return false;
+    }
+
+    private static FactoryKeyContext CreateFactoryKeyContext(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        object? inheritedKey,
+        bool hasInheritedKey,
+        string? inheritedKeyLiteral)
+    {
+        if (!hasInheritedKey || SyntaxValueHelpers.IsKeyedServiceAnyKey(inheritedKey))
+        {
+            return FactoryKeyContext.None;
+        }
+
+        if (!TryGetFactoryKeyParameter(factoryExpression, semanticModel, out var keyParameter))
+        {
+            return FactoryKeyContext.None;
+        }
+
+        return new FactoryKeyContext(
+            keyParameter,
+            inheritedKey,
+            inheritedKeyLiteral);
+    }
+
+    private static bool TryGetInheritedFactoryKey(
+        ExpressionSyntax keyExpression,
+        SemanticModel semanticModel,
+        FactoryKeyContext keyContext,
+        out object? key,
+        out string? keyLiteral)
+    {
+        key = null;
+        keyLiteral = null;
+
+        if (keyContext.KeyParameter is null)
+        {
+            return false;
+        }
+
+        if (semanticModel.GetSymbolInfo(keyExpression).Symbol is not IParameterSymbol parameterSymbol ||
+            !SymbolEqualityComparer.Default.Equals(parameterSymbol, keyContext.KeyParameter))
+        {
+            return false;
+        }
+
+        key = keyContext.InheritedKey;
+        keyLiteral = keyContext.InheritedKeyLiteral;
+        return true;
+    }
+
+    private static bool TryGetFactoryKeyParameter(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        out IParameterSymbol keyParameter)
+    {
+        keyParameter = null!;
+
+        while (factoryExpression is ParenthesizedExpressionSyntax parenthesizedExpression)
+        {
+            factoryExpression = parenthesizedExpression.Expression;
+        }
+
+        switch (factoryExpression)
+        {
+            case ParenthesizedLambdaExpressionSyntax parenthesizedLambda
+                when parenthesizedLambda.ParameterList.Parameters.Count >= 2:
+                return TryGetParameterSymbol(
+                    parenthesizedLambda.ParameterList.Parameters[1],
+                    semanticModel,
+                    out keyParameter);
+
+            case AnonymousMethodExpressionSyntax anonymousMethod
+                when anonymousMethod.ParameterList?.Parameters.Count >= 2:
+                return TryGetParameterSymbol(
+                    anonymousMethod.ParameterList.Parameters[1],
+                    semanticModel,
+                    out keyParameter);
+
+            case IdentifierNameSyntax or MemberAccessExpressionSyntax:
+                var symbolInfo = semanticModel.GetSymbolInfo(factoryExpression);
+                var methodSymbol = symbolInfo.Symbol as IMethodSymbol ??
+                                   symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+                if (methodSymbol?.Parameters.Length >= 2)
+                {
+                    keyParameter = methodSymbol.Parameters[1];
+                    return true;
+                }
+
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryGetParameterSymbol(
+        ParameterSyntax parameterSyntax,
+        SemanticModel semanticModel,
+        out IParameterSymbol parameterSymbol)
+    {
+        if (semanticModel.GetDeclaredSymbol(parameterSyntax) is IParameterSymbol symbol)
+        {
+            parameterSymbol = symbol;
+            return true;
+        }
+
+        parameterSymbol = null!;
         return false;
     }
 
@@ -350,5 +506,29 @@ internal static class FactoryDependencyAnalysis
         }
 
         return null;
+    }
+
+    private sealed class FactoryKeyContext
+    {
+        public static readonly FactoryKeyContext None = new FactoryKeyContext(
+            keyParameter: null,
+            inheritedKey: null,
+            inheritedKeyLiteral: null);
+
+        public FactoryKeyContext(
+            IParameterSymbol? keyParameter,
+            object? inheritedKey,
+            string? inheritedKeyLiteral)
+        {
+            KeyParameter = keyParameter;
+            InheritedKey = inheritedKey;
+            InheritedKeyLiteral = inheritedKeyLiteral;
+        }
+
+        public IParameterSymbol? KeyParameter { get; }
+
+        public object? InheritedKey { get; }
+
+        public string? InheritedKeyLiteral { get; }
     }
 }

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-04-23
+
+### Changed
+
+- **DI015 Keyed Resolution Hardening**: Unresolvable-dependency analysis now supports inherited keyed constructor dependencies, treats `[ServiceKey]` parameters as container-provided, and recognizes `KeyedService.AnyKey` fallback registrations while continuing to suppress dynamic or uncertain keyed lookups.
+- **DI015 Factory Coverage**: Factory analysis now covers `ActivatorUtilities.GetServiceOrCreateInstance(...)` and keyed factory key-parameter flows for high-confidence `GetRequiredKeyedService<T>(key)` requests.
+- **DI015 Registration Mutation Precision**: Same-flow `RemoveAll(...)` and `Replace(...)` mutations now suppress diagnostics for registrations they definitely remove, reducing false positives in override-heavy registration modules.
+- **DI015 Code Fixes and Docs**: The code fix can now add keyed concrete self-bindings and direct factory missing-dependency self-bindings when the registration site is local and safe. DI015 docs, samples, and regression coverage were refreshed around the expanded behavior.
+
 ## [2.5.2] - 2026-04-23
 
 ### Changed

@@ -12,11 +12,13 @@ internal sealed class MissingDependency
         ITypeSymbol type,
         object? key,
         bool isKeyed,
+        string? keyLiteral,
         ImmutableArray<string> provenancePath)
     {
         Type = type;
         Key = key;
         IsKeyed = isKeyed;
+        KeyLiteral = keyLiteral;
         ProvenancePath = provenancePath;
     }
 
@@ -34,6 +36,11 @@ internal sealed class MissingDependency
     /// Gets whether the missing dependency is keyed.
     /// </summary>
     public bool IsKeyed { get; }
+
+    /// <summary>
+    /// Gets a C# literal for the key when it can be safely round-tripped into code.
+    /// </summary>
+    public string? KeyLiteral { get; }
 
     /// <summary>
     /// Gets the provenance path that led to the missing dependency.
@@ -55,6 +62,7 @@ internal sealed class MissingDependency
             Type,
             Key,
             IsKeyed,
+            KeyLiteral,
             builder.ToImmutable());
     }
 
@@ -64,6 +72,7 @@ internal sealed class MissingDependency
             request.Type,
             request.Key,
             request.IsKeyed,
+            request.KeyLiteral,
             ImmutableArray.Create(request.ProvenanceStep));
     }
 }

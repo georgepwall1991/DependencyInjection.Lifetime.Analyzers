@@ -4,6 +4,7 @@ This sample demonstrates `DI015` (Unresolvable Dependency) with both:
 
 - A broken setup that compiles but fails at runtime.
 - A fixed setup that resolves successfully.
+- Constructor and keyed-service cases that mirror DI015's high-confidence analysis path.
 
 ## Build (see analyzer warnings)
 

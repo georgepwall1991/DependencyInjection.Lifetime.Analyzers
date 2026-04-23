@@ -61,6 +61,67 @@ public class DI015_UnresolvableDependencyAnalyzerTests
 
         """;
 
+    private const string GoatUsings = """
+        using System;
+        using System.Collections.Generic;
+        using Microsoft.Extensions.DependencyInjection;
+        using Microsoft.Extensions.Logging;
+        using Microsoft.Extensions.Options;
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class FromKeyedServicesAttribute : Attribute
+            {
+                public FromKeyedServicesAttribute() { }
+                public FromKeyedServicesAttribute(object? key) { }
+            }
+
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class ServiceKeyAttribute : Attribute
+            {
+            }
+
+            public static class KeyedService
+            {
+                public static object AnyKey { get; } = new object();
+            }
+
+            public static class ServiceCollectionServiceExtensions
+            {
+                public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                    where TService : class where TImplementation : class, TService => services;
+
+                public static IServiceCollection AddKeyedScoped<TService>(this IServiceCollection services, object? serviceKey, Func<IServiceProvider, object?, TService> implementationFactory)
+                    where TService : class => services;
+
+                public static T GetRequiredKeyedService<T>(this IServiceProvider provider, object? serviceKey) => default!;
+            }
+
+            public static class ActivatorUtilities
+            {
+                public static T CreateInstance<T>(IServiceProvider provider, params object[] parameters) => default!;
+                public static object CreateInstance(IServiceProvider provider, Type instanceType, params object[] parameters) => default!;
+                public static T GetServiceOrCreateInstance<T>(IServiceProvider provider) => default!;
+                public static object GetServiceOrCreateInstance(IServiceProvider provider, Type type) => default!;
+            }
+        }
+
+        namespace Microsoft.Extensions.Logging
+        {
+            public interface ILogger<T> { }
+            public interface ILoggerFactory { }
+        }
+
+        namespace Microsoft.Extensions.Options
+        {
+            public interface IOptions<T> { }
+            public interface IOptionsSnapshot<T> { }
+            public interface IOptionsMonitor<T> { }
+        }
+
+        """;
+
     #region Should Report Diagnostic
 
     [Fact]
@@ -740,6 +801,95 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IInnerService", "IMissingDependency"));
     }
 
+    [Fact]
+    public async Task KeyedRegistration_WithMissingInheritedKeyedConstructorDependency_ReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService([FromKeyedServices] IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyService, MyService>("blue");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(70, 9)
+                .WithArguments("IMyService", "IMyDependency (key: blue)"));
+    }
+
+    [Fact]
+    public async Task Factory_WithGetServiceOrCreateInstanceMissingDependency_ReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService>(sp => ActivatorUtilities.GetServiceOrCreateInstance<MyService>(sp));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(70, 46)
+                .WithArguments("IMyService", "MissingDependency"));
+    }
+
+    [Fact]
+    public async Task KeyedFactory_WithRegistrationKeyParameterMissingDependency_ReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyService>(
+                        "blue",
+                        (sp, key) => new MyService(sp.GetRequiredKeyedService<IMyDependency>(key)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(72, 40)
+                .WithArguments("IMyService", "IMyDependency (key: blue)"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -768,6 +918,174 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithServiceKeyParameter_NoDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService([ServiceKey] object key) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyService, MyService>("blue");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task KeyedRegistration_WithInheritedKeyedConstructorDependency_NoDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService([FromKeyedServices] IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyDependency, MyDependency>("blue");
+                    services.AddKeyedScoped<IMyService, MyService>("blue");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task KeyedDependency_WithAnyKeyFallbackRegistration_NoDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+            public class MyDependency : IMyDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService([FromKeyedServices("blue")] IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IMyDependency, MyDependency>(KeyedService.AnyKey);
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemovedByRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IMyService>(services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ReplacedByServiceDescriptor_NoDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class ReplacementService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_SecondDuplicateBeforeReplace_StillReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class FirstService : IMyService
+            {
+                public FirstService(IMissingDependency dependency) { }
+            }
+
+            public class SecondService : IMyService
+            {
+                public SecondService(IMissingDependency dependency) { }
+            }
+
+            public class ReplacementService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, FirstService>();
+                    services.AddScoped<IMyService, SecondService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(78, 9)
+                .WithArguments("IMyService", "IMissingDependency"));
     }
 
     [Fact]

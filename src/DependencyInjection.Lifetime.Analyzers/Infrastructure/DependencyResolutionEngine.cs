@@ -84,6 +84,9 @@ internal sealed class DependencyResolutionEngine
 
         return ResolveImplementationType(
             registration.ImplementationType,
+            registration.IsKeyed ? registration.Key : null,
+            registration.IsKeyed,
+            registration.IsKeyed ? registration.KeyLiteral : null,
             assumeFrameworkServicesRegistered,
             resolutionCache,
             resolutionPath);
@@ -104,6 +107,9 @@ internal sealed class DependencyResolutionEngine
                request.Type is INamedTypeSymbol implementationType
             ? ResolveImplementationType(
                 implementationType,
+                registration.IsKeyed ? registration.Key : null,
+                registration.IsKeyed,
+                registration.IsKeyed ? registration.KeyLiteral : null,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
                 resolutionPath)
@@ -126,6 +132,7 @@ internal sealed class DependencyResolutionEngine
             dependencyType,
             key,
             isKeyed,
+            SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var keyLiteral) ? keyLiteral : null,
             DependencySourceKind.ConstructorParameter,
             Location.None,
             FormatDependencyName(dependencyType, key, isKeyed));
@@ -184,6 +191,9 @@ internal sealed class DependencyResolutionEngine
 
     private ResolutionResult ResolveImplementationType(
         INamedTypeSymbol implementationType,
+        object? inheritedKey,
+        bool hasInheritedKey,
+        string? inheritedKeyLiteral,
         bool assumeFrameworkServicesRegistered,
         Dictionary<ServiceLookupKey, ResolutionResult> resolutionCache,
         HashSet<ServiceLookupKey> resolutionPath)
@@ -212,14 +222,20 @@ internal sealed class DependencyResolutionEngine
                     continue;
                 }
 
-                var (key, isKeyed) = GetServiceKey(parameter);
+                var serviceKey = GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
+                if (serviceKey.IsUnknown)
+                {
+                    return ResolutionResult.Resolvable(ResolutionConfidence.Unknown);
+                }
+
                 var request = new DependencyRequest(
                     parameter.Type,
-                    key,
-                    isKeyed,
+                    serviceKey.Key,
+                    serviceKey.IsKeyed,
+                    serviceKey.KeyLiteral,
                     DependencySourceKind.ConstructorParameter,
                     parameter.Locations.FirstOrDefault() ?? Location.None,
-                    FormatDependencyName(parameter.Type, key, isKeyed));
+                    FormatDependencyName(parameter.Type, serviceKey.Key, serviceKey.IsKeyed));
 
                 var result = ResolveDependency(
                     request,
@@ -322,6 +338,9 @@ internal sealed class DependencyResolutionEngine
 
             var candidateResult = ResolveImplementationType(
                 implementationType,
+                inheritedKey: request.IsKeyed ? request.Key : null,
+                hasInheritedKey: request.IsKeyed,
+                inheritedKeyLiteral: request.IsKeyed ? request.KeyLiteral : null,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
                 resolutionPath);
@@ -366,7 +385,7 @@ internal sealed class DependencyResolutionEngine
         foreach (var registration in _availableRegistrations)
         {
             if (registration.IsKeyed != isKeyed ||
-                !Equals(registration.Key, key))
+                !IsMatchingKey(registration.Key, key))
             {
                 continue;
             }
@@ -432,6 +451,12 @@ internal sealed class DependencyResolutionEngine
         bool assumeFrameworkServicesRegistered)
     {
         if (parameter?.HasExplicitDefaultValue == true)
+        {
+            return true;
+        }
+
+        if (parameter is not null &&
+            KeyedServiceHelpers.IsServiceKeyParameter(parameter))
         {
             return true;
         }
@@ -512,8 +537,23 @@ internal sealed class DependencyResolutionEngine
         return false;
     }
 
-    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
-        KeyedServiceHelpers.GetServiceKey(parameter);
+    private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(
+        IParameterSymbol parameter,
+        object? inheritedKey,
+        bool hasInheritedKey,
+        string? inheritedKeyLiteral) =>
+        KeyedServiceHelpers.GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
+
+    private static bool IsMatchingKey(object? registrationKey, object? requestKey)
+    {
+        if (Equals(registrationKey, requestKey))
+        {
+            return true;
+        }
+
+        return !SyntaxValueHelpers.IsKeyedServiceAnyKey(requestKey) &&
+               SyntaxValueHelpers.IsKeyedServiceAnyKey(registrationKey);
+    }
 
     private static bool IsServiceImplementationCompatible(
         INamedTypeSymbol serviceType,
