@@ -1175,10 +1175,8 @@ public class DI004_UseAfterDisposeAnalyzerTests
     }
 
     [Fact]
-    public async Task GetServices_UsedAfterDispose_NotCurrentlyDetected()
+    public async Task GetServices_EnumeratedAfterDispose_ReportsDiagnostic()
     {
-        // KNOWN LIMITATION: GetServices returns IEnumerable<T> which is iterated via foreach.
-        // The analyzer doesn't track iteration over collections, only direct method/property access.
         var source = Usings + """
             using System.Collections.Generic;
             using System.Linq;
@@ -1203,17 +1201,34 @@ public class DI004_UseAfterDisposeAnalyzerTests
                     {
                         services = scope.ServiceProvider.GetServices<IMyService>();
                     }
-                    // Using services after scope disposed - not currently detected
+                    // Using services after scope disposed.
                     foreach (var s in services)
                     {
                         s.DoWork();
                     }
                 }
             }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
             """;
 
-        // Document current behavior - iteration not tracked
-        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithSpan(28, 27, 28, 35)
+                .WithArguments("services"));
     }
 
     [Fact]

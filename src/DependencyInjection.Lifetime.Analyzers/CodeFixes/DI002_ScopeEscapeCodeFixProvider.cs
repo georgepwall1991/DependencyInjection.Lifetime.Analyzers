@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Text;
 
 namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
@@ -71,6 +72,8 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
             return document;
         }
 
+        var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
+
         // Find the containing statement
         var containingStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
         if (containingStatement is null)
@@ -90,7 +93,7 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
                     SyntaxFactory.IdentifierName(DiagnosticIds.ScopedServiceEscapes)),
                 isActive: true));
 
-        var newLine = SyntaxFactory.CarriageReturnLineFeed;
+        var newLine = GetPreferredEndOfLine(sourceText);
 
         // Build trivia before the statement
         var triviaBeforeStatement = SyntaxFactory.TriviaList(
@@ -127,5 +130,22 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(containingStatement, newStatement));
+    }
+
+    private static SyntaxTrivia GetPreferredEndOfLine(SourceText sourceText)
+    {
+        for (var i = 0; i < sourceText.Length; i++)
+        {
+            if (sourceText[i] != '\n')
+            {
+                continue;
+            }
+
+            return i > 0 && sourceText[i - 1] == '\r'
+                ? SyntaxFactory.CarriageReturnLineFeed
+                : SyntaxFactory.LineFeed;
+        }
+
+        return SyntaxFactory.LineFeed;
     }
 }

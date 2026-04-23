@@ -155,6 +155,37 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonCapturingScopedEnumerable_ViaConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(17, 9, 17, 69)
+                .WithArguments("SingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
     public async Task SingletonWithUnresolvableGreedyConstructor_AndCaptiveFallbackConstructor_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -478,6 +509,75 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
                 .WithLocation(17, 93)
                 .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingScopedEnumerable_ViaFactoryGetServices_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp => new SingletonService(sp.GetServices<IScopedService>()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(17, 77, 17, 109)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonFactoryCallingUnrelatedGetServices_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface IRepository
+            {
+                System.Collections.Generic.IEnumerable<T> GetServices<T>();
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var repository = new Repository();
+
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(_ => new SingletonService(repository.GetServices<IScopedService>()));
+                }
+            }
+
+            public class Repository : IRepository
+            {
+                public System.Collections.Generic.IEnumerable<T> GetServices<T>() => System.Array.Empty<T>();
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

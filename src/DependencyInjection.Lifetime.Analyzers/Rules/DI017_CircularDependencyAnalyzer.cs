@@ -262,7 +262,15 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         var selectedParameterCount = resolvableConstructors.Max(constructor => constructor.Parameters.Length);
-        return resolvableConstructors.Where(constructor => constructor.Parameters.Length == selectedParameterCount);
+        var selectedConstructors = resolvableConstructors
+            .Where(constructor => constructor.Parameters.Length == selectedParameterCount)
+            .ToList();
+
+        // Multiple equally greedy resolvable constructors are ambiguous at runtime.
+        // Stay quiet rather than attributing the failure to one possible cycle path.
+        return selectedConstructors.Count == 1
+            ? selectedConstructors
+            : [];
     }
 
     private static bool IsDirectlyResolvableConstructorParameter(

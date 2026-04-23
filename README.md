@@ -228,7 +228,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection and high-confidence factory paths such as inline delegates, method-group factories, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -276,7 +276,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scoped collections from `GetServices<T>()` enumerated after disposal, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -753,7 +753,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 ## DI017: Circular Dependency
 
-**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops.
+**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It stays silent when constructor selection is ambiguous rather than guessing which path the container will choose.
 
 **Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
 
