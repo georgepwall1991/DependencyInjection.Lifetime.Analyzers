@@ -1,10 +1,10 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-01 (post-hardening pass, PRs #32-#34 merged)
-**Version:** 2.4.3+
-**Test result:** 658/658 passing (up from 629 pre-pass)
+**Date:** 2026-04-23 (DI013 SOTA hardening pass)
+**Version:** 2.4.6+
+**Test result:** 691/691 passing.
 **Analyzers:** 18 (DI001-DI018)
-**Code fix providers:** 9
+**Code fix providers:** 10
 
 ## Summary
 
@@ -21,8 +21,8 @@
 | DI009 | Open Generic Mismatch | Warn | 22 | 15 | 9 | 9 | Refactored with RegistrationKind/LifetimeKind, defensive SimpleNameSyntax fix |
 | DI010 | Constructor Over-Injection | Info | 24 | -- | 9.5 | -- | Strongest info-level rule |
 | DI011 | Service Provider Injection | Info | 19 | -- | 9 | -- | Activation-constructor logic |
-| DI012 | Conditional Registration | Info | 30 | -- | 9 | -- | Complex flow, recently hardened |
-| DI013 | Implementation Mismatch | Error | 51 | -- | 9 | -- | Most comprehensive tests |
+| DI012 | Conditional Registration | Info | 30 | 4 | 9 | 8 | Complex flow, ignored TryAdd fixer |
+| DI013 | Implementation Mismatch | Error | 59 | 8 | 9.5 | 8 | Variance-aware assignability, named-argument extraction, broad assists |
 | DI014 | Root Provider Not Disposed | Warn | 13 | 8 | 8 | 8.5 | Hardened: IsAsyncMethod bug fixed, async local fn, chained builders |
 | DI015 | Unresolvable Dependency | Warn | 53 | 10 | 9 | 8 | One of strongest overall |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
@@ -117,15 +117,15 @@ Uses likely-activation-constructor logic with good allowance coverage for factor
 
 ### DI012 -- Conditional Registration Misuse (Info)
 
-**Analyzer: 9/10** | Tests: 30
+**Analyzer: 9/10** | Tests: 30 | **Fixer: 8/10** | Fix Tests: 4
 
-Strong after flow/barrier hardening. Follows same-collection aliases, source-defined helper/local-function wrappers, distinct object-created collection flows, keyed variants, ServiceDescriptor shapes, and opaque ordering barriers. Supports both DI012 (TryAdd ignored) and DI012b (duplicate registration) diagnostics.
+Strong after flow/barrier hardening. Follows same-collection aliases, source-defined helper/local-function wrappers, distinct object-created collection flows, keyed variants, ServiceDescriptor shapes, and opaque ordering barriers. Supports both DI012 (TryAdd ignored) and DI012b (duplicate registration) diagnostics. The fixer removes standalone ignored `TryAdd*` registrations while leaving duplicate override cases manual.
 
 ### DI013 -- Implementation Type Mismatch (Error)
 
-**Analyzer: 9/10** | Tests: 51
+**Analyzer: 9.5/10** | Tests: 59 | **Fixer: 8/10** | Fix Tests: 8
 
-Most comprehensive test file in the repo. Covers open-generic projection checks, collector-fed registration shapes, instance-backed mismatches, all registration patterns (typeof, generic forms), interfaces, base classes, and abstract classes. The only Error-severity rule -- critical that it has no false positives.
+Most comprehensive test file in the repo. Covers variance-aware closed generic assignability, open-generic projection checks, collector-fed registration shapes, named direct overload arguments, instance-backed mismatches, all registration patterns (typeof, generic forms), interfaces, base classes, and abstract classes. The only Error-severity rule -- critical that it has no false positives. The new fixer intentionally offers broad assists but keeps FixAll disabled because retargeting service/implementation types requires user judgment.
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
@@ -168,10 +168,12 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | DI006 (Static Provider Cache) | 14 | 9 | Low -- more tests than analyzer |
 | DI008 (Disposable Transient) | 13 | 9 | Low -- strong shape coverage |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
+| DI012 (Ignored TryAdd) | 4 | 8 | Low -- narrow standalone-statement removal |
+| DI013 (Implementation Mismatch) | 8 | 8 | Medium -- broad assists are symbol-backed, FixAll disabled |
 | DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
 | DI015 (Unresolvable Dependency) | 10 | 8 | Low -- solid registration generation |
 
-**Rules without code fixes:** DI004, DI007, DI010, DI011, DI012, DI013, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
+**Rules without code fixes:** DI004, DI007, DI010, DI011, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
 ## Infrastructure Health
 
@@ -224,6 +226,6 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 ## Recommended Next Actions
 
-1. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) and DI013 (type mismatch) have high severity with no automated fix
+1. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) remains warning-level and context-dependent
 2. **DI002 fixer line-ending consistency** -- the AddTodo action uses `SyntaxFactory.CarriageReturnLineFeed` producing `\r\n` in files that use `\n`; low priority but a known inconsistency
 3. **Expand DI002 fixer sink coverage** -- lambda capture, out parameter, and local variable aliasing sinks are untested

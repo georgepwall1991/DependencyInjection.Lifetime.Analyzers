@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
@@ -8,6 +9,12 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyzer
 {
+    internal const string ServiceTypeNamePropertyName = "ServiceTypeName";
+    internal const string ImplementationTypeNamePropertyName = "ImplementationTypeName";
+    internal const string RegistrationShapePropertyName = "RegistrationShape";
+    internal const string IsKeyedPropertyName = "IsKeyed";
+    internal const string MismatchKindPropertyName = "MismatchKind";
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.ImplementationTypeMismatch);
 
@@ -42,49 +49,46 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
                 continue;
             }
 
-            // Check compatibility
-            if (!IsCompatible(registration.ServiceType, registration.ImplementationType))
+            if (!IsCompatible(context.Compilation, registration.ServiceType, registration.ImplementationType))
             {
+                var properties = ImmutableDictionary<string, string?>.Empty
+                    .Add(ServiceTypeNamePropertyName, registration.ServiceType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))
+                    .Add(ImplementationTypeNamePropertyName, registration.ImplementationType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))
+                    .Add(RegistrationShapePropertyName, registration.HasImplementationInstance ? "Instance" : "Type")
+                    .Add(IsKeyedPropertyName, registration.IsKeyed.ToString())
+                    .Add(MismatchKindPropertyName, registration.HasImplementationInstance ? "InstanceVsService" : "TypeVsType");
+
                 context.ReportDiagnostic(Diagnostic.Create(
                     DiagnosticDescriptors.ImplementationTypeMismatch,
                     registration.Location,
+                    properties,
                     registration.ImplementationType.Name,
                     registration.ServiceType.Name));
             }
         }
     }
 
-    private static bool IsCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
+    private static bool IsCompatible(
+        Compilation compilation,
+        INamedTypeSymbol service,
+        INamedTypeSymbol implementation)
     {
         if (service.IsUnboundGenericType)
         {
             return IsOpenGenericCompatible(service, implementation);
         }
 
-        if (implementation.IsGenericType && !implementation.IsUnboundGenericType &&
-            service.IsGenericType && !service.IsUnboundGenericType)
-        {
-            return IsClosedGenericCompatible(service, implementation);
-        }
-
-        if (implementation.IsUnboundGenericType && !service.IsGenericType)
+        if (implementation.IsUnboundGenericType)
         {
             return false;
         }
 
-        foreach (var iface in implementation.AllInterfaces)
+        if (service.IsGenericType && implementation.IsGenericType)
         {
-            if (SymbolEqualityComparer.Default.Equals(iface, service)) return true;
+            return IsClosedTypeCompatible(compilation, service, implementation);
         }
 
-        var baseType = implementation.BaseType;
-        while (baseType != null)
-        {
-            if (SymbolEqualityComparer.Default.Equals(baseType, service)) return true;
-            baseType = baseType.BaseType;
-        }
-
-        return false;
+        return IsClosedTypeCompatible(compilation, service, implementation);
     }
 
     private static bool IsOpenGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
@@ -157,20 +161,10 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
         return true;
     }
 
-    private static bool IsClosedGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
-    {
-        foreach (var iface in implementation.AllInterfaces)
-        {
-            if (SymbolEqualityComparer.Default.Equals(iface, service)) return true;
-        }
-
-        var baseType = implementation.BaseType;
-        while (baseType != null)
-        {
-            if (SymbolEqualityComparer.Default.Equals(baseType, service)) return true;
-            baseType = baseType.BaseType;
-        }
-
-        return false;
-    }
+    private static bool IsClosedTypeCompatible(
+        Compilation compilation,
+        INamedTypeSymbol service,
+        INamedTypeSymbol implementation) =>
+        compilation is CSharpCompilation csharpCompilation &&
+        csharpCompilation.ClassifyConversion(implementation, service).IsImplicit;
 }

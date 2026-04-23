@@ -549,6 +549,162 @@ public class Startup
                 .WithArguments("Service", "IService"));
     }
 
+    [Fact]
+    public async Task ClosedGeneric_CovariantInterface_Valid_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IAnimal {}
+public sealed class Cat : IAnimal {}
+public interface IProducer<out T> {}
+public sealed class CatProducer : IProducer<Cat> {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(IProducer<IAnimal>), typeof(CatProducer));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ClosedGeneric_ContravariantInterface_Valid_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IAnimal {}
+public sealed class Cat : IAnimal {}
+public interface IConsumer<in T> {}
+public sealed class AnimalConsumer : IConsumer<IAnimal> {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(IConsumer<Cat>), typeof(AnimalConsumer));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ClosedGeneric_InvariantInterface_Mismatch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IAnimal {}
+public sealed class Cat : IAnimal {}
+public interface IBox<T> {}
+public sealed class CatBox : IBox<Cat> {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(typeof(IBox<IAnimal>), typeof(CatBox))|};
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("CatBox", "IBox"));
+    }
+
+    [Fact]
+    public async Task DirectRegistration_NamedTypeArgumentsOutOfOrder_Valid_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(implementationType: typeof(Service), serviceType: typeof(IService));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DirectRegistration_NamedTypeArgumentsOutOfOrder_Invalid_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class WrongService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(implementationType: typeof(WrongService), serviceType: typeof(IService))|};
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("WrongService", "IService"));
+    }
+
+    [Fact]
+    public async Task KeyedRegistration_NamedTypeArgumentsOutOfOrder_Valid_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddKeyedSingleton(implementationType: typeof(Service), serviceKey: ""myKey"", serviceType: typeof(IService));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.ReferenceAssembliesWithKeyedDi);
+    }
+
+    [Fact]
+    public async Task NamedImplementationInstance_Valid_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(implementationInstance: new Service(), serviceType: typeof(IService));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NamedImplementationInstance_Invalid_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class WrongService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(implementationInstance: new WrongService(), serviceType: typeof(IService))|};
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("WrongService", "IService"));
+    }
+
     // ─── Factory and instance registration tests (should stay silent) ────────────
 
     [Fact]

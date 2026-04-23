@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-04-23
+
+### Changed
+
+- **DI013 Precision Hardening**: Implementation type mismatch analysis now uses Roslyn assignability for closed types, reducing false positives for valid generic variance while preserving strict open-generic projection checks.
+- **DI013 Registration Shape Coverage**: Direct registration extraction now handles named `serviceType`, `implementationType`, `implementationInstance`, and keyed `serviceKey` arguments in arbitrary order.
+- **DI013 Code Fixes**: Added broad symbol-backed assists to remove invalid standalone registrations, replace implementation types with compatible candidates, or retarget the service type to an interface/base implemented by the current implementation. FixAll remains disabled for this rule.
+- **Rule Documentation Sync**: Refreshed stale DI012 rule-reference and analyzer-health code-fix metadata while updating DI013, keeping public docs aligned with the reflected provider inventory.
+
 ## [2.4.6] - 2026-04-02
 
 ### Changed

@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.4.6
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.5.1
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.6">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.1">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.4.6" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.1" />
 ```
 
 Then reference it from the project file:
@@ -150,7 +150,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI010](#di010-constructor-over-injection) | Constructor over-injection | Info | No |
 | [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Info | No |
 | [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | Yes |
-| [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
+| [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | Yes |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
@@ -605,7 +605,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid `typeof` service/implementation pairs that compile but fail at runtime.
+**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 
@@ -627,7 +627,7 @@ public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 ```
 
-**Code Fix:** No.
+**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation.
 
 ---
 
