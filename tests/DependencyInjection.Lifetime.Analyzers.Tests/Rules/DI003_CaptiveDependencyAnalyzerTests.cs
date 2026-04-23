@@ -543,6 +543,44 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonFactoryCallingUnrelatedGetServices_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface IRepository
+            {
+                System.Collections.Generic.IEnumerable<T> GetServices<T>();
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var repository = new Repository();
+
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(_ => new SingletonService(repository.GetServices<IScopedService>()));
+                }
+            }
+
+            public class Repository : IRepository
+            {
+                public System.Collections.Generic.IEnumerable<T> GetServices<T>() => System.Array.Empty<T>();
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task SingletonCapturingScoped_ViaFactory_WithActivatorUtilitiesAttribute_ReportsDiagnostic()
     {
         var source = Usings + """

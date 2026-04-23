@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-23 (critical analyzer hardening pass)
 **Version:** 2.4.6+
-**Test result:** 698/698 passing.
+**Test result:** 699/699 passing.
 **Analyzers:** 18 (DI001-DI018)
 **Code fix providers:** 10
 
@@ -12,7 +12,7 @@
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
 | DI002 | Scope Escape | Warn | 29 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property/out/ref sinks |
-| DI003 | Captive Dependency | Warn | 33 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
+| DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
 | DI004 | Use After Dispose | Warn | 29 | -- | 9 | -- | Strong after boundary hardening, GetServices foreach |
 | DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
@@ -63,9 +63,9 @@ Post-hardening: both `DI002_AddTodo` and `DI002_Suppress` actions are now tested
 
 ### DI003 -- Captive Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 33 | **Fixer: 8/10** | Fix Tests: 8
+**Analyzer: 9/10** | Tests: 34 | **Fixer: 8/10** | Fix Tests: 8
 
-Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, and collection-shaped captures through `IEnumerable<T>` / `GetServices<T>()` are detected. Fixer adjusts service lifetimes with good coverage across injection patterns.
+Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, and collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs. Fixer adjusts service lifetimes with good coverage across injection patterns.
 
 ### DI004 -- Use After Dispose (Warning)
 
@@ -194,7 +194,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 698 |
+| Total tests | 699 |
 | Analyzer tests | 518 |
 | Code fix tests | 93 |
 | Infrastructure tests | 78 |

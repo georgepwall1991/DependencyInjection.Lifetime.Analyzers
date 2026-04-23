@@ -152,10 +152,11 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var methodName = methodSymbol.Name;
+            var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+            var methodName = sourceMethod.Name;
             bool isKeyedResolution = methodName == "GetKeyedService" || methodName == "GetRequiredKeyedService";
 
-            if (methodName != "GetService" && methodName != "GetRequiredService" && methodName != "GetServices" && !isKeyedResolution)
+            if (!IsServiceResolutionMethod(methodSymbol))
             {
                 if (FactoryAnalysis.TryGetActivatorUtilitiesImplementationType(
                         invocation,
@@ -229,6 +230,49 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
         return null;
     }
+
+    private static bool IsServiceResolutionMethod(IMethodSymbol methodSymbol)
+    {
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        var methodName = sourceMethod.Name;
+        if (methodName is not ("GetService" or "GetRequiredService" or "GetServices" or "GetKeyedService" or "GetRequiredKeyedService"))
+        {
+            return false;
+        }
+
+        var containingType = sourceMethod.ContainingType;
+        if (containingType is null)
+        {
+            return false;
+        }
+
+        if (containingType.Name == "ServiceProviderServiceExtensions" &&
+            containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection")
+        {
+            return true;
+        }
+
+        if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
+        {
+            var receiverType = sourceMethod.Parameters[0].Type;
+            if (IsSystemIServiceProvider(receiverType) ||
+                IsKeyedServiceProvider(receiverType))
+            {
+                return true;
+            }
+        }
+
+        return IsSystemIServiceProvider(containingType) ||
+               IsKeyedServiceProvider(containingType);
+    }
+
+    private static bool IsSystemIServiceProvider(ITypeSymbol type) =>
+        type.Name == "IServiceProvider" &&
+        type.ContainingNamespace.ToDisplayString() == "System";
+
+    private static bool IsKeyedServiceProvider(ITypeSymbol type) =>
+        type.Name == "IKeyedServiceProvider" &&
+        type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
 
     private static object? ExtractKeyFromResolution(
         InvocationExpressionSyntax invocation,
