@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-04-23
+
+### Added
+
+- **DI019 Root Scoped Resolution**: Added a warning-level analyzer that detects scoped services, or service graphs that reach scoped services, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or `BuildServiceProvider()` results.
+- **Root-Provider Graph Coverage**: DI019 covers direct, transitive, enumerable, keyed, singleton implementation, and hosted-service root-provider resolutions while staying silent for scoped providers from `CreateScope()` / `CreateAsyncScope()`, `HttpContext.RequestServices`, dynamic service-type requests, and DI factory lambdas already handled by DI003.
+
+### Changed
+
+- **Hosted Service Registration Modeling**: Registration collection now models `AddHostedService<T>()` as a singleton `IHostedService` registration so lifetime analyzers can reason about hosted-service dependency graphs.
+- **DI019 Samples and Docs**: Added sample diagnostics, rule docs, analyzer health metadata, release tracking, and sample/docs freshness mappings for the new rule.
+
 ## [2.6.0] - 2026-04-23
 
 ### Changed

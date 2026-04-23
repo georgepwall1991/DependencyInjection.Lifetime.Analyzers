@@ -29,7 +29,7 @@ public static class ServiceLocatorExamples
 
         // Good alternatives
         services.AddScoped<GoodConstructorInjection>();
-        services.AddSingleton<GoodServiceFactory>();
+        services.AddScoped<GoodServiceFactory>();
     }
 }
 

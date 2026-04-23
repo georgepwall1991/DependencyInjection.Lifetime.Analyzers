@@ -92,4 +92,9 @@ public static class DiagnosticIds
     /// DI018: Implementation type cannot be constructed by the DI container.
     /// </summary>
     public const string NonInstantiableImplementation = "DI018";
+
+    /// <summary>
+    /// DI019: Scoped service resolved from root provider.
+    /// </summary>
+    public const string RootScopedResolution = "DI019";
 }

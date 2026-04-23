@@ -21,19 +21,25 @@ public sealed class RegistrationCollector
     private readonly INamedTypeSymbol? _serviceCollectionType;
     private readonly INamedTypeSymbol? _serviceCollectionServiceExtensionsType;
     private readonly INamedTypeSymbol? _serviceCollectionDescriptorExtensionsType;
+    private readonly INamedTypeSymbol? _serviceCollectionHostedServiceExtensionsType;
     private readonly INamedTypeSymbol? _serviceDescriptorType;
+    private readonly INamedTypeSymbol? _hostedServiceType;
     private int _registrationOrder;
 
     private RegistrationCollector(
         INamedTypeSymbol? serviceCollectionType,
         INamedTypeSymbol? serviceCollectionServiceExtensionsType,
         INamedTypeSymbol? serviceCollectionDescriptorExtensionsType,
-        INamedTypeSymbol? serviceDescriptorType)
+        INamedTypeSymbol? serviceCollectionHostedServiceExtensionsType,
+        INamedTypeSymbol? serviceDescriptorType,
+        INamedTypeSymbol? hostedServiceType)
     {
         _serviceCollectionType = serviceCollectionType;
         _serviceCollectionServiceExtensionsType = serviceCollectionServiceExtensionsType;
         _serviceCollectionDescriptorExtensionsType = serviceCollectionDescriptorExtensionsType;
+        _serviceCollectionHostedServiceExtensionsType = serviceCollectionHostedServiceExtensionsType;
         _serviceDescriptorType = serviceDescriptorType;
+        _hostedServiceType = hostedServiceType;
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
         _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
@@ -98,14 +104,22 @@ public sealed class RegistrationCollector
             compilation.GetTypeByMetadataName(
                 "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions");
 
+        var serviceCollectionHostedServiceExtensionsType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions");
+
         var serviceDescriptorType = compilation.GetTypeByMetadataName(
             "Microsoft.Extensions.DependencyInjection.ServiceDescriptor");
+
+        var hostedServiceType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.Hosting.IHostedService");
 
         return new RegistrationCollector(
             serviceCollectionType,
             serviceCollectionServiceExtensionsType,
             serviceCollectionDescriptorExtensionsType,
-            serviceDescriptorType);
+            serviceCollectionHostedServiceExtensionsType,
+            serviceDescriptorType,
+            hostedServiceType);
     }
 
     /// <summary>
@@ -223,7 +237,15 @@ public sealed class RegistrationCollector
         bool hasImplementationInstance = false;
         bool isKeyed = IsKeyedMethod(methodName);
 
-        if (lifetime.HasValue)
+        if (TryExtractHostedServiceRegistration(invocation, methodSymbol, semanticModel, out var hostedServiceType, out var hostedImplementationType, out var hostedFactoryExpression))
+        {
+            serviceType = hostedServiceType;
+            implementationType = hostedImplementationType;
+            factoryExpression = hostedFactoryExpression;
+            lifetime = ServiceLifetime.Singleton;
+            isKeyed = false;
+        }
+        else if (lifetime.HasValue)
         {
             // Extract service, implementation types, factory expression, and key from standard methods
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, key) = ExtractTypes(methodSymbol, invocation, semanticModel);
@@ -1036,7 +1058,8 @@ public sealed class RegistrationCollector
     private bool IsKnownServiceCollectionExtensionsType(INamedTypeSymbol type)
     {
         if (SymbolEqualityComparer.Default.Equals(type, _serviceCollectionServiceExtensionsType) ||
-            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionDescriptorExtensionsType))
+            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionDescriptorExtensionsType) ||
+            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionHostedServiceExtensionsType))
         {
             return true;
         }
@@ -1044,7 +1067,43 @@ public sealed class RegistrationCollector
         var fullName = type.ToDisplayString();
         return fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions" ||
-               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions";
+               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions";
+    }
+
+    private bool TryExtractHostedServiceRegistration(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        out INamedTypeSymbol? serviceType,
+        out INamedTypeSymbol? implementationType,
+        out ExpressionSyntax? factoryExpression)
+    {
+        serviceType = null;
+        implementationType = null;
+        factoryExpression = null;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddHostedService" ||
+            _hostedServiceType is null ||
+            !IsKnownServiceCollectionExtensionsType(sourceMethod.ContainingType))
+        {
+            return false;
+        }
+
+        serviceType = _hostedServiceType;
+
+        if (method.IsGenericMethod && method.TypeArguments.Length > 0)
+        {
+            implementationType = method.TypeArguments[0] as INamedTypeSymbol;
+        }
+
+        if (TryGetFactoryArgumentExpression(method, invocation, semanticModel, out var hostedFactoryExpression))
+        {
+            factoryExpression = hostedFactoryExpression;
+        }
+
+        return implementationType is not null || factoryExpression is not null;
     }
 
     private bool IsServiceDescriptorType(ITypeSymbol? type)

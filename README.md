@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.6.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.7.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.6.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.7.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.6.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.7.0" />
 ```
 
 Then reference it from the project file:
@@ -102,6 +102,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Service location and architectural drift | `DI006`, `DI007`, `DI011` |
 | Registration correctness and activation validity | `DI012`, `DI013`, `DI015`, `DI016`, `DI018` |
 | Dependency graph correctness | `DI017` |
+| Root-provider lifetime validation | `DI019` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -130,6 +131,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI016: BuildServiceProvider Misuse](#di016-buildserviceprovider-misuse)
 - [DI017: Circular Dependency](#di017-circular-dependency)
 - [DI018: Non-Instantiable Implementation Type](#di018-non-instantiable-implementation-type)
+- [DI019: Scoped Service Resolved From Root Provider](#di019-scoped-service-resolved-from-root-provider)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -156,6 +158,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
 | [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
+| [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | No |
 
 ---
 
@@ -820,9 +823,38 @@ services.AddSingleton<IMyService, GoodConcreteService>();
 
 ---
 
+## DI019: Scoped Service Resolved From Root Provider
+
+**What it catches:** scoped services, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
+
+**Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
+
+> **Explain Like I'm Ten:** A classroom pass only works for one lesson. Taking it home for the whole year breaks the rules.
+
+**Problem:**
+
+```csharp
+var app = builder.Build();
+var db = app.Services.GetRequiredService<MyDbContext>();
+```
+
+**Better pattern:**
+
+```csharp
+var app = builder.Build();
+using var scope = app.Services.CreateScope();
+var db = scope.ServiceProvider.GetRequiredService<MyDbContext>();
+```
+
+DI019 also reports singleton and hosted-service methods that resolve scoped services from an injected root provider.
+
+**Code Fix:** No. Creating the right scope can change control flow and disposal semantics, so the fix should be chosen deliberately.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI018`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI019`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

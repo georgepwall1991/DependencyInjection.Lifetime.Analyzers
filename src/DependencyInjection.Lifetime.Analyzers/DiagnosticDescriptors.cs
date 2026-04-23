@@ -248,4 +248,17 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "The registered implementation type cannot be constructed by the DI container because it is abstract, an interface, a static class, or has no accessible constructors. This will cause a runtime exception when the service is resolved.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI019: Scoped service resolved from a root service provider.
+    /// </summary>
+    public static readonly DiagnosticDescriptor RootScopedResolution = new(
+        id: DiagnosticIds.RootScopedResolution,
+        title: "Scoped service resolved from root provider",
+        messageFormat: "Service '{0}' resolves scoped dependency '{1}' from the root provider",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Scoped services should be resolved from an IServiceScope, not from the root IServiceProvider. Create a scope with CreateScope or CreateAsyncScope before resolving scoped services.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }
