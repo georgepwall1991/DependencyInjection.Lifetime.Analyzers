@@ -103,6 +103,36 @@ public class PerformanceRegressionTests
     }
 
     [Fact]
+    public async Task CycleDetection_FactoryHeavyGraph_CompletesWithinTimeout()
+    {
+        const int serviceCount = 120;
+        var source = GenerateFactoryHeavySource(serviceCount);
+
+        var sw = Stopwatch.StartNew();
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        sw.Stop();
+
+        _output.WriteLine($"DI017 factory-heavy graph ({serviceCount} services) completed in {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 30_000,
+            $"DI017 factory-heavy graph took {sw.ElapsedMilliseconds}ms, exceeding 30s timeout");
+    }
+
+    [Fact]
+    public async Task CycleDetection_CollectionFanInGraph_CompletesWithinTimeout()
+    {
+        const int serviceCount = 120;
+        var source = GenerateCollectionFanInSource(serviceCount);
+
+        var sw = Stopwatch.StartNew();
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        sw.Stop();
+
+        _output.WriteLine($"DI017 collection fan-in graph ({serviceCount} services) completed in {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 30_000,
+            $"DI017 collection fan-in graph took {sw.ElapsedMilliseconds}ms, exceeding 30s timeout");
+    }
+
+    [Fact]
     public async Task UseAfterDispose_ManyExecutableRoots_CompletesWithinTimeout()
     {
         const int methodCount = 150;
@@ -200,6 +230,82 @@ public class PerformanceRegressionTests
         sb.AppendLine("    }");
         sb.AppendLine("}");
 
+        return sb.ToString();
+    }
+
+    private static string GenerateFactoryHeavySource(int serviceCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+        sb.AppendLine();
+
+        sb.AppendLine("public interface IBase { }");
+        sb.AppendLine("public sealed class Base : IBase { }");
+
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"public interface IService{i} {{ }}");
+            sb.AppendLine($"public sealed class Service{i} : IService{i}");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public Service{i}(IBase dependency) {{ }}");
+            sb.AppendLine("}");
+        }
+
+        sb.AppendLine("public sealed class Startup");
+        sb.AppendLine("{");
+        sb.AppendLine("    public void ConfigureServices(IServiceCollection services)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        services.AddSingleton<IBase, Base>();");
+
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"        services.AddTransient<IService{i}>(sp => new Service{i}(sp.GetRequiredService<IBase>()));");
+        }
+
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
+
+    private static string GenerateCollectionFanInSource(int serviceCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+        sb.AppendLine();
+
+        sb.AppendLine("public interface IPlugin { }");
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"public sealed class Plugin{i} : IPlugin {{ }}");
+        }
+
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"public interface IService{i} {{ }}");
+            sb.AppendLine($"public sealed class Service{i} : IService{i}");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public Service{i}(IEnumerable<IPlugin> plugins) {{ }}");
+            sb.AppendLine("}");
+        }
+
+        sb.AppendLine("public sealed class Startup");
+        sb.AppendLine("{");
+        sb.AppendLine("    public void ConfigureServices(IServiceCollection services)");
+        sb.AppendLine("    {");
+
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"        services.AddTransient<IPlugin, Plugin{i}>();");
+        }
+
+        for (var i = 0; i < serviceCount; i++)
+        {
+            sb.AppendLine($"        services.AddTransient<IService{i}, Service{i}>();");
+        }
+
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
         return sb.ToString();
     }
 

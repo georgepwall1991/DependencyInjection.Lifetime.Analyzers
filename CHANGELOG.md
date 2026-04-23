@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-04-23
+
+### Changed
+
+- **DI017 Circular Dependency Hardening**: DI017 now analyzes reachable, flow-aware effective registration graphs, including `TryAdd`, duplicate overrides, `RemoveAll` / `Replace` removal, high-confidence factory requests, keyed inherit-key dependencies, open generics, and registered `IEnumerable<T>` elements while staying silent for opaque or ambiguous paths.
+- **DI017 Regression Coverage**: Added focused analyzer and performance coverage for factory cycles, keyed inheritance, collection element cycles, open-generic cycles, unreachable wrappers, separate service collections, registration mutation suppression, shadowed `TryAdd`, and larger factory/collection graphs.
+
 ## [2.7.0] - 2026-04-23
 
 ### Added

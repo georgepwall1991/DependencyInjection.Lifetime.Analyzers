@@ -148,9 +148,9 @@ Strong after builder-flow hardening. Covers assignable `IServiceCollection` abst
 
 ### DI017 -- Circular Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 16
+**Analyzer: 9.5/10** | Tests: 26
 
-Significantly hardened. Cycle detection uses stable effective registrations with `ServiceLookupKey` for keyed service support. `knownNoCycle` memoization prevents exponential blowup at scale. Post-hardening fixes: `IsDirectlyResolvableConstructorParameter` no longer treats scalar types (`string`, `int`, etc.) as resolvable — a constructor requiring non-DI params cannot be selected by the runtime, preventing false-negative cycle suppression. `GetGlobalLookupKeyDisplayName` now includes the key's runtime type name in the canonical string to prevent dedup collisions between `int` key `1` and `string` key `"1"`. DI017 now stays silent for ambiguous equally greedy resolvable constructors instead of reporting a speculative cycle. No code fix -- breaking cycles requires architectural decisions.
+Major hardening pass applied. Cycle detection now uses reachable, flow-aware effective registrations, honors `TryAdd` plus `RemoveAll` / `Replace` removal, analyzes high-confidence factory requests, inherited keyed dependencies, open-generic activation, and registered `IEnumerable<T>` elements, and keeps ambiguous constructors, dynamic keys, opaque factories, unrelated service collections, and uninvoked wrappers silent. `knownNoCycle` memoization remains in place for scale. No code fix -- breaking cycles requires architectural decisions.
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
