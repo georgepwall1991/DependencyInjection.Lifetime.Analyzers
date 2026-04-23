@@ -1,9 +1,9 @@
 # Analyzer Health Report
 
 **Date:** 2026-04-23 (critical analyzer hardening pass)
-**Version:** 2.4.6+
-**Test result:** 699/699 passing.
-**Analyzers:** 18 (DI001-DI018)
+**Version:** 2.7.0
+**Test result:** 744/744 passing.
+**Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 10
 
 ## Summary
@@ -28,6 +28,7 @@
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 16 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
+| DI019 | Root Scoped Resolution | Warn | 15 | -- | 8.5 | -- | Root/scoped provider classification, transitive scoped graph |
 
 `--` = no code fix exists for this rule.
 
@@ -157,6 +158,12 @@ Significantly hardened. Cycle detection uses stable effective registrations with
 
 Open-generic constructor checks use the generic definition. Direct coverage spans keyed registrations, `TryAdd`, `ServiceDescriptor.Singleton`/`Describe`, factory and instance silence, constructor accessibility matrices. Correctly detects abstract classes, interfaces, static classes, and types with no accessible constructors.
 
+### DI019 -- Root Scoped Resolution (Warning)
+
+**Analyzer: 8.5/10** | Tests: 15
+
+Detects scoped services, and service graphs that reach scoped services, resolved from a root provider. Covers `app.Services`, `host.Services`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, DI factory lambdas covered by DI003, and dynamic service-type requests.
+
 ## Code Fix Health
 
 | Fixer | Fix Tests | Score | Risk Assessment |
@@ -173,7 +180,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
 | DI015 (Unresolvable Dependency) | 12 | 8.8 | Low -- keyed and factory self-binding generation is still tightly gated |
 
-**Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
+**Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI019. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
 ## Infrastructure Health
 
@@ -184,7 +191,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | PerformanceRegression | 4 | Baseline performance guards |
 | SampleDiagnosticsVerifier | 10 | SARIF contract + freshness gates |
 | RegistrationCollector (ServiceDescriptor) | 4 | ServiceDescriptor-specific collection |
-| DiagnosticDescriptorSeverity | 1 (Theory, 18 cases) | Severity budget enforcement |
+| DiagnosticDescriptorSeverity | 1 (Theory, 19 cases) | Severity budget enforcement |
 | CrossRuleInteraction | 8 | Multi-rule scenario validation |
 | KeyedService | 9 | DI 8.0 keyed service support |
 

@@ -143,6 +143,13 @@ const ruleSampleConfig = {
       { label: "Sample app safe pattern", symbol: "GoodConcreteService" },
     ],
   },
+  DI019: {
+    samplePath: "samples/SampleApp/Diagnostics/DI019/RootScopedResolutionExamples.cs",
+    highlights: [
+      { label: "Sample app root-provider warning", symbol: "BuildRootScopedResolutionExample" },
+      { label: "Sample app scoped-provider pattern", symbol: "GoodScopedResolutionExample" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(

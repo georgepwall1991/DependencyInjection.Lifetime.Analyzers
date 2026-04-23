@@ -593,6 +593,32 @@
           "severity": "note"
         }
       ]
+    },
+    {
+      "folder": "DI019",
+      "ruleId": "DI019",
+      "claims": [
+        {
+          "filePathContains": "DI019/RootScopedResolutionExamples.cs",
+          "anchor": "provider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI019",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI019/RootScopedResolutionExamples.cs",
+          "anchor": "provider.GetRequiredService<BadRootResolvedRunner>();",
+          "ruleId": "DI019",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI019/RootScopedResolutionExamples.cs",
+          "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        }
+      ]
     }
   ],
   "fileClaims": [],

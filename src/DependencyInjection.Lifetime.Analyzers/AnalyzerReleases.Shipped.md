@@ -50,6 +50,13 @@ Rule ID | Category | Severity | Notes
 DI017 | DependencyInjection | Warning | Circular dependency detected in constructor injection chain
 DI018 | DependencyInjection | Warning | Non-instantiable implementation type (abstract, interface, static, no public constructors)
 
+## Release 2.7.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI019 | DependencyInjection | Warning | Scoped service resolved from root provider
+
 ## Release 2.1.2
 
 ### Changed Rules
