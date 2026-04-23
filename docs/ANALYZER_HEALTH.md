@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-23 (DI013 SOTA hardening pass)
+**Date:** 2026-04-23 (critical analyzer hardening pass)
 **Version:** 2.4.6+
-**Test result:** 691/691 passing.
+**Test result:** 698/698 passing.
 **Analyzers:** 18 (DI001-DI018)
 **Code fix providers:** 10
 
@@ -11,9 +11,9 @@
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
-| DI002 | Scope Escape | Warn | 27 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property sink |
-| DI003 | Captive Dependency | Warn | 31 | 8 | 9 | 8 | Solid both sides |
-| DI004 | Use After Dispose | Warn | 29 | -- | 9 | -- | Strong after boundary hardening |
+| DI002 | Scope Escape | Warn | 29 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property/out/ref sinks |
+| DI003 | Captive Dependency | Warn | 33 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
+| DI004 | Use After Dispose | Warn | 29 | -- | 9 | -- | Strong after boundary hardening, GetServices foreach |
 | DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
 | DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
@@ -24,9 +24,9 @@
 | DI012 | Conditional Registration | Info | 30 | 4 | 9 | 8 | Complex flow, ignored TryAdd fixer |
 | DI013 | Implementation Mismatch | Error | 59 | 8 | 9.5 | 8 | Variance-aware assignability, named-argument extraction, broad assists |
 | DI014 | Root Provider Not Disposed | Warn | 13 | 8 | 8 | 8.5 | Hardened: IsAsyncMethod bug fixed, async local fn, chained builders |
-| DI015 | Unresolvable Dependency | Warn | 53 | 10 | 9 | 8 | One of strongest overall |
+| DI015 | Unresolvable Dependency | Warn | 54 | 10 | 9 | 8 | One of strongest overall |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
-| DI017 | Circular Dependency | Warn | 15 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
+| DI017 | Circular Dependency | Warn | 16 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
 
 `--` = no code fix exists for this rule.
@@ -55,23 +55,23 @@ Operation-based tracking covers lambdas, fields, conditionals, nested scopes, an
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 9/10** | Tests: 27 | **Fixer: 7/10** | Fix Tests: 5
+**Analyzer: 9/10** | Tests: 29 | **Fixer: 7/10** | Fix Tests: 5
 
-Strong analyzer after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, and predeclared scopes. Remaining analyzer debt is conservative sink breadth, not entry coverage.
+Strong analyzer after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, and out/ref parameter escape sinks. Remaining analyzer debt is conservative sink breadth, not entry coverage.
 
 Post-hardening: both `DI002_AddTodo` and `DI002_Suppress` actions are now tested. Fixed a duplicate TODO bug where the fixer would insert a new TODO comment on every iterative application because it didn't check for existing TODOs. Added property assignment sink coverage for suppress action. The fixer does not inspect registration shapes (it operates on statement-level trivia). Low blast radius since the fixer only inserts suppression/comment trivia.
 
 ### DI003 -- Captive Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 31 | **Fixer: 8/10** | Fix Tests: 8
+**Analyzer: 9/10** | Tests: 33 | **Fixer: 8/10** | Fix Tests: 8
 
-Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, and direct + ServiceDescriptor regressions are covered. Fixer adjusts service lifetimes with good coverage across injection patterns.
+Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, and collection-shaped captures through `IEnumerable<T>` / `GetServices<T>()` are detected. Fixer adjusts service lifetimes with good coverage across injection patterns.
 
 ### DI004 -- Use After Dispose (Warning)
 
 **Analyzer: 9/10** | Tests: 29
 
-Strong after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, and predeclared scopes while keeping post-disposal reasoning inside the owning executable boundary. No code fix -- the correct resolution is context-dependent.
+Strong after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, and `GetServices<T>()` collections enumerated after disposal while keeping post-disposal reasoning inside the owning executable boundary. No code fix -- the correct resolution is context-dependent.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -135,9 +135,9 @@ Concrete lifetime rule with coverage across `using`, explicit dispose, fields, p
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 53 | **Fixer: 8/10** | Fix Tests: 10
+**Analyzer: 9/10** | Tests: 54 | **Fixer: 8/10** | Fix Tests: 10
 
-Second most comprehensive test file. Broad support for keyed, factory, wrapper, open-generic, and implementation-instance scenarios. Full dependency resolution engine with reachability tracking. Fixer adds missing service registrations with solid coverage.
+Second most comprehensive test file. Broad support for keyed, factory, wrapper, open-generic, strict-mode, and implementation-instance scenarios. Full dependency resolution engine with reachability tracking. Fixer adds missing service registrations with solid coverage.
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
@@ -147,9 +147,9 @@ Strong after builder-flow hardening. Covers assignable `IServiceCollection` abst
 
 ### DI017 -- Circular Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 15
+**Analyzer: 9/10** | Tests: 16
 
-Significantly hardened. Cycle detection uses stable effective registrations with `ServiceLookupKey` for keyed service support. `knownNoCycle` memoization prevents exponential blowup at scale. Post-hardening fixes: `IsDirectlyResolvableConstructorParameter` no longer treats scalar types (`string`, `int`, etc.) as resolvable — a constructor requiring non-DI params cannot be selected by the runtime, preventing false-negative cycle suppression. `GetGlobalLookupKeyDisplayName` now includes the key's runtime type name in the canonical string to prevent dedup collisions between `int` key `1` and `string` key `"1"`. No code fix -- breaking cycles requires architectural decisions.
+Significantly hardened. Cycle detection uses stable effective registrations with `ServiceLookupKey` for keyed service support. `knownNoCycle` memoization prevents exponential blowup at scale. Post-hardening fixes: `IsDirectlyResolvableConstructorParameter` no longer treats scalar types (`string`, `int`, etc.) as resolvable — a constructor requiring non-DI params cannot be selected by the runtime, preventing false-negative cycle suppression. `GetGlobalLookupKeyDisplayName` now includes the key's runtime type name in the canonical string to prevent dedup collisions between `int` key `1` and `string` key `"1"`. DI017 now stays silent for ambiguous equally greedy resolvable constructors instead of reporting a speculative cycle. No code fix -- breaking cycles requires architectural decisions.
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
@@ -181,7 +181,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 |-----------|-------|------------|
 | RegistrationCollector | 27 | Core engine, strong coverage |
 | WellKnownTypes | 29 | Type symbol cache, comprehensive |
-| PerformanceRegression | 3 | Baseline performance guards |
+| PerformanceRegression | 4 | Baseline performance guards |
 | SampleDiagnosticsVerifier | 10 | SARIF contract + freshness gates |
 | RegistrationCollector (ServiceDescriptor) | 4 | ServiceDescriptor-specific collection |
 | DiagnosticDescriptorSeverity | 1 (Theory, 18 cases) | Severity budget enforcement |
@@ -194,10 +194,10 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 658 |
-| Analyzer tests | 512 |
+| Total tests | 698 |
+| Analyzer tests | 518 |
 | Code fix tests | 93 |
-| Infrastructure tests | 77 |
+| Infrastructure tests | 78 |
 | Analyzer mean score | 8.8/10 |
 | Fixer mean score | 8.4/10 |
 | Rules at 9+ | 14/18 (78%) |
@@ -215,6 +215,9 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | #32 | DI017 keyed cycle dedup collapsed keys with same string representation (int `1` vs string `"1"`) | Medium | DI017 |
 | #33 | DI014 `IsAsyncMethod` checked method before nearest callable, wrong `using`/`await using` in nested async | Medium | DI014 |
 | #34 | DI002 fixer didn't check for existing TODO, causing duplicate TODOs on iterative application | Low | DI002 |
+| Current | DI017 reported speculative cycles for ambiguous equally greedy constructor sets | Medium | DI017 |
+| Current | DI004 missed scoped collections from `GetServices<T>()` enumerated after scope disposal | Medium | DI004 |
+| Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
 
 ## Watchlist
 
@@ -227,5 +230,4 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 ## Recommended Next Actions
 
 1. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) remains warning-level and context-dependent
-2. **DI002 fixer line-ending consistency** -- the AddTodo action uses `SyntaxFactory.CarriageReturnLineFeed` producing `\r\n` in files that use `\n`; low priority but a known inconsistency
-3. **Expand DI002 fixer sink coverage** -- lambda capture, out parameter, and local variable aliasing sinks are untested
+2. **Expand DI002 fixer sink coverage** -- lambda capture and deeper aliasing sinks remain context-sensitive

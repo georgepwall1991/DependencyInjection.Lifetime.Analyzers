@@ -299,6 +299,14 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 }
             }
 
+            if (node is ForEachStatementSyntax foreachStatement &&
+                foreachStatement.Expression is IdentifierNameSyntax foreachIdentifier &&
+                semanticModel.GetSymbolInfo(foreachIdentifier).Symbol is ILocalSymbol foreachSymbol &&
+                serviceVariables.ContainsKey(foreachSymbol))
+            {
+                ReportDiagnostic(context, foreachIdentifier, foreachIdentifier.Identifier.Text, reportedSpans);
+            }
+
             if (node is MemberAccessExpressionSyntax memberAccessAfter &&
                 memberAccessAfter.Parent is not InvocationExpressionSyntax &&
                 memberAccessAfter.Expression is IdentifierNameSyntax identifierAccess &&
@@ -691,7 +699,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
     {
         var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
         var methodName = sourceMethod.Name;
-        if (methodName is not ("GetService" or "GetRequiredService" or "GetKeyedService" or "GetRequiredKeyedService"))
+        if (methodName is not ("GetService" or "GetRequiredService" or "GetServices" or "GetKeyedService" or "GetRequiredKeyedService"))
         {
             return false;
         }

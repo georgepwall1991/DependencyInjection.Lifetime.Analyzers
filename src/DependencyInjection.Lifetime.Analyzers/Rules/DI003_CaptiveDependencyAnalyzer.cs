@@ -155,7 +155,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             var methodName = methodSymbol.Name;
             bool isKeyedResolution = methodName == "GetKeyedService" || methodName == "GetRequiredKeyedService";
 
-            if (methodName != "GetService" && methodName != "GetRequiredService" && !isKeyedResolution)
+            if (methodName != "GetService" && methodName != "GetRequiredService" && methodName != "GetServices" && !isKeyedResolution)
             {
                 if (FactoryAnalysis.TryGetActivatorUtilitiesImplementationType(
                         invocation,
@@ -307,7 +307,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         {
             foreach (var parameter in constructor.Parameters)
             {
-                var parameterType = parameter.Type;
+                var parameterType = UnwrapEnumerableDependency(parameter.Type);
                 var (key, isKeyed) = GetServiceKey(parameter);
                 var dependencyLifetime = registrationCollector.GetLifetime(parameterType, key, isKeyed);
 
@@ -348,8 +348,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         {
             foreach (var parameter in constructor.Parameters)
             {
+                var parameterType = UnwrapEnumerableDependency(parameter.Type);
                 var (key, isKeyed) = GetServiceKey(parameter);
-                var dependencyLifetime = registrationCollector.GetLifetime(parameter.Type, key, isKeyed);
+                var dependencyLifetime = registrationCollector.GetLifetime(parameterType, key, isKeyed);
                 if (dependencyLifetime is null ||
                     !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
                 {
@@ -361,7 +362,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     registration,
                     diagnosticLocation,
                     registration.ServiceType.Name,
-                    parameter.Type,
+                    parameterType,
                     dependencyLifetime.Value,
                     key,
                     isKeyed,
@@ -418,6 +419,17 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
         KeyedServiceHelpers.GetServiceKey(parameter);
+
+    private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol dependencyType)
+    {
+        if (dependencyType is INamedTypeSymbol { IsGenericType: true } namedType &&
+            namedType.ConstructedFrom.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+        {
+            return namedType.TypeArguments[0];
+        }
+
+        return dependencyType;
+    }
 
     private static bool IsCaptiveDependency(ServiceLifetime consumerLifetime, ServiceLifetime dependencyLifetime)
     {

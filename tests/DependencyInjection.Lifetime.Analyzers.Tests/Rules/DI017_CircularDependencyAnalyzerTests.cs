@@ -496,6 +496,44 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task CircularDependency_OnAmbiguousEquallyGreedyConstructors_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafeA { }
+            public interface ISafeB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b, ISafeA safeA) { }
+                public ServiceA(ISafeA safeA, ISafeB safeB) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class SafeA : ISafeA { }
+            public class SafeB : ISafeB { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                    services.AddScoped<ISafeA, SafeA>();
+                    services.AddScoped<ISafeB, SafeB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task NoRegistrations_DoesNotReport()
     {
         var source = Usings + """

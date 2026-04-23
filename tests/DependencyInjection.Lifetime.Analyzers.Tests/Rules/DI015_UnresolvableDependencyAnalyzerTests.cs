@@ -1223,6 +1223,41 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredService_WithFrameworkDependencyAndNumericStrictMode_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(ILoggerFactory loggerFactory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI015.assume_framework_services_registered = 0
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(52, 9)
+                .WithArguments("IMyService", "ILoggerFactory"));
+    }
+
+    [Fact]
     public async Task RegisteredService_WithFrameworkDependencyAndTreeOverride_NoDiagnostic()
     {
         var source = Usings + """

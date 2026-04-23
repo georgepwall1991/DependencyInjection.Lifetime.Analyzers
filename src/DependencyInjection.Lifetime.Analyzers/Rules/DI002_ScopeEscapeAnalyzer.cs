@@ -155,6 +155,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             {
                 ReportDiagnostic(context, invocation, propertySymbol.Name, reportedSpans);
             }
+
+            if (invocation.Parent is AssignmentExpressionSyntax parameterAssignment &&
+                semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameterSymbol &&
+                IsEscapingParameter(parameterSymbol))
+            {
+                ReportDiagnostic(context, invocation, parameterSymbol.Name, reportedSpans);
+            }
         }
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
@@ -186,8 +193,21 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             {
                 ReportDiagnostic(context, propertySource, property.Name, reportedSpans);
             }
+
+            if (node is AssignmentExpressionSyntax parameterAssignment &&
+                parameterAssignment.Right is IdentifierNameSyntax parameterValueId &&
+                semanticModel.GetSymbolInfo(parameterValueId).Symbol is ILocalSymbol parameterValueSymbol &&
+                serviceVariables.TryGetValue(parameterValueSymbol, out var parameterSource) &&
+                semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameter &&
+                IsEscapingParameter(parameter))
+            {
+                ReportDiagnostic(context, parameterSource, parameter.Name, reportedSpans);
+            }
         }
     }
+
+    private static bool IsEscapingParameter(IParameterSymbol parameter) =>
+        parameter.RefKind is RefKind.Ref or RefKind.Out;
 
     private static HashSet<ILocalSymbol> CollectScopeVariables(
         SyntaxNode executableBody,

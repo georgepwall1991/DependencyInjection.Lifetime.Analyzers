@@ -83,6 +83,26 @@ public class PerformanceRegressionTests
     }
 
     /// <summary>
+    /// Verifies DI017 also scales when many registrations share the same
+    /// transitive dependencies. This catches regressions that revisit the
+    /// same known-safe graph tails for each root registration.
+    /// </summary>
+    [Fact]
+    public async Task CycleDetection_DiamondPattern_CompletesWithinTimeout()
+    {
+        const int serviceCount = 150;
+        var source = GenerateDiamondDependencySource(serviceCount);
+
+        var sw = Stopwatch.StartNew();
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        sw.Stop();
+
+        _output.WriteLine($"DI017 diamond pattern ({serviceCount} services) completed in {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 30_000,
+            $"DI017 diamond pattern took {sw.ElapsedMilliseconds}ms, exceeding 30s timeout");
+    }
+
+    /// <summary>
     /// Generates source with N services, each depending on a subset of previously
     /// defined services (no cycles). Services are named Service0..ServiceN-1.
     /// </summary>
