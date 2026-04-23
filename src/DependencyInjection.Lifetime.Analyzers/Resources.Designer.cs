@@ -57,6 +57,20 @@ internal static class Resources
     internal static string DI002_FixTitle_Suppress =>
         ResourceManager.GetString("DI002_FixTitle_Suppress", Culture) ?? "Suppress with #pragma";
 
+    // DI004: Use After Dispose
+
+    /// <summary>
+    /// Looks up a localized string: Move use into scope
+    /// </summary>
+    internal static string DI004_FixTitle_MoveUseIntoScope =>
+        ResourceManager.GetString("DI004_FixTitle_MoveUseIntoScope", Culture) ?? "Move use into scope";
+
+    /// <summary>
+    /// Looks up a localized string: Suppress with #pragma
+    /// </summary>
+    internal static string DI004_FixTitle_Suppress =>
+        ResourceManager.GetString("DI004_FixTitle_Suppress", Culture) ?? "Suppress with #pragma";
+
     // DI003: Captive Dependency
 
     /// <summary>

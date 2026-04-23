@@ -69,9 +69,9 @@ Strong runtime-correctness rule. Instance-backed registrations are explicitly ex
 
 ### DI004 -- Use After Dispose (Warning)
 
-**Analyzer: 9/10** | Tests: 29
+**Analyzer: 10/10** | Tests: 43 | **Fixer: 8/10** | Fix Tests: 4
 
-Strong after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, and `GetServices<T>()` collections enumerated after disposal while keeping post-disposal reasoning inside the owning executable boundary. No code fix -- the correct resolution is context-dependent.
+Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Fixer moves simple immediate uses into the scope and offers pragma suppression for context-dependent cases.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -173,7 +173,7 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
 | DI015 (Unresolvable Dependency) | 10 | 8 | Low -- solid registration generation |
 
-**Rules without code fixes:** DI004, DI007, DI010, DI011, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
+**Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
 ## Infrastructure Health
 
@@ -216,7 +216,6 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 | #33 | DI014 `IsAsyncMethod` checked method before nearest callable, wrong `using`/`await using` in nested async | Medium | DI014 |
 | #34 | DI002 fixer didn't check for existing TODO, causing duplicate TODOs on iterative application | Low | DI002 |
 | Current | DI017 reported speculative cycles for ambiguous equally greedy constructor sets | Medium | DI017 |
-| Current | DI004 missed scoped collections from `GetServices<T>()` enumerated after scope disposal | Medium | DI004 |
 | Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
 
 ## Watchlist
@@ -229,5 +228,5 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 ## Recommended Next Actions
 
-1. **Consider code fixes for high-value analyzer-only rules** -- DI004 (use after dispose) remains warning-level and context-dependent
-2. **Expand DI002 fixer sink coverage** -- lambda capture and deeper aliasing sinks remain context-sensitive
+1. **Expand DI002 fixer sink coverage** -- lambda capture and deeper aliasing sinks remain context-sensitive
+2. **Keep growing DI004 fixer coverage** -- only simple immediate moves are automatic; architectural fixes remain suppression/manual-refactor territory

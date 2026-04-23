@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.5.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.5.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.5.2" />
 ```
 
 Then reference it from the project file:
@@ -141,7 +141,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI001](#di001-service-scope-not-disposed) | Service scope not disposed | Warning | Yes |
 | [DI002](#di002-scoped-service-escapes-scope) | Scoped service escapes scope | Warning | Yes |
 | [DI003](#di003-captive-dependency) | Captive dependency | Warning | Yes |
-| [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | No |
+| [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | Yes |
 | [DI005](#di005-use-createasyncscope-in-async-methods) | Use `CreateAsyncScope` in async methods | Warning | Yes |
 | [DI006](#di006-static-iserviceprovider-cache) | Static `IServiceProvider` cache | Warning | Yes |
 | [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Info | No |
@@ -276,7 +276,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scoped collections from `GetServices<T>()` enumerated after disposal, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()`, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -303,7 +303,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** No. Usually needs manual refactor.
+**Code Fix:** Yes. Moves simple immediate uses back into the owning scope when safe, or adds a narrow pragma suppression for context-dependent cases.
 
 ---
 

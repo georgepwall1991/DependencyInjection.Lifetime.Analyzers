@@ -14,7 +14,7 @@ For the latest full rule content, see:
 | [DI001](#di001-service-scope-not-disposed) | Service scope not disposed | Warning | Yes |
 | [DI002](#di002-scoped-service-escapes-scope) | Scoped service escapes scope | Warning | Yes |
 | [DI003](#di003-captive-dependency) | Captive dependency | Warning | Yes |
-| [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | No |
+| [DI004](#di004-service-used-after-scope-disposed) | Service used after scope disposed | Warning | Yes |
 | [DI005](#di005-use-createasyncscope-in-async-methods) | Use `CreateAsyncScope` in async methods | Warning | Yes |
 | [DI006](#di006-static-iserviceprovider-cache) | Static `IServiceProvider` cache | Warning | Yes |
 | [DI007](#di007-service-locator-anti-pattern) | Service locator anti-pattern | Info | No |
@@ -149,7 +149,7 @@ public sealed class SingletonService : ISingletonService
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()`, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -176,7 +176,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** No. Usually needs manual refactor.
+**Code Fix:** Yes. Moves simple immediate uses back into the owning scope when safe, or adds a narrow pragma suppression for context-dependent cases.
 
 ---
 
