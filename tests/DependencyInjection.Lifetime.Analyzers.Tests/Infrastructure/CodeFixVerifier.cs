@@ -85,9 +85,35 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     /// <param name="codeActionEquivalenceKey">The equivalence key of the code action to apply.</param>
     public static async Task VerifyCodeFixAsync(string source, DiagnosticResult expected, string fixedSource, string codeActionEquivalenceKey)
     {
+        await VerifyCodeFixAsync(source, [expected], fixedSource, codeActionEquivalenceKey);
+    }
+
+    /// <summary>
+    /// Verifies a specific code fix by equivalence key with multiple expected diagnostics.
+    /// </summary>
+    public static async Task VerifyCodeFixAsync(string source, DiagnosticResult[] expected, string fixedSource, string codeActionEquivalenceKey)
+    {
         var test = CreateTest(source, fixedSource);
-        test.ExpectedDiagnostics.Add(expected);
+        test.ExpectedDiagnostics.AddRange(expected);
         test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
+        await test.RunAsync();
+    }
+
+    /// <summary>
+    /// Verifies a specific code fix by equivalence key with multiple expected diagnostics
+    /// and explicit fixed-state diagnostics.
+    /// </summary>
+    public static async Task VerifyCodeFixAsync(
+        string source,
+        DiagnosticResult[] expected,
+        string fixedSource,
+        string codeActionEquivalenceKey,
+        params DiagnosticResult[] fixedStateDiagnostics)
+    {
+        var test = CreateTest(source, fixedSource);
+        test.ExpectedDiagnostics.AddRange(expected);
+        test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
+        test.FixedState.ExpectedDiagnostics.AddRange(fixedStateDiagnostics);
         await test.RunAsync();
     }
 
@@ -124,6 +150,7 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
         var test = CreateTest(source, source);
         test.ExpectedDiagnostics.Add(expected);
         test.CodeFixTestBehaviors = CodeFixTestBehaviors.SkipFixAllCheck;
+        test.CodeFixTestBehaviors |= CodeFixTestBehaviors.SkipLocalDiagnosticCheck;
         await test.RunAsync();
     }
 

@@ -22,8 +22,8 @@ For the latest full rule content, see:
 | [DI009](#di009-open-generic-captive-dependency) | Open generic captive dependency | Warning | Yes |
 | [DI010](#di010-constructor-over-injection) | Constructor over-injection | Info | No |
 | [DI011](#di011-iserviceprovider-injection) | `IServiceProvider` injection | Info | No |
-| [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | No |
-| [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | No |
+| [DI012](#di012-conditional-registration-misuse) | Conditional/duplicate registration misuse | Info | Yes |
+| [DI013](#di013-implementation-type-mismatch) | Implementation type mismatch | Error | Yes |
 | [DI014](#di014-root-service-provider-not-disposed) | Root provider not disposed | Warning | Yes |
 | [DI015](#di015-unresolvable-dependency) | Unresolvable dependency | Warning | Yes |
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
@@ -472,13 +472,13 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 **Better pattern:** decide and signal intent clearly: `TryAdd*` first, or explicit override with comments/tests.
 
-**Code Fix:** No.
+**Code Fix:** Yes for ignored `TryAdd*` calls that are standalone statements; the fixer removes the redundant ignored registration. Duplicate override cases remain manual.
 
 ---
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid `typeof` service/implementation pairs that compile but fail at runtime.
+**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 
@@ -500,7 +500,7 @@ public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 ```
 
-**Code Fix:** No.
+**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation.
 
 ---
 

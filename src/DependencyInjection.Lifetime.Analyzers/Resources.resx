@@ -120,6 +120,17 @@
     <value>Remove ignored TryAdd registration</value>
   </data>
 
+  <!-- DI013: Implementation Type Mismatch -->
+  <data name="DI013_FixTitle_RemoveInvalidRegistration" xml:space="preserve">
+    <value>Remove invalid registration</value>
+  </data>
+  <data name="DI013_FixTitle_UseImplementation" xml:space="preserve">
+    <value>Use compatible implementation '{0}'</value>
+  </data>
+  <data name="DI013_FixTitle_UseServiceType" xml:space="preserve">
+    <value>Change service type to '{0}'</value>
+  </data>
+
   <!-- DI015: Unresolvable Dependency -->
   <data name="DI015_FixTitle_AddMissingRegistration" xml:space="preserve">
     <value>Add missing registration</value>

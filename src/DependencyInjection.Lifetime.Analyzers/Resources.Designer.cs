@@ -141,6 +141,26 @@ internal static class Resources
     internal static string DI012_FixTitle_RemoveIgnoredRegistration =>
         ResourceManager.GetString("DI012_FixTitle_RemoveIgnoredRegistration", Culture) ?? "Remove ignored TryAdd registration";
 
+    // DI013: Implementation Type Mismatch
+
+    /// <summary>
+    /// Looks up a localized string: Remove invalid registration
+    /// </summary>
+    internal static string DI013_FixTitle_RemoveInvalidRegistration =>
+        ResourceManager.GetString("DI013_FixTitle_RemoveInvalidRegistration", Culture) ?? "Remove invalid registration";
+
+    /// <summary>
+    /// Looks up a localized string: Use compatible implementation '{0}'
+    /// </summary>
+    internal static string DI013_FixTitle_UseImplementation =>
+        ResourceManager.GetString("DI013_FixTitle_UseImplementation", Culture) ?? "Use compatible implementation '{0}'";
+
+    /// <summary>
+    /// Looks up a localized string: Change service type to '{0}'
+    /// </summary>
+    internal static string DI013_FixTitle_UseServiceType =>
+        ResourceManager.GetString("DI013_FixTitle_UseServiceType", Culture) ?? "Change service type to '{0}'";
+
     // DI015: Unresolvable Dependency
 
     /// <summary>

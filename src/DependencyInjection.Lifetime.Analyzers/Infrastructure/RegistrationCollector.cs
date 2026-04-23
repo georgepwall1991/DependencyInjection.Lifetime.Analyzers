@@ -682,6 +682,11 @@ public sealed class RegistrationCollector
             return (serviceType, implementationType, factoryExpression, hasImplementationInstance, key);
         }
 
+        if (TryExtractNonGenericOperationArguments(invocation, semanticModel, isKeyed, out var operationServiceType, out var operationImplementationType, out var operationHasImplementationInstance, out var operationKey))
+        {
+            return (operationServiceType, operationImplementationType, factoryExpression, operationHasImplementationInstance, operationKey);
+        }
+
         // Pattern 2: Non-generic with Type parameters AddXxx(typeof(TService)) or AddXxx(typeof(TService), typeof(TImpl))
         var typeofArgs = new List<INamedTypeSymbol>();
         INamedTypeSymbol? instanceImplementationType = null;
@@ -733,6 +738,80 @@ public sealed class RegistrationCollector
         }
 
         return (null, null, null, false, key);
+    }
+
+    private static bool TryExtractNonGenericOperationArguments(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        bool isKeyed,
+        out INamedTypeSymbol? serviceType,
+        out INamedTypeSymbol? implementationType,
+        out bool hasImplementationInstance,
+        out object? key)
+    {
+        serviceType = null;
+        implementationType = null;
+        hasImplementationInstance = false;
+        key = null;
+
+        if (semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation)
+        {
+            return false;
+        }
+
+        foreach (var argument in invocationOperation.Arguments)
+        {
+            var parameterName = argument.Parameter?.Name;
+            if (string.IsNullOrEmpty(parameterName))
+            {
+                continue;
+            }
+
+            if (argument.Value.Syntax is not ExpressionSyntax expression)
+            {
+                continue;
+            }
+
+            switch (parameterName)
+            {
+                case "serviceType":
+                    serviceType = ExtractTypeOfArgument(expression, semanticModel);
+                    break;
+
+                case "implementationType":
+                    implementationType = ExtractTypeOfArgument(expression, semanticModel);
+                    break;
+
+                case "implementationInstance":
+                    implementationType = ExtractImplementationInstanceType(expression, semanticModel);
+                    hasImplementationInstance = implementationType is not null;
+                    break;
+
+                case "serviceKey":
+                case "key":
+                    if (isKeyed)
+                    {
+                        key = ExtractConstantValue(expression, semanticModel);
+                    }
+                    break;
+            }
+        }
+
+        return serviceType is not null;
+    }
+
+    private static INamedTypeSymbol? ExtractTypeOfArgument(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesizedExpression)
+        {
+            expression = parenthesizedExpression.Expression;
+        }
+
+        return expression is TypeOfExpressionSyntax typeOfExpression
+            ? semanticModel.GetTypeInfo(typeOfExpression.Type).Type as INamedTypeSymbol
+            : null;
     }
 
     private static bool TryGetImplementationInstanceType(
