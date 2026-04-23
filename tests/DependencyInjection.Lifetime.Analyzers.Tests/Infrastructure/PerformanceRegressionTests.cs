@@ -102,6 +102,21 @@ public class PerformanceRegressionTests
             $"DI017 diamond pattern took {sw.ElapsedMilliseconds}ms, exceeding 30s timeout");
     }
 
+    [Fact]
+    public async Task UseAfterDispose_ManyExecutableRoots_CompletesWithinTimeout()
+    {
+        const int methodCount = 150;
+        var source = GenerateDI004ManyExecutableRootsSource(methodCount);
+
+        var sw = Stopwatch.StartNew();
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        sw.Stop();
+
+        _output.WriteLine($"DI004 analyzed {methodCount} executable roots in {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 30_000,
+            $"DI004 took {sw.ElapsedMilliseconds}ms for {methodCount} executable roots, exceeding 30s timeout");
+    }
+
     /// <summary>
     /// Generates source with N services, each depending on a subset of previously
     /// defined services (no cycles). Services are named Service0..ServiceN-1.
@@ -147,6 +162,41 @@ public class PerformanceRegressionTests
             sb.AppendLine($"        services.AddScoped<IService{i}, Service{i}>();");
         }
 
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+
+        return sb.ToString();
+    }
+
+    private static string GenerateDI004ManyExecutableRootsSource(int methodCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+        sb.AppendLine();
+        sb.AppendLine("public interface IMyService { void DoWork(); }");
+        sb.AppendLine("public sealed class MyService : IMyService { public void DoWork() { } }");
+        sb.AppendLine("public sealed class Runner");
+        sb.AppendLine("{");
+        sb.AppendLine("    private readonly IServiceScopeFactory _scopeFactory;");
+        sb.AppendLine("    public Runner(IServiceScopeFactory scopeFactory) { _scopeFactory = scopeFactory; }");
+
+        for (var i = 0; i < methodCount; i++)
+        {
+            sb.AppendLine($"    public void Run{i}()");
+            sb.AppendLine("    {");
+            sb.AppendLine("        using var scope = _scopeFactory.CreateScope();");
+            sb.AppendLine("        var provider = scope.ServiceProvider;");
+            sb.AppendLine("        var service = provider.GetRequiredService<IMyService>();");
+            sb.AppendLine("        service.DoWork();");
+            sb.AppendLine("    }");
+        }
+
+        sb.AppendLine("}");
+        sb.AppendLine("public sealed class Startup");
+        sb.AppendLine("{");
+        sb.AppendLine("    public void ConfigureServices(IServiceCollection services)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        services.AddScoped<IMyService, MyService>();");
         sb.AppendLine("    }");
         sb.AppendLine("}");
 

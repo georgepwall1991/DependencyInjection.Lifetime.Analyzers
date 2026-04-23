@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-04-23
+
+### Changed
+
+- **DI004 Scope-State Hardening**: Use-after-dispose analysis now recognizes explicit `Dispose()` / `DisposeAsync()`, conditional/member access, field/property/parameter sinks, deconstruction, `await foreach`, keyed constant resolutions, mixed `GetServices<T>()` registrations, and high-confidence deferred delegate captures while keeping unknown or dynamic lifetimes silent.
+- **DI004 False-Positive Reduction**: Post-disposal service and delegate reassignments now clear stale tracked state before later use, including delegate aliases and delegate overwrites after the owning scope has ended.
+- **DI004 Code Fixes**: Added safe local assists to move simple immediate uses back into the owning `using` block and to add narrow `#pragma` suppression for context-dependent cases.
+- **DI004 Regression Guardrails**: Added focused analyzer, code-fix, inventory, and performance coverage for the expanded DI004 behavior.
+
 ## [2.5.1] - 2026-04-23
 
 ### Changed

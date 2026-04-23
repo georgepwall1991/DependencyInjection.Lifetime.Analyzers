@@ -72,6 +72,14 @@
     <value>Add 'await using' statement</value>
   </data>
 
+  <!-- DI004: Use After Dispose -->
+  <data name="DI004_FixTitle_MoveUseIntoScope" xml:space="preserve">
+    <value>Move use into scope</value>
+  </data>
+  <data name="DI004_FixTitle_Suppress" xml:space="preserve">
+    <value>Suppress with #pragma</value>
+  </data>
+
   <!-- DI003: Captive Dependency -->
   <data name="DI003_FixTitle_ChangeToScoped" xml:space="preserve">
     <value>Change to Scoped lifetime</value>
