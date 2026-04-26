@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -107,6 +108,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         var providerAliases = CollectScopeProviderAliases(executableBody, semanticModel, scopeVariables);
         var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
+        var capturedDelegateVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         var reportedSpans = new HashSet<TextSpan>();
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
@@ -167,41 +169,82 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             TrackServiceAlias(node, semanticModel, serviceVariables);
+            TrackDelegateCapture(node, semanticModel, serviceVariables, capturedDelegateVariables);
 
             if (node is ReturnStatementSyntax returnStmt &&
-                returnStmt.Expression is IdentifierNameSyntax returnId &&
-                semanticModel.GetSymbolInfo(returnId).Symbol is ILocalSymbol returnSymbol &&
-                serviceVariables.TryGetValue(returnSymbol, out var sourceInvocation))
+                TryGetTrackedLocalReference(returnStmt.Expression, semanticModel, serviceVariables, out var sourceInvocation))
             {
                 ReportDiagnostic(context, sourceInvocation, "return", reportedSpans);
             }
 
+            if (node is ReturnStatementSyntax delegateReturnStmt &&
+                TryGetCapturedDelegateSource(
+                    delegateReturnStmt.Expression,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var delegateReturnSource))
+            {
+                ReportDiagnostic(context, delegateReturnSource, "return", reportedSpans);
+            }
+
             if (node is AssignmentExpressionSyntax fieldAssignment &&
-                fieldAssignment.Right is IdentifierNameSyntax valueId &&
-                semanticModel.GetSymbolInfo(valueId).Symbol is ILocalSymbol valueSymbol &&
-                serviceVariables.TryGetValue(valueSymbol, out var source) &&
+                TryGetTrackedLocalReference(fieldAssignment.Right, semanticModel, serviceVariables, out var source) &&
                 semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol field)
             {
                 ReportDiagnostic(context, source, field.Name, reportedSpans);
             }
 
+            if (node is AssignmentExpressionSyntax delegateFieldAssignment &&
+                TryGetCapturedDelegateSource(
+                    delegateFieldAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var delegateFieldSource) &&
+                semanticModel.GetSymbolInfo(delegateFieldAssignment.Left).Symbol is IFieldSymbol delegateField)
+            {
+                ReportDiagnostic(context, delegateFieldSource, delegateField.Name, reportedSpans);
+            }
+
             if (node is AssignmentExpressionSyntax propertyAssignment &&
-                propertyAssignment.Right is IdentifierNameSyntax propertyValueId &&
-                semanticModel.GetSymbolInfo(propertyValueId).Symbol is ILocalSymbol propertyValueSymbol &&
-                serviceVariables.TryGetValue(propertyValueSymbol, out var propertySource) &&
+                TryGetTrackedLocalReference(propertyAssignment.Right, semanticModel, serviceVariables, out var propertySource) &&
                 semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol property)
             {
                 ReportDiagnostic(context, propertySource, property.Name, reportedSpans);
             }
 
+            if (node is AssignmentExpressionSyntax delegatePropertyAssignment &&
+                TryGetCapturedDelegateSource(
+                    delegatePropertyAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var delegatePropertySource) &&
+                semanticModel.GetSymbolInfo(delegatePropertyAssignment.Left).Symbol is IPropertySymbol delegateProperty)
+            {
+                ReportDiagnostic(context, delegatePropertySource, delegateProperty.Name, reportedSpans);
+            }
+
             if (node is AssignmentExpressionSyntax parameterAssignment &&
-                parameterAssignment.Right is IdentifierNameSyntax parameterValueId &&
-                semanticModel.GetSymbolInfo(parameterValueId).Symbol is ILocalSymbol parameterValueSymbol &&
-                serviceVariables.TryGetValue(parameterValueSymbol, out var parameterSource) &&
+                TryGetTrackedLocalReference(parameterAssignment.Right, semanticModel, serviceVariables, out var parameterSource) &&
                 semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameter &&
                 IsEscapingParameter(parameter))
             {
                 ReportDiagnostic(context, parameterSource, parameter.Name, reportedSpans);
+            }
+
+            if (node is AssignmentExpressionSyntax delegateParameterAssignment &&
+                TryGetCapturedDelegateSource(
+                    delegateParameterAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var delegateParameterSource) &&
+                semanticModel.GetSymbolInfo(delegateParameterAssignment.Left).Symbol is IParameterSymbol delegateParameter &&
+                IsEscapingParameter(delegateParameter))
+            {
+                ReportDiagnostic(context, delegateParameterSource, delegateParameter.Name, reportedSpans);
             }
         }
     }
@@ -549,6 +592,133 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
             serviceVariables[leftLocal] = invocation;
         }
+    }
+
+    private static void TrackDelegateCapture(
+        SyntaxNode node,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> capturedDelegateVariables)
+    {
+        if (node is LocalDeclarationStatementSyntax localDeclaration)
+        {
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol delegateLocal)
+                {
+                    continue;
+                }
+
+                if (TryGetCapturedDelegateSource(
+                    variable.Initializer?.Value,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var sourceInvocation))
+                {
+                    capturedDelegateVariables[delegateLocal] = sourceInvocation;
+                }
+            }
+        }
+
+        if (node is AssignmentExpressionSyntax assignment &&
+            assignment.Left is IdentifierNameSyntax leftIdentifier &&
+            semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol assignedDelegate)
+        {
+            if (TryGetCapturedDelegateSource(
+                assignment.Right,
+                semanticModel,
+                serviceVariables,
+                capturedDelegateVariables,
+                out var sourceInvocation))
+            {
+                capturedDelegateVariables[assignedDelegate] = sourceInvocation;
+                return;
+            }
+
+            capturedDelegateVariables.Remove(assignedDelegate);
+        }
+    }
+
+    private static bool TryGetTrackedLocalReference(
+        ExpressionSyntax? expression,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        out InvocationExpressionSyntax sourceInvocation)
+    {
+        sourceInvocation = null!;
+
+        if (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return TryGetTrackedLocalReference(parenthesized.Expression, semanticModel, serviceVariables, out sourceInvocation);
+        }
+
+        if (expression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol &&
+            serviceVariables.TryGetValue(localSymbol, out sourceInvocation))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCapturedDelegateSource(
+        ExpressionSyntax? expression,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> capturedDelegateVariables,
+        out InvocationExpressionSyntax sourceInvocation)
+    {
+        sourceInvocation = null!;
+
+        if (expression is null)
+        {
+            return false;
+        }
+
+        if (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return TryGetCapturedDelegateSource(
+                parenthesized.Expression,
+                semanticModel,
+                serviceVariables,
+                capturedDelegateVariables,
+                out sourceInvocation);
+        }
+
+        if (expression is AnonymousFunctionExpressionSyntax anonymousFunction)
+        {
+            return TryFindCapturedServiceSource(anonymousFunction, semanticModel, serviceVariables, out sourceInvocation);
+        }
+
+        if (expression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol &&
+            capturedDelegateVariables.TryGetValue(localSymbol, out sourceInvocation))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindCapturedServiceSource(
+        AnonymousFunctionExpressionSyntax anonymousFunction,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        out InvocationExpressionSyntax sourceInvocation)
+    {
+        foreach (var identifier in anonymousFunction.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol &&
+                serviceVariables.TryGetValue(localSymbol, out sourceInvocation))
+            {
+                return true;
+            }
+        }
+
+        sourceInvocation = null!;
+        return false;
     }
 
     private static bool IsServiceResolutionMethod(IMethodSymbol methodSymbol, WellKnownTypes wellKnownTypes)

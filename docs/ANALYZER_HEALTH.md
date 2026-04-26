@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI004 fixer safety pass)
-**Version:** 2.8.1
-**Test result:** 761/761 passing.
+**Date:** 2026-04-26 (DI002 delegate escape pass)
+**Version:** 2.8.2
+**Test result:** 768/768 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -11,7 +11,7 @@
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
-| DI002 | Scope Escape | Warn | 29 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property/out/ref sinks |
+| DI002 | Scope Escape | Warn | 33 | 6 | 9.5 | 8 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks |
 | DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
 | DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
@@ -32,7 +32,7 @@
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.3/10.
+**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.4/10.
 
 ## Scoring Methodology
 
@@ -56,11 +56,11 @@ Operation-based tracking covers lambdas, fields, conditionals, nested scopes, an
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 9/10** | Tests: 29 | **Fixer: 7/10** | Fix Tests: 5
+**Analyzer: 9.5/10** | Tests: 33 | **Fixer: 8/10** | Fix Tests: 6
 
-Strong analyzer after executable-boundary hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, and out/ref parameter escape sinks. Remaining analyzer debt is conservative sink breadth, not entry coverage.
+Strong analyzer after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks.
 
-Post-hardening: both `DI002_AddTodo` and `DI002_Suppress` actions are now tested. Fixed a duplicate TODO bug where the fixer would insert a new TODO comment on every iterative application because it didn't check for existing TODOs. Added property assignment sink coverage for suppress action. The fixer does not inspect registration shapes (it operates on statement-level trivia). Low blast radius since the fixer only inserts suppression/comment trivia.
+The fixer intentionally offers pragma suppression only, because moving scoped services across ownership boundaries is context-dependent. Suppression coverage now spans direct returns, field/property assignments, alias returns, ref/out parameter escapes, and captured-delegate escapes while keeping the transformation trivia-only and low blast radius.
 
 ### DI003 -- Captive Dependency (Warning)
 
@@ -169,7 +169,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Fixer | Fix Tests | Score | Risk Assessment |
 |-------|-----------|-------|-----------------|
 | DI001 (Scope Disposal) | 11 | 8.5 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates) |
-| DI002 (Scope Escape) | 5 | 7 | Low -- both actions tested, duplicate TODO bug fixed, property sink covered |
+| DI002 (Scope Escape) | 6 | 8 | Low -- pragma-only suppression now covers direct, alias, ref/out, property, and captured-delegate diagnostics |
 | DI003 (Captive Dependency) | 8 | 8 | Low -- solid shape coverage |
 | DI004 (Use After Dispose) | 8 | 8.5 | Low -- move fix is now gated to owning-scope immediate invocations, with unsafe escape/adjacent-scope shapes suppressed |
 | DI005 (Async Scope) | 9 | 8 | Low -- narrow transformation, well-tested |
@@ -202,14 +202,14 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 761 |
-| Analyzer tests | 585 |
-| Code fix tests | 98 |
+| Total tests | 768 |
+| Analyzer tests | 589 |
+| Code fix tests | 101 |
 | Infrastructure tests | 78 |
 | Analyzer mean score | 8.8/10 |
-| Fixer mean score | 8.3/10 |
+| Fixer mean score | 8.4/10 |
 | Rules at 9+ | 12/19 (63%) |
-| Fixers at 8+ | 11/12 (92%) |
+| Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
 | Skipped tests | 0 |
@@ -226,16 +226,16 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI017 reported speculative cycles for ambiguous equally greedy constructor sets | Medium | DI017 |
 | Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
 | Current | DI004 move fix could be offered for an unrelated immediately preceding `using` block or for an escape assignment | Medium | DI004 |
+| Current | DI002 missed scoped services captured by delegates that escaped through later return, field, property, or ref/out sinks | Medium | DI002 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| DI002 fixer | Score 7/10 — lowest fixer score but low blast radius (trivia-only) | Low |
 | DI001 analyzer | Disposal edge cases remain the most plausible false-positive source | Low |
 | DI014 analyzer | Root-provider ownership edge cases | Low |
 
 ## Recommended Next Actions
 
-1. **Expand DI002 fixer sink coverage** -- lambda capture and deeper aliasing sinks remain context-sensitive
-2. **Review DI001 disposal proofs** -- conditional paths and exception-flow disposal proofs remain the most plausible analyzer false-positive source
+1. **Review DI001 disposal proofs** -- conditional paths and exception-flow disposal proofs remain the most plausible analyzer false-positive source
+2. **Review DI014 root-provider ownership** -- root-provider ownership edge cases remain the next warning-level precision target

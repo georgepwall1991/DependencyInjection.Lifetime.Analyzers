@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-04-26
+
+### Changed
+
+- **DI002 Delegate Escape Coverage**: DI002 now reports scoped services captured by delegates that later escape through returns, fields, properties, or `ref` / `out` parameters, while staying quiet when the delegate is reassigned before escaping.
+- **DI002 Fixer Regression Coverage**: Expanded pragma-suppression coverage for alias-return, `ref` parameter, and captured-delegate escape diagnostics so the fixer continues to suppress the originating resolution statement safely.
+
 ## [2.8.1] - 2026-04-26
 
 ### Changed
