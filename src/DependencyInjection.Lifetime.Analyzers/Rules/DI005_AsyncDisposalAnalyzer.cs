@@ -132,6 +132,11 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
                 case AnonymousMethodExpressionSyntax anonymousMethod when anonymousMethod.AsyncKeyword != default:
                     return anonymousMethod;
 
+                // Top-level statements do not have an async keyword, but a file
+                // with top-level await is lowered to an async entry point.
+                case GlobalStatementSyntax globalStatement when IsAsyncTopLevelStatement(globalStatement):
+                    return globalStatement;
+
                 // If we reach a non-async method boundary, stop searching
                 case MethodDeclarationSyntax:
                 case LocalFunctionStatementSyntax:
@@ -152,8 +157,59 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
         {
             MethodDeclarationSyntax method => method.Identifier.Text,
             LocalFunctionStatementSyntax localFunc => localFunc.Identifier.Text,
+            GlobalStatementSyntax => "top-level statements",
             _ => string.Empty // Anonymous methods and lambdas don't have names
         };
+    }
+
+    private static bool IsAsyncTopLevelStatement(GlobalStatementSyntax globalStatement)
+    {
+        if (globalStatement.Parent is not CompilationUnitSyntax compilationUnit)
+        {
+            return false;
+        }
+
+        foreach (var member in compilationUnit.Members)
+        {
+            if (member is GlobalStatementSyntax statement &&
+                ContainsTopLevelAwait(statement.Statement))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsTopLevelAwait(SyntaxNode node)
+    {
+        foreach (var descendant in node.DescendantNodesAndSelf(ShouldDescendIntoTopLevelFlow))
+        {
+            switch (descendant)
+            {
+                case AwaitExpressionSyntax:
+                    return true;
+
+                case LocalDeclarationStatementSyntax localDeclaration when localDeclaration.AwaitKeyword != default:
+                    return true;
+
+                case UsingStatementSyntax usingStatement when usingStatement.AwaitKeyword != default:
+                    return true;
+
+                case ForEachStatementSyntax forEachStatement when forEachStatement.AwaitKeyword != default:
+                    return true;
+
+                case ForEachVariableStatementSyntax forEachVariableStatement when forEachVariableStatement.AwaitKeyword != default:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldDescendIntoTopLevelFlow(SyntaxNode node)
+    {
+        return node is not (LocalFunctionStatementSyntax or LambdaExpressionSyntax or AnonymousMethodExpressionSyntax);
     }
 
     private static bool IsServiceProviderServiceExtensionsCreateScope(ITypeSymbol containingType, IMethodSymbol method)

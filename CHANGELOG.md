@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.6] - 2026-04-26
+
+### Changed
+
+- **DI005 Top-Level Async Coverage**: DI005 now treats top-level programs that use `await` as async flows, reporting `CreateScope()` and offering the safe `await using` / `CreateAsyncScope()` fix for using declarations.
+- **DI005 Regression Guardrails**: Added top-level report/no-report coverage so nested async local functions or lambdas do not make otherwise synchronous top-level scope creation noisy.
+
 ## [2.8.5] - 2026-04-26
 
 ### Changed
