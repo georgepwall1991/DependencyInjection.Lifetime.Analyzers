@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.7] - 2026-04-26
+
+### Changed
+
+- **DI008 Named Type-Argument Precision**: DI008 now maps `serviceType:` and `implementationType:` by Roslyn parameter binding for non-generic `AddTransient(...)` / `AddKeyedTransient(...)` overloads, so out-of-order named arguments report the disposable implementation instead of trusting source order.
+- **DI008 Factory Guardrails**: Keyed transient factory registrations with named arguments out of order now stay quiet, preserving the rule's intentional factory-registration boundary.
+
 ## [2.8.6] - 2026-04-26
 
 ### Changed

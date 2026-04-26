@@ -249,6 +249,54 @@ public class DI008_DisposableTransientCodeFixTests
             .VerifyCodeFixNotOfferedAsync(source, expected, "DI008_UseFactory");
     }
 
+    [Fact]
+    public async Task CodeFix_ChangesToScoped_TypeofNamedArgumentsOutOfOrder()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient(
+                        implementationType: typeof(DisposableService),
+                        serviceType: typeof(IMyService));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped(
+                        implementationType: typeof(DisposableService),
+                        serviceType: typeof(IMyService));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(13, 9, 15, 45)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToScoped");
+    }
+
     #region Keyed Services (DI 8.0.0)
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
@@ -121,25 +122,14 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
 
     private static bool IsFactoryRegistration(IMethodSymbol method, InvocationExpressionSyntax invocation, SemanticModel semanticModel)
     {
-        // Use the reduced method to get the parameter list as seen by the caller.
-        // For extension methods, ReducedFrom gives the full signature including 'this',
-        // but the invocation arguments align with the reduced form (without 'this').
-        var reducedMethod = method.ReducedFrom ?? method;
         var args = invocation.ArgumentList.Arguments;
-
-        // For extension methods, the invocation arguments map to parameters starting
-        // at index 1 (index 0 is the 'this' parameter).
-        var paramOffset = method.IsExtensionMethod && method.ReducedFrom is not null ? 1 : 0;
 
         for (int i = 0; i < args.Count; i++)
         {
-            var paramIndex = i + paramOffset;
-            if (paramIndex >= reducedMethod.Parameters.Length)
+            if (!TryGetArgumentParameter(method, args[i], i, out var param))
             {
-                break;
+                continue;
             }
-
-            var param = reducedMethod.Parameters[paramIndex];
 
             // Check if the parameter type is a delegate (Func<...>)
             if (param.Type is not INamedTypeSymbol paramNamed ||
@@ -190,18 +180,46 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                 : method.TypeArguments[0] as INamedTypeSymbol;
         }
 
-        // Pattern 2: Non-generic with Type parameters AddTransient(typeof(TService), typeof(TImpl))
-        var typeofArgs = new System.Collections.Generic.List<INamedTypeSymbol>();
-        foreach (var arg in invocation.ArgumentList.Arguments)
+        // Pattern 2: Non-generic with Type parameters AddTransient(typeof(TService), typeof(TImpl)).
+        // Prefer Roslyn's argument-to-parameter binding so named arguments can appear
+        // out of source order without changing which type is the implementation.
+        INamedTypeSymbol? serviceType = null;
+        INamedTypeSymbol? implementationType = null;
+        var typeofArgs = new List<INamedTypeSymbol>();
+        var args = invocation.ArgumentList.Arguments;
+        for (int i = 0; i < args.Count; i++)
         {
+            var arg = args[i];
             if (arg.Expression is TypeOfExpressionSyntax typeofExpr)
             {
                 var typeInfo = semanticModel.GetTypeInfo(typeofExpr.Type);
                 if (typeInfo.Type is INamedTypeSymbol namedType)
                 {
                     typeofArgs.Add(namedType);
+                    if (TryGetArgumentParameter(method, arg, i, out var parameter))
+                    {
+                        switch (parameter.Name)
+                        {
+                            case "implementationType":
+                                implementationType = namedType;
+                                break;
+                            case "serviceType":
+                                serviceType = namedType;
+                                break;
+                        }
+                    }
                 }
             }
+        }
+
+        if (implementationType is not null)
+        {
+            return implementationType;
+        }
+
+        if (serviceType is not null)
+        {
+            return serviceType;
         }
 
         if (typeofArgs.Count >= 1)
@@ -211,5 +229,42 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         return null;
+    }
+
+    private static bool TryGetArgumentParameter(
+        IMethodSymbol method,
+        ArgumentSyntax argument,
+        int argumentIndex,
+        out IParameterSymbol parameter)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+
+        if (argument.NameColon is { } nameColon)
+        {
+            var argumentName = nameColon.Name.Identifier.ValueText;
+            foreach (var candidate in originalMethod.Parameters)
+            {
+                if (candidate.Name == argumentName)
+                {
+                    parameter = candidate;
+                    return true;
+                }
+            }
+
+            parameter = null!;
+            return false;
+        }
+
+        // Reduced extension-method invocations omit the receiver from the argument list,
+        // while static extension calls include it. Adjust only for the reduced form.
+        var parameterIndex = argumentIndex + (method.ReducedFrom is not null ? 1 : 0);
+        if (parameterIndex >= 0 && parameterIndex < originalMethod.Parameters.Length)
+        {
+            parameter = originalMethod.Parameters[parameterIndex];
+            return true;
+        }
+
+        parameter = null!;
+        return false;
     }
 }

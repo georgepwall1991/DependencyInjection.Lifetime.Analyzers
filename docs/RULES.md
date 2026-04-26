@@ -324,6 +324,8 @@ services.AddScoped<IMyService, DisposableService>();
 // or ensure explicit disposal ownership if transient is intentional
 ```
 
+DI008 follows generic, `typeof(...)`, keyed, and named-argument registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
+
 **Code Fix:** Yes. Suggests safer lifetime alternatives.
 
 ---
