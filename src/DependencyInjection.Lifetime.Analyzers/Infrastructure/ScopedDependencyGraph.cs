@@ -70,6 +70,7 @@ internal sealed class ScopedDependencyGraph
 
     private readonly RegistrationCollector _registrationCollector;
     private readonly WellKnownTypes? _wellKnownTypes;
+    private readonly KnownServiceLifetimeClassifier _lifetimeClassifier;
     private readonly Compilation _compilation;
     private readonly Dictionary<SyntaxTree, SemanticModel> _semanticModels = new();
     private readonly Dictionary<ServiceLookupKey, ScopedDependencyMatch?> _cache = new();
@@ -81,6 +82,7 @@ internal sealed class ScopedDependencyGraph
     {
         _registrationCollector = registrationCollector;
         _wellKnownTypes = wellKnownTypes;
+        _lifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
         _compilation = compilation;
     }
 
@@ -117,6 +119,11 @@ internal sealed class ScopedDependencyGraph
         HashSet<ServiceLookupKey> visited,
         out ScopedDependencyMatch match)
     {
+        if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
+        {
+            return true;
+        }
+
         foreach (var registration in GetAllMatchingRegistrations(requestedType, key, isKeyed))
         {
             if (TryFindScopedDependencyInRegistration(
@@ -140,6 +147,11 @@ internal sealed class ScopedDependencyGraph
         HashSet<ServiceLookupKey> visited,
         out ScopedDependencyMatch match)
     {
+        if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
+        {
+            return true;
+        }
+
         var lookupKey = new ServiceLookupKey(requestedType, key, isKeyed);
         if (_cache.TryGetValue(lookupKey, out var cached))
         {
@@ -412,6 +424,11 @@ internal sealed class ScopedDependencyGraph
             return true;
         }
 
+        if (_lifetimeClassifier.TryGetLifetime(parameter.Type, isKeyed: false, out var knownLifetime))
+        {
+            return knownLifetime != ServiceLifetime.Scoped;
+        }
+
         if (_wellKnownTypes is not null &&
             _wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(parameter.Type))
         {
@@ -419,6 +436,23 @@ internal sealed class ScopedDependencyGraph
         }
 
         return IsFrameworkProvidedDependency(parameter.Type);
+    }
+
+    private bool TryCreateKnownScopedMatch(
+        ITypeSymbol requestedType,
+        object? key,
+        bool isKeyed,
+        out ScopedDependencyMatch match)
+    {
+        if (_lifetimeClassifier.TryGetLifetime(requestedType, isKeyed, out var knownLifetime) &&
+            knownLifetime == ServiceLifetime.Scoped)
+        {
+            match = new ScopedDependencyMatch(requestedType, requestedType, key, isKeyed);
+            return true;
+        }
+
+        match = default;
+        return false;
     }
 
     private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)

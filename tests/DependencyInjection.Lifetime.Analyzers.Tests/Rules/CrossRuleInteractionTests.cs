@@ -18,6 +18,27 @@ public class CrossRuleInteractionTests
 
         """;
 
+    private const string EfCoreStubs = """
+        namespace Microsoft.EntityFrameworkCore
+        {
+            public class DbContext { }
+            public class DbContextOptions<TContext> where TContext : DbContext { }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class EntityFrameworkServiceCollectionExtensions
+            {
+                public static IServiceCollection AddDbContext<TContext>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+            }
+        }
+
+        """;
+
     /// <summary>
     /// When IServiceProvider is injected into a constructor AND used to resolve
     /// services, DI011 should fire on the registration and DI007 should fire
@@ -91,6 +112,73 @@ public class CrossRuleInteractionTests
                 .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
                 .WithLocation(21, 9)
                 .WithArguments("BadLocator", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task AddDbContextCapturedBySingleton_DI003_ReportsCaptiveDependency()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext
+            {
+                public MyDbContext(DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task AddDbContextCapturedBySingleton_DI015_DoesNotReportMissingOptions()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext
+            {
+                public MyDbContext(DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     /// <summary>

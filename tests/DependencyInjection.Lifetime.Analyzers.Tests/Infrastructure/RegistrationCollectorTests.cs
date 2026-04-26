@@ -9,6 +9,34 @@ namespace DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
 
 public class RegistrationCollectorTests
 {
+    private const string EfCoreStubs = """
+        namespace Microsoft.EntityFrameworkCore
+        {
+            public class DbContext { }
+            public class DbContextOptions<TContext> where TContext : DbContext { }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class EntityFrameworkServiceCollectionExtensions
+            {
+                public static IServiceCollection AddDbContext<TContext>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContext<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+            }
+        }
+
+        """;
+
     private static readonly MetadataReference[] DiReferences =
     [
         MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -636,6 +664,147 @@ public class RegistrationCollectorTests
         var lifetime = collector.GetLifetime(null);
 
         Assert.Null(lifetime);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_AddDbContext_DefaultsToScopedAndRegistersOptions()
+    {
+        var source = """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.Extensions.DependencyInjection;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext
+            {
+                public MyDbContext(DbContextOptions<MyDbContext> options) { }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        var contextType = compilation.GetTypeByMetadataName("MyDbContext")!;
+        var optionsType = compilation
+            .GetTypeByMetadataName("Microsoft.EntityFrameworkCore.DbContextOptions`1")!
+            .Construct(contextType);
+
+        Assert.Equal(ServiceLifetime.Scoped, collector.GetLifetime(contextType));
+        Assert.Equal(ServiceLifetime.Scoped, collector.GetLifetime(optionsType));
+        Assert.Equal(2, collector.Registrations.Count());
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_AddDbContext_HonorsExplicitContextLifetime()
+    {
+        var source = """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.Extensions.DependencyInjection;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>(ServiceLifetime.Singleton);
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        var contextType = compilation.GetTypeByMetadataName("MyDbContext")!;
+
+        Assert.Equal(ServiceLifetime.Singleton, collector.GetLifetime(contextType));
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_AddDbContext_ServiceImplementationOverload_RecordsServiceAndImplementation()
+    {
+        var source = """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.Extensions.DependencyInjection;
+
+            """ + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : DbContext, IMyDbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<IMyDbContext, MyDbContext>();
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        var serviceType = compilation.GetTypeByMetadataName("IMyDbContext")!;
+        var registration = collector.Registrations.Single(registration =>
+            SymbolEqualityComparer.Default.Equals(registration.ServiceType, serviceType));
+
+        Assert.Equal(ServiceLifetime.Scoped, registration.Lifetime);
+        Assert.Equal("MyDbContext", registration.ImplementationType?.Name);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_AddDbContext_LaterRegistrationOverridesOptionsLifetime()
+    {
+        var source = """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.Extensions.DependencyInjection;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    services.AddDbContext<MyDbContext>(ServiceLifetime.Singleton, ServiceLifetime.Singleton);
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        var contextType = compilation.GetTypeByMetadataName("MyDbContext")!;
+        var optionsType = compilation
+            .GetTypeByMetadataName("Microsoft.EntityFrameworkCore.DbContextOptions`1")!
+            .Construct(contextType);
+
+        Assert.Equal(ServiceLifetime.Singleton, collector.GetLifetime(contextType));
+        Assert.Equal(ServiceLifetime.Singleton, collector.GetLifetime(optionsType));
     }
 
     #endregion

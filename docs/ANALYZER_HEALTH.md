@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI006 lazy-cache pass)
-**Version:** 2.8.8
-**Test result:** 797/797 passing.
+**Date:** 2026-04-26 (known framework scoped-lifetime pass)
+**Version:** 2.8.9
+**Test result:** 814/814 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -12,7 +12,7 @@
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 31 | 11 | 9.5 | 8.5 | Hardened: conditional ownership proofs, non-null disposal guards, reassignment and loop guardrails |
 | DI002 | Scope Escape | Warn | 33 | 6 | 9.5 | 8 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks |
-| DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
+| DI003 | Captive Dependency | Warn | 39 | 8 | 9.5 | 8 | Hardened: known framework scoped lifetimes and EF AddDbContext contexts |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
 | DI005 | Async Disposal | Warn | 22 | 10 | 9 | 8.5 | Hardened: top-level async statements, nested async guardrails, safe using fixer coverage |
 | DI006 | Static Provider Cache | Warn | 15 | 15 | 8.5 | 9 | Hardened: direct and `Lazy<T>` provider caches, including keyed providers |
@@ -24,15 +24,15 @@
 | DI012 | Conditional Registration | Info | 30 | 4 | 9 | 8 | Complex flow, ignored TryAdd fixer |
 | DI013 | Implementation Mismatch | Error | 59 | 8 | 9.5 | 8 | Variance-aware assignability, named-argument extraction, broad assists |
 | DI014 | Root Provider Not Disposed | Warn | 18 | 9 | 9 | 9 | Hardened: reliable local disposal proofs, reassignment leaks, safe manual-fix gating |
-| DI015 | Unresolvable Dependency | Warn | 54 | 10 | 9 | 8 | One of strongest overall |
+| DI015 | Unresolvable Dependency | Warn | 63 | 12 | 9.5 | 8.8 | One of strongest overall, AddDbContext-aware |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 16 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
-| DI019 | Root Scoped Resolution | Warn | 15 | -- | 8.5 | -- | Root/scoped provider classification, transitive scoped graph |
+| DI019 | Root Scoped Resolution | Warn | 20 | -- | 9 | -- | Root/scoped provider classification, transitive scoped graph, known framework scoped services |
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 9.0/10. Fixer mean 8.5/10.
+**Aggregates:** Analyzer mean 9.1/10. Fixer mean 8.5/10.
 
 ## Scoring Methodology
 
@@ -64,9 +64,9 @@ The fixer intentionally offers pragma suppression only, because moving scoped se
 
 ### DI003 -- Captive Dependency (Warning)
 
-**Analyzer: 9/10** | Tests: 34 | **Fixer: 8/10** | Fix Tests: 8
+**Analyzer: 9.5/10** | Tests: 39 | **Fixer: 8/10** | Fix Tests: 8
 
-Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, and collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs. Fixer adjusts service lifetimes with good coverage across injection patterns.
+Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs, and known scoped framework services such as `IOptionsSnapshot<T>` plus EF Core contexts registered through `AddDbContext(...)` now participate in lifetime checks. Fixer adjusts service lifetimes with good coverage across injection patterns.
 
 ### DI004 -- Use After Dispose (Warning)
 
@@ -138,9 +138,9 @@ Latest pass tightened local ownership proofs: conditional and catch-only `Dispos
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
-**Analyzer: 9.5/10** | Tests: 62 | **Fixer: 8.8/10** | Fix Tests: 12
+**Analyzer: 9.5/10** | Tests: 63 | **Fixer: 8.8/10** | Fix Tests: 12
 
-One of the strongest overall rules. Broad support for keyed, inherited-key, `AnyKey`, factory, wrapper, open-generic, strict-mode, implementation-instance, and definite registration-mutation scenarios. Full dependency resolution engine with reachability tracking. Fixer adds safe unkeyed and keyed concrete self-bindings, including direct factory-rooted cases.
+One of the strongest overall rules. Broad support for keyed, inherited-key, `AnyKey`, factory, wrapper, open-generic, strict-mode, implementation-instance, definite registration-mutation scenarios, and EF Core `AddDbContext(...)` registrations with synthetic `DbContextOptions<TContext>` support. Full dependency resolution engine with reachability tracking. Fixer adds safe unkeyed and keyed concrete self-bindings, including direct factory-rooted cases.
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
@@ -162,9 +162,9 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 ### DI019 -- Root Scoped Resolution (Warning)
 
-**Analyzer: 8.5/10** | Tests: 15
+**Analyzer: 9/10** | Tests: 20
 
-Detects scoped services, and service graphs that reach scoped services, resolved from a root provider. Covers `app.Services`, `host.Services`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, DI factory lambdas covered by DI003, and dynamic service-type requests.
+Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and options registered through `AddDbContext(...)`, and service graphs that reach scoped services, resolved from a root provider. Covers `app.Services`, `host.Services`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, and dynamic service-type requests.
 
 ## Code Fix Health
 
@@ -189,13 +189,13 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Component | Tests | Assessment |
 |-----------|-------|------------|
-| RegistrationCollector | 27 | Core engine, strong coverage |
+| RegistrationCollector | 31 | Core engine, strong coverage, including EF Core AddDbContext modeling |
 | WellKnownTypes | 29 | Type symbol cache, comprehensive |
 | PerformanceRegression | 4 | Baseline performance guards |
 | SampleDiagnosticsVerifier | 10 | SARIF contract + freshness gates |
 | RegistrationCollector (ServiceDescriptor) | 4 | ServiceDescriptor-specific collection |
 | DiagnosticDescriptorSeverity | 1 (Theory, 19 cases) | Severity budget enforcement |
-| CrossRuleInteraction | 8 | Multi-rule scenario validation |
+| CrossRuleInteraction | 10 | Multi-rule scenario validation |
 | KeyedService | 9 | DI 8.0 keyed service support |
 
 **CI quality gates:** 85% line coverage, 70% branch coverage (enforced, CI fails on regression). Coverage badge auto-committed. PR coverage comments via sticky-pull-request-comment.
@@ -204,13 +204,13 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 797 |
-| Analyzer tests | 614 |
+| Total tests | 814 |
+| Analyzer tests | 625 |
 | Code fix tests | 105 |
-| Infrastructure tests | 78 |
-| Analyzer mean score | 9.0/10 |
+| Infrastructure tests | 84 |
+| Analyzer mean score | 9.1/10 |
 | Fixer mean score | 8.5/10 |
-| Rules at 9+ | 15/19 (79%) |
+| Rules at 9+ | 16/19 (84%) |
 | Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
@@ -235,14 +235,15 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI005 missed `CreateScope()` in top-level programs that use `await`, leaving async disposal guidance silent in common minimal-hosting and console entry points | Medium | DI005 |
 | Current | DI008 read non-generic `typeof` overload arguments by source order, missing out-of-order named `implementationType:` calls and risking keyed factory false positives | Medium | DI008 |
 | Current | DI006 missed deferred static provider caches hidden behind `Lazy<IServiceProvider>`, `Lazy<IServiceScopeFactory>`, or `Lazy<IKeyedServiceProvider>` wrappers | Medium | DI006 |
+| Current | Hidden framework registrations left `IOptionsSnapshot<T>` and EF Core `AddDbContext(...)` lifetimes invisible to DI003/DI019 and could make DI015 report normal `DbContextOptions<TContext>` constructor dependencies as missing | Medium | DI003/DI019/DI015 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| Info-rule docs | Keep remediation guidance polished now that warning-level ownership edges are hardened | Low |
+| EF/options real-world feedback | Watch for uncommon AddDbContext overload or options-lifetime shapes that need conservative modeling tweaks | Low |
 
 ## Recommended Next Actions
 
-1. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
-2. **Watch DI019 root-scoped resolution feedback** -- future work should be driven by concrete root/scoped provider classification reports
+1. **Watch EF/options framework-lifetime feedback** -- future work should be driven by concrete AddDbContext overload or options-lifetime reports
+2. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope

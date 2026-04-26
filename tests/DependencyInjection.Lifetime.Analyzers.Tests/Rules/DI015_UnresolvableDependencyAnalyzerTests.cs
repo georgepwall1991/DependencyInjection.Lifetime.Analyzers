@@ -122,6 +122,27 @@ public class DI015_UnresolvableDependencyAnalyzerTests
 
         """;
 
+    private const string EfCoreStubs = """
+        namespace Microsoft.EntityFrameworkCore
+        {
+            public class DbContext { }
+            public class DbContextOptions<TContext> where TContext : DbContext { }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class EntityFrameworkServiceCollectionExtensions
+            {
+                public static IServiceCollection AddDbContext<TContext>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+            }
+        }
+
+        """;
+
     #region Should Report Diagnostic
 
     [Fact]
@@ -1398,6 +1419,34 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             {
                 public void ConfigureServices(IServiceCollection services)
                 {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithAddDbContextDependency_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
                     services.AddSingleton<IMyService, MyService>();
                 }
             }

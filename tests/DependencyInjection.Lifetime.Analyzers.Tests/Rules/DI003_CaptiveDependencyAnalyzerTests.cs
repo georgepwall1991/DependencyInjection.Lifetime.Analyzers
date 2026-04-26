@@ -13,6 +13,44 @@ public class DI003_CaptiveDependencyAnalyzerTests
 
         """;
 
+    private const string OptionsStubs = """
+        namespace Microsoft.Extensions.Options
+        {
+            public interface IOptions<T> { }
+            public interface IOptionsSnapshot<T> { }
+            public interface IOptionsMonitor<T> { }
+        }
+
+        """;
+
+    private const string EfCoreStubs = """
+        namespace Microsoft.EntityFrameworkCore
+        {
+            public class DbContext { }
+            public class DbContextOptions<TContext> where TContext : DbContext { }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class EntityFrameworkServiceCollectionExtensions
+            {
+                public static IServiceCollection AddDbContext<TContext>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContext<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+            }
+        }
+
+        """;
+
     #region Should Report Diagnostic
 
     [Fact]
@@ -183,6 +221,155 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
                 .WithSpan(17, 9, 17, 69)
                 .WithArguments("SingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingOptionsSnapshot_ViaConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> options) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "IOptionsSnapshot"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingOptionsSnapshot_ViaFactory_ReportsDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> options) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService({|#0:sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>()|}));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IOptionsSnapshot"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingOptionsOrMonitor_NoDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(
+                    Microsoft.Extensions.Options.IOptions<MyOptions> options,
+                    Microsoft.Extensions.Options.IOptionsMonitor<MyOptions> monitor) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonCapturingAddDbContextContext_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext
+            {
+                public MyDbContext(DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingAddDbContextContext_WithSingletonLifetime_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>(ServiceLifetime.Singleton, ServiceLifetime.Singleton);
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]
