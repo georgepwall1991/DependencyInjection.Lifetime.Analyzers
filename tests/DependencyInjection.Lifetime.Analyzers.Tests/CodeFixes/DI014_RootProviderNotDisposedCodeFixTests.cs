@@ -148,6 +148,31 @@ public class Program
     }
 
     [Fact]
+    public async Task Does_Not_Fix_Conditional_Manual_Dispose()
+    {
+        var test = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main(bool shouldDispose)
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        if (shouldDispose)
+        {
+            provider.Dispose();
+        }
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(9, 24);
+
+        await VerifyCS.VerifyNoCodeFixOfferedAsync(test, expected);
+    }
+
+    [Fact]
     public async Task Fixes_Multiple_BuildServiceProvider_Calls()
     {
         var test = @"

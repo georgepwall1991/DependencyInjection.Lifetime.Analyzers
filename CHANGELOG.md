@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.4] - 2026-04-26
+
+### Changed
+
+- **DI014 Disposal-Proof Precision**: DI014 now reports root providers whose only explicit disposal is conditional, catch-only, or applied after the local provider variable has been reassigned.
+- **DI014 Code Fix Safety**: The `using` code fix is no longer offered when the provider local already has manual disposal code that should be rewritten deliberately instead of layered with another disposal pattern.
+
 ## [2.8.3] - 2026-04-26
 
 ### Changed

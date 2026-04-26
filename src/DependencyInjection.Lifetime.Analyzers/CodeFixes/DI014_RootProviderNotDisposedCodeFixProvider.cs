@@ -30,6 +30,9 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         var invocation = root.FindToken(diagnosticSpan.Start).Parent?.AncestorsAndSelf().OfType<InvocationExpressionSyntax>().First();
         if (invocation is null) return;
 
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (semanticModel is null) return;
+
         // Check if we can fix this:
         // 1. It must be assigned to a variable
         // 2. That variable must be a local declaration
@@ -40,7 +43,12 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
             declaration.Parent is LocalDeclarationStatementSyntax localDeclaration &&
             declaration.Variables.Count == 1)
         {
-             context.RegisterCodeFix(
+            if (HasLaterDisposeCallForLocal(root, invocation, declarator, semanticModel))
+            {
+                return;
+            }
+
+            context.RegisterCodeFix(
                 CodeAction.Create(
                     title: "Dispose service provider",
                     createChangedDocument: c => AddUsingStatementAsync(context.Document, localDeclaration, c),
@@ -107,6 +115,67 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
                 case MethodDeclarationSyntax method:
                     return method.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
             }
+        }
+
+        return false;
+    }
+
+    private static bool HasLaterDisposeCallForLocal(
+        SyntaxNode root,
+        InvocationExpressionSyntax creationInvocation,
+        VariableDeclaratorSyntax declarator,
+        SemanticModel semanticModel)
+    {
+        if (semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol localSymbol)
+        {
+            return true;
+        }
+
+        foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.SpanStart <= creationInvocation.SpanStart)
+            {
+                continue;
+            }
+
+            if (!TryGetDisposeTargetSymbol(invocation, semanticModel, out var targetSymbol))
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(targetSymbol, localSymbol))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetDisposeTargetSymbol(
+        InvocationExpressionSyntax invocationSyntax,
+        SemanticModel semanticModel,
+        out ISymbol? targetSymbol)
+    {
+        targetSymbol = null;
+
+        if (invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
+            {
+                return false;
+            }
+
+            targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
+            return targetSymbol is not null;
+        }
+
+        if (invocationSyntax.Expression is MemberBindingExpressionSyntax memberBinding &&
+            memberBinding.Name.Identifier.Text is "Dispose" or "DisposeAsync" &&
+            invocationSyntax.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            targetSymbol = semanticModel.GetSymbolInfo(conditionalAccess.Expression).Symbol;
+            return targetSymbol is not null;
         }
 
         return false;
