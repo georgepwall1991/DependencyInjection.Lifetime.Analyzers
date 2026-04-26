@@ -35,7 +35,7 @@ For the latest full rule content, see:
 
 ## DI001: Service Scope Not Disposed
 
-**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, switch section, loop, or catch block.
+**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, switch section, loop, or catch block. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, or `finally` disposal reliably closes ownership, while still reporting reassignment leaks and loop-created scopes that need per-iteration disposal.
 
 **Why it matters:** undisposed scopes can retain scoped and transient disposable services longer than expected, causing memory and handle leaks.
 
