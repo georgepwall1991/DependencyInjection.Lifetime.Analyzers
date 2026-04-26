@@ -3,6 +3,7 @@ using System.Composition;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
@@ -48,7 +49,9 @@ public sealed class DI004_UseAfterDisposeCodeFixProvider : CodeFixProvider
             return;
         }
 
-        if (CanMoveIntoImmediatelyPrecedingScope(statement))
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (semanticModel is not null &&
+            CanMoveIntoImmediatelyPrecedingScope(statement, node, semanticModel))
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -66,18 +69,23 @@ public sealed class DI004_UseAfterDisposeCodeFixProvider : CodeFixProvider
             diagnostic);
     }
 
-    private static bool CanMoveIntoImmediatelyPrecedingScope(StatementSyntax statement)
+    private static bool CanMoveIntoImmediatelyPrecedingScope(
+        StatementSyntax statement,
+        SyntaxNode diagnosticNode,
+        SemanticModel semanticModel)
     {
-        if (statement is not ExpressionStatementSyntax)
+        if (statement is not ExpressionStatementSyntax expressionStatement ||
+            !IsImmediateUseExpression(expressionStatement.Expression))
         {
             return false;
         }
 
         return TryGetImmediatelyPrecedingUsingBlock(
-            statement,
-            out _,
-            out _,
-            out _);
+                statement,
+                out _,
+                out var usingStatement,
+                out _) &&
+            DiagnosticTargetAssignedInsideUsingBlock(diagnosticNode, semanticModel, usingStatement);
     }
 
     private static async Task<Document> MoveUseIntoScopeAsync(
@@ -138,6 +146,115 @@ public sealed class DI004_UseAfterDisposeCodeFixProvider : CodeFixProvider
         usingStatement = previousUsing;
         statementIndex = index;
         return true;
+    }
+
+    private static bool IsImmediateUseExpression(ExpressionSyntax expression) =>
+        expression switch
+        {
+            InvocationExpressionSyntax => true,
+            ConditionalAccessExpressionSyntax => true,
+            AwaitExpressionSyntax awaitExpression => IsImmediateUseExpression(awaitExpression.Expression),
+            _ => false
+        };
+
+    private static bool DiagnosticTargetAssignedInsideUsingBlock(
+        SyntaxNode diagnosticNode,
+        SemanticModel semanticModel,
+        UsingStatementSyntax usingStatement)
+    {
+        if (usingStatement.Statement is not BlockSyntax usingBlock)
+        {
+            return false;
+        }
+
+        var targetLocals = GetDiagnosticTargetLocals(diagnosticNode, semanticModel);
+
+        if (targetLocals.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var assignment in ExecutableSyntaxHelper
+                     .EnumerateSameBoundaryNodes(usingBlock)
+                     .OfType<AssignmentExpressionSyntax>())
+        {
+            if (assignment.Left is not IdentifierNameSyntax leftIdentifier ||
+                semanticModel.GetSymbolInfo(leftIdentifier).Symbol is not ILocalSymbol assignedLocal)
+            {
+                continue;
+            }
+
+            if (targetLocals.Contains(assignedLocal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ImmutableHashSet<ILocalSymbol> GetDiagnosticTargetLocals(
+        SyntaxNode diagnosticNode,
+        SemanticModel semanticModel)
+    {
+        var builder = ImmutableHashSet.CreateBuilder<ILocalSymbol>(SymbolEqualityComparer.Default);
+
+        switch (diagnosticNode)
+        {
+            case IdentifierNameSyntax identifier:
+                AddLocal(identifier, semanticModel, builder);
+                break;
+
+            case ArgumentSyntax argument:
+                AddLocalFromExpression(argument.Expression, semanticModel, builder);
+                break;
+
+            case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess }:
+                AddLocalFromExpression(memberAccess.Expression, semanticModel, builder);
+                break;
+
+            case ConditionalAccessExpressionSyntax conditionalAccess:
+                AddLocalFromExpression(conditionalAccess.Expression, semanticModel, builder);
+                break;
+
+            case ElementAccessExpressionSyntax elementAccess:
+                AddLocalFromExpression(elementAccess.Expression, semanticModel, builder);
+                break;
+
+            case MemberAccessExpressionSyntax memberAccess:
+                AddLocalFromExpression(memberAccess.Expression, semanticModel, builder);
+                break;
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static void AddLocalFromExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        ImmutableHashSet<ILocalSymbol>.Builder builder)
+    {
+        if (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            AddLocalFromExpression(parenthesized.Expression, semanticModel, builder);
+            return;
+        }
+
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            AddLocal(identifier, semanticModel, builder);
+        }
+    }
+
+    private static void AddLocal(
+        IdentifierNameSyntax identifier,
+        SemanticModel semanticModel,
+        ImmutableHashSet<ILocalSymbol>.Builder builder)
+    {
+        if (semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol)
+        {
+            builder.Add(localSymbol);
+        }
     }
 
     private static async Task<Document> SuppressWithPragmaAsync(
