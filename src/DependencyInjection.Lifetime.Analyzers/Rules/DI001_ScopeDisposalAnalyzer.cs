@@ -261,6 +261,11 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (!IsReliableDisposeProof(invocationSyntax, creationSyntax))
+            {
+                continue;
+            }
+
             var targetSymbol = GetDisposeTargetSymbol(invocationSyntax, semanticModel);
             if (targetSymbol is null)
             {
@@ -319,6 +324,33 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsReliableDisposeProof(InvocationExpressionSyntax disposeSyntax, SyntaxNode creationSyntax)
+    {
+        var boundary = GetExecutableBoundary(creationSyntax);
+        var current = disposeSyntax.Parent;
+        while (current is not null && current != boundary)
+        {
+            if (current is IfStatementSyntax or
+                ElseClauseSyntax or
+                SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                return false;
+            }
+
+            current = current.Parent;
+        }
+
+        return true;
     }
 
     private static bool IsDisposeInvocation(InvocationExpressionSyntax invocationSyntax)
