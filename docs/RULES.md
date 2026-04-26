@@ -69,7 +69,7 @@ public void Process()
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including scopes declared before a later `using (scope)` disposal block and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases, delegates that capture scoped services and then escape, scopes declared before a later `using (scope)` disposal block, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -96,7 +96,7 @@ public void UseServiceNow()
 }
 ```
 
-**Code Fix:** Yes (suppression and acknowledgement options where direct refactor is not safe).
+**Code Fix:** Yes (suppression option for intentionally accepted cases where direct refactoring is not practical).
 
 ---
 
