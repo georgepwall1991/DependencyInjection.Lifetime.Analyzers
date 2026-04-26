@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.8] - 2026-04-26
+
+### Changed
+
+- **DI006 Lazy Provider Cache Coverage**: DI006 now reports static `Lazy<IServiceProvider>`, `Lazy<IServiceScopeFactory>`, and `Lazy<IKeyedServiceProvider>` members so deferred static provider caches no longer slip past the rule.
+- **DI006 Regression Guardrails**: Added analyzer and code-fix coverage for lazy provider caches, keyed lazy providers, lazy non-provider silence, sample diagnostics, and docs guidance while preserving the conservative remove-`static` fixer boundary.
+
 ## [2.8.7] - 2026-04-26
 
 ### Changed

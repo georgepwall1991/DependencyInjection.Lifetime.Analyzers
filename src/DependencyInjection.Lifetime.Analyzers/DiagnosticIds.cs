@@ -31,7 +31,7 @@ public static class DiagnosticIds
     public const string AsyncScopeRequired = "DI005";
 
     /// <summary>
-    /// DI006: IServiceProvider or IServiceScopeFactory stored in static field.
+    /// DI006: IServiceProvider, IServiceScopeFactory, or keyed provider stored in static member.
     /// </summary>
     public const string StaticProviderCache = "DI006";
 

@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
 /// <summary>
-/// Analyzer that detects IServiceProvider or IServiceScopeFactory stored in static fields or properties.
+/// Analyzer that detects provider abstractions stored in static fields or properties.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
@@ -48,12 +48,11 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(field.Type))
+        if (!TryGetStaticCacheTypeName(field.Type, wellKnownTypes, out var typeName))
         {
             return;
         }
 
-        var typeName = GetSimpleTypeName(field.Type);
         var diagnostic = Diagnostic.Create(
             DiagnosticDescriptors.StaticProviderCache,
             field.Locations[0],
@@ -72,12 +71,11 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(property.Type))
+        if (!TryGetStaticCacheTypeName(property.Type, wellKnownTypes, out var typeName))
         {
             return;
         }
 
-        var typeName = GetSimpleTypeName(property.Type);
         var diagnostic = Diagnostic.Create(
             DiagnosticDescriptors.StaticProviderCache,
             property.Locations[0],
@@ -85,6 +83,37 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             property.Name);
 
         context.ReportDiagnostic(diagnostic);
+    }
+
+    private static bool TryGetStaticCacheTypeName(
+        ITypeSymbol type,
+        WellKnownTypes wellKnownTypes,
+        out string typeName)
+    {
+        if (wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(type))
+        {
+            typeName = GetSimpleTypeName(type);
+            return true;
+        }
+
+        if (type is INamedTypeSymbol namedType &&
+            IsSystemLazy(namedType) &&
+            namedType.TypeArguments.Length == 1 &&
+            wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(namedType.TypeArguments[0]))
+        {
+            typeName = $"{GetSimpleTypeName(namedType)}<{GetSimpleTypeName(namedType.TypeArguments[0])}>";
+            return true;
+        }
+
+        typeName = string.Empty;
+        return false;
+    }
+
+    private static bool IsSystemLazy(INamedTypeSymbol type)
+    {
+        var originalDefinition = type.OriginalDefinition;
+        return originalDefinition.MetadataName == "Lazy`1" &&
+               originalDefinition.ContainingNamespace.ToDisplayString() == "System";
     }
 
     private static string GetSimpleTypeName(ITypeSymbol type)

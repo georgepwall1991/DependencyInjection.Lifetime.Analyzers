@@ -22,7 +22,7 @@ public static class DiagnosticDescriptors
         description: "In async methods, CreateAsyncScope should be used instead of CreateScope to ensure proper async disposal of the scope.");
 
     /// <summary>
-    /// DI006: IServiceProvider or IServiceScopeFactory stored in static field or property.
+    /// DI006: IServiceProvider, IServiceScopeFactory, or keyed provider stored in static field or property.
     /// </summary>
     public static readonly DiagnosticDescriptor StaticProviderCache = new(
         id: DiagnosticIds.StaticProviderCache,
@@ -31,7 +31,7 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "Storing IServiceProvider or IServiceScopeFactory in static fields can lead to issues with scope management and service resolution. Consider injecting the service provider per-use instead.");
+        description: "Storing IServiceProvider, IServiceScopeFactory, IKeyedServiceProvider, or lazy wrappers around them in static members can lead to issues with scope management and service resolution. Consider injecting the provider per-use instead.");
 
     /// <summary>
     /// DI003: Singleton service captures scoped or transient dependency (captive dependency).

@@ -12,7 +12,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
 /// <summary>
-/// Code fix provider for DI006: Static IServiceProvider cache.
+/// Code fix provider for DI006: Static provider cache.
 /// Offers to remove the 'static' modifier from fields and properties.
 /// </summary>
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(DI006_StaticProviderCacheCodeFixProvider))]

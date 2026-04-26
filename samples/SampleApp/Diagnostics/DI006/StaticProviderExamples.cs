@@ -19,6 +19,9 @@ public static class StaticProviderExamples
         // DI006: 'IServiceProvider' should not be stored in static member 'ServiceProvider'
         public static IServiceProvider? ServiceProvider { get; set; }
 
+        // DI006: 'Lazy<IServiceProvider>' should not be stored in static member '_lazyProvider'
+        private static readonly Lazy<IServiceProvider?> _lazyProvider = new(() => _provider);
+
         public static void Initialize(IServiceProvider provider, IServiceScopeFactory scopeFactory)
         {
             _provider = provider;
