@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI005 top-level async pass)
-**Version:** 2.8.6
-**Test result:** 788/788 passing.
+**Date:** 2026-04-26 (DI008 named-argument pass)
+**Version:** 2.8.7
+**Test result:** 792/792 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -17,7 +17,7 @@
 | DI005 | Async Disposal | Warn | 22 | 10 | 9 | 8.5 | Hardened: top-level async statements, nested async guardrails, safe using fixer coverage |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
 | DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
-| DI008 | Disposable Transient | Warn | 19 | 13 | 8 | 9 | Solid coverage both sides |
+| DI008 | Disposable Transient | Warn | 22 | 14 | 8.5 | 9 | Hardened: named `typeof` argument mapping and keyed factory guardrails |
 | DI009 | Open Generic Mismatch | Warn | 22 | 15 | 9 | 9 | Refactored with RegistrationKind/LifetimeKind, defensive SimpleNameSyntax fix |
 | DI010 | Constructor Over-Injection | Info | 24 | -- | 9.5 | -- | Strongest info-level rule |
 | DI011 | Service Provider Injection | Info | 19 | -- | 9 | -- | Activation-constructor logic |
@@ -94,9 +94,9 @@ Informational by design. Good factory and lambda allowance handling. Correctly s
 
 ### DI008 -- Disposable Transient (Warning)
 
-**Analyzer: 8/10** | Tests: 19 | **Fixer: 9/10** | Fix Tests: 13
+**Analyzer: 8.5/10** | Tests: 22 | **Fixer: 9/10** | Fix Tests: 14
 
-Solid coverage across generic registrations, `typeof`, `IDisposable`, and `IAsyncDisposable`. Fixer changes transient to scoped/singleton with strong shape coverage.
+Solid coverage across generic registrations, `typeof`, keyed registrations, `IDisposable`, and `IAsyncDisposable`. The latest pass maps `serviceType:` and `implementationType:` by bound Roslyn parameters instead of source order, so out-of-order named non-generic overloads report the disposable implementation correctly. Keyed factory registrations with out-of-order named arguments stay quiet, preserving the rule's safe factory boundary. Fixer changes transient to scoped/singleton with strong shape coverage, including named `typeof` overloads.
 
 ### DI009 -- Open Generic Lifetime Mismatch (Warning)
 
@@ -176,7 +176,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | DI004 (Use After Dispose) | 8 | 8.5 | Low -- move fix is now gated to owning-scope immediate invocations, with unsafe escape/adjacent-scope shapes suppressed |
 | DI005 (Async Scope) | 10 | 8.5 | Low -- narrow using/await-using transformation, including top-level async using declarations |
 | DI006 (Static Provider Cache) | 14 | 9 | Low -- more tests than analyzer |
-| DI008 (Disposable Transient) | 13 | 9 | Low -- strong shape coverage |
+| DI008 (Disposable Transient) | 14 | 9 | Low -- strong shape coverage, including named `typeof` overloads |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 4 | 8 | Low -- narrow standalone-statement removal |
 | DI013 (Implementation Mismatch) | 8 | 8 | Medium -- broad assists are symbol-backed, FixAll disabled |
@@ -204,9 +204,9 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 788 |
-| Analyzer tests | 607 |
-| Code fix tests | 103 |
+| Total tests | 792 |
+| Analyzer tests | 610 |
+| Code fix tests | 104 |
 | Infrastructure tests | 78 |
 | Analyzer mean score | 9.0/10 |
 | Fixer mean score | 8.5/10 |
@@ -233,6 +233,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
 | Current | DI001 treated conditionally assigned nullable scope locals as leaked when later conditional-access or non-null-guarded cleanup closed ownership | Low | DI001 |
 | Current | DI005 missed `CreateScope()` in top-level programs that use `await`, leaving async disposal guidance silent in common minimal-hosting and console entry points | Medium | DI005 |
+| Current | DI008 read non-generic `typeof` overload arguments by source order, missing out-of-order named `implementationType:` calls and risking keyed factory false positives | Medium | DI008 |
 
 ## Watchlist
 
@@ -243,4 +244,4 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 ## Recommended Next Actions
 
 1. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
-2. **Revisit DI008 narrow edges opportunistically** -- stable warning rule; future passes should be driven by concrete false-positive or false-negative reports
+2. **Revisit DI006 narrow edges opportunistically** -- stable warning rule; future passes should be driven by concrete false-positive or false-negative reports

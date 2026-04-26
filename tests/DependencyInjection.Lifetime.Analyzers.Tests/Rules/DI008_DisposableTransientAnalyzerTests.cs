@@ -154,6 +154,35 @@ public class DI008_DisposableTransientAnalyzerTests
                 .WithArguments("DisposableService", "IDisposable"));
     }
 
+    [Fact]
+    public async Task TransientDisposable_TypeofNamedArgumentsOutOfOrder_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient(
+                        implementationType: typeof(DisposableService),
+                        serviceType: typeof(IMyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(13, 9, 15, 45)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -450,6 +479,40 @@ public class DI008_DisposableTransientAnalyzerTests
     }
 
     [Fact]
+    public async Task KeyedTransientDisposable_TypeofNamedArgumentsOutOfOrder_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient(
+                        implementationType: typeof(DisposableService),
+                        serviceKey: "myKey",
+                        serviceType: typeof(IMyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.ReferenceAssembliesWithKeyedDi,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(14, 9, 17, 45)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
     public async Task KeyedTransientDisposable_FactoryRegistration_NoDiagnostic()
     {
         var source = """
@@ -527,6 +590,34 @@ public class DI008_DisposableTransientAnalyzerTests
                 {
                     Func<IServiceProvider, object?, IMyService> factory = static (_, _) => new DisposableService();
                     services.AddKeyedTransient<IMyService>("myKey", factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.ReferenceAssembliesWithKeyedDi);
+    }
+
+    [Fact]
+    public async Task KeyedTransientDisposable_FactoryNamedArgumentsOutOfOrder_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class DisposableService : IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedTransient<DisposableService>(
+                        implementationFactory: static (_, _) => new DisposableService(),
+                        serviceKey: "myKey");
                 }
             }
             """;
