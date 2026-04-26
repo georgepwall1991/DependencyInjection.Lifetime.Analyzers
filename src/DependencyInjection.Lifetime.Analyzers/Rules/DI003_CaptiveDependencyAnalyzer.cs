@@ -78,6 +78,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            var lifetimeClassifier = new KnownServiceLifetimeClassifier(
+                WellKnownTypes.Create(compilationContext.Compilation));
+
             // First pass: collect all registrations
             compilationContext.RegisterSyntaxNodeAction(
                 syntaxContext => registrationCollector.AnalyzeInvocation(
@@ -87,13 +90,14 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
             // Second pass: check for captive dependencies at compilation end
             compilationContext.RegisterCompilationEndAction(
-                endContext => AnalyzeCaptiveDependencies(endContext, registrationCollector));
+                endContext => AnalyzeCaptiveDependencies(endContext, registrationCollector, lifetimeClassifier));
         });
     }
 
     private static void AnalyzeCaptiveDependencies(
         CompilationAnalysisContext context,
-        RegistrationCollector registrationCollector)
+        RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier)
     {
         var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
         var reportedDiagnostics = new HashSet<ReportedDiagnosticKey>();
@@ -113,6 +117,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     context,
                     registration,
                     registrationCollector,
+                    lifetimeClassifier,
                     semanticModelsByTree,
                     reportedDiagnostics);
             }
@@ -122,6 +127,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     context,
                     registration,
                     registrationCollector,
+                    lifetimeClassifier,
                     reportedDiagnostics);
             }
         }
@@ -131,6 +137,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         ServiceRegistration registration,
         RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
         HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
@@ -169,6 +176,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                         context,
                         registration,
                         registrationCollector,
+                        lifetimeClassifier,
                         implementationType,
                         invocation.GetLocation(),
                         reportedDiagnostics);
@@ -191,7 +199,12 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 isKeyed = true;
             }
 
-            var dependencyLifetime = registrationCollector.GetLifetime(dependencyType, key, isKeyed);
+            var dependencyLifetime = GetDependencyLifetime(
+                registrationCollector,
+                lifetimeClassifier,
+                dependencyType,
+                key,
+                isKeyed);
             if (dependencyLifetime is null ||
                 !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
             {
@@ -342,6 +355,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         ServiceRegistration registration,
         RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
         HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
         var implementationType = registration.ImplementationType!;
@@ -353,7 +367,12 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             {
                 var parameterType = UnwrapEnumerableDependency(parameter.Type);
                 var (key, isKeyed) = GetServiceKey(parameter);
-                var dependencyLifetime = registrationCollector.GetLifetime(parameterType, key, isKeyed);
+                var dependencyLifetime = GetDependencyLifetime(
+                    registrationCollector,
+                    lifetimeClassifier,
+                    parameterType,
+                    key,
+                    isKeyed);
 
                 if (dependencyLifetime is null)
                 {
@@ -383,6 +402,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         ServiceRegistration registration,
         RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
         INamedTypeSymbol implementationType,
         Location diagnosticLocation,
         HashSet<ReportedDiagnosticKey> reportedDiagnostics)
@@ -394,7 +414,12 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             {
                 var parameterType = UnwrapEnumerableDependency(parameter.Type);
                 var (key, isKeyed) = GetServiceKey(parameter);
-                var dependencyLifetime = registrationCollector.GetLifetime(parameterType, key, isKeyed);
+                var dependencyLifetime = GetDependencyLifetime(
+                    registrationCollector,
+                    lifetimeClassifier,
+                    parameterType,
+                    key,
+                    isKeyed);
                 if (dependencyLifetime is null ||
                     !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
                 {
@@ -463,6 +488,24 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
     private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
         KeyedServiceHelpers.GetServiceKey(parameter);
+
+    private static ServiceLifetime? GetDependencyLifetime(
+        RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed)
+    {
+        var registeredLifetime = registrationCollector.GetLifetime(dependencyType, key, isKeyed);
+        if (registeredLifetime is not null)
+        {
+            return registeredLifetime;
+        }
+
+        return lifetimeClassifier.TryGetLifetime(dependencyType, isKeyed, out var knownLifetime)
+            ? knownLifetime
+            : null;
+    }
 
     private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol dependencyType)
     {

@@ -22,8 +22,10 @@ public sealed class RegistrationCollector
     private readonly INamedTypeSymbol? _serviceCollectionServiceExtensionsType;
     private readonly INamedTypeSymbol? _serviceCollectionDescriptorExtensionsType;
     private readonly INamedTypeSymbol? _serviceCollectionHostedServiceExtensionsType;
+    private readonly INamedTypeSymbol? _entityFrameworkServiceCollectionExtensionsType;
     private readonly INamedTypeSymbol? _serviceDescriptorType;
     private readonly INamedTypeSymbol? _hostedServiceType;
+    private readonly INamedTypeSymbol? _dbContextOptionsOfT;
     private int _registrationOrder;
 
     private RegistrationCollector(
@@ -31,15 +33,19 @@ public sealed class RegistrationCollector
         INamedTypeSymbol? serviceCollectionServiceExtensionsType,
         INamedTypeSymbol? serviceCollectionDescriptorExtensionsType,
         INamedTypeSymbol? serviceCollectionHostedServiceExtensionsType,
+        INamedTypeSymbol? entityFrameworkServiceCollectionExtensionsType,
         INamedTypeSymbol? serviceDescriptorType,
-        INamedTypeSymbol? hostedServiceType)
+        INamedTypeSymbol? hostedServiceType,
+        INamedTypeSymbol? dbContextOptionsOfT)
     {
         _serviceCollectionType = serviceCollectionType;
         _serviceCollectionServiceExtensionsType = serviceCollectionServiceExtensionsType;
         _serviceCollectionDescriptorExtensionsType = serviceCollectionDescriptorExtensionsType;
         _serviceCollectionHostedServiceExtensionsType = serviceCollectionHostedServiceExtensionsType;
+        _entityFrameworkServiceCollectionExtensionsType = entityFrameworkServiceCollectionExtensionsType;
         _serviceDescriptorType = serviceDescriptorType;
         _hostedServiceType = hostedServiceType;
+        _dbContextOptionsOfT = dbContextOptionsOfT;
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
         _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
@@ -107,19 +113,27 @@ public sealed class RegistrationCollector
         var serviceCollectionHostedServiceExtensionsType = compilation.GetTypeByMetadataName(
             "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions");
 
+        var entityFrameworkServiceCollectionExtensionsType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions");
+
         var serviceDescriptorType = compilation.GetTypeByMetadataName(
             "Microsoft.Extensions.DependencyInjection.ServiceDescriptor");
 
         var hostedServiceType = compilation.GetTypeByMetadataName(
             "Microsoft.Extensions.Hosting.IHostedService");
 
+        var dbContextOptionsOfT = compilation.GetTypeByMetadataName(
+            "Microsoft.EntityFrameworkCore.DbContextOptions`1");
+
         return new RegistrationCollector(
             serviceCollectionType,
             serviceCollectionServiceExtensionsType,
             serviceCollectionDescriptorExtensionsType,
             serviceCollectionHostedServiceExtensionsType,
+            entityFrameworkServiceCollectionExtensionsType,
             serviceDescriptorType,
-            hostedServiceType);
+            hostedServiceType,
+            dbContextOptionsOfT);
     }
 
     /// <summary>
@@ -236,6 +250,8 @@ public sealed class RegistrationCollector
         object? key = null;
         bool hasImplementationInstance = false;
         bool isKeyed = IsKeyedMethod(methodName);
+        INamedTypeSymbol? companionServiceType = null;
+        ServiceLifetime? companionLifetime = null;
 
         if (TryExtractHostedServiceRegistration(invocation, methodSymbol, semanticModel, out var hostedServiceType, out var hostedImplementationType, out var hostedFactoryExpression))
         {
@@ -244,6 +260,24 @@ public sealed class RegistrationCollector
             factoryExpression = hostedFactoryExpression;
             lifetime = ServiceLifetime.Singleton;
             isKeyed = false;
+        }
+        else if (TryExtractDbContextRegistration(
+                     invocation,
+                     methodSymbol,
+                     semanticModel,
+                     out var dbContextServiceType,
+                     out var dbContextImplementationType,
+                     out var dbContextLifetime,
+                     out var dbContextOptionsServiceType,
+                     out var dbContextOptionsLifetime))
+        {
+            serviceType = dbContextServiceType;
+            implementationType = dbContextImplementationType;
+            factoryExpression = null;
+            lifetime = dbContextLifetime;
+            isKeyed = false;
+            companionServiceType = dbContextOptionsServiceType;
+            companionLifetime = dbContextOptionsLifetime;
         }
         else if (lifetime.HasValue)
         {
@@ -314,6 +348,26 @@ public sealed class RegistrationCollector
 
             // Store by service type and key (later registrations override earlier ones, like DI container behavior)
             _registrations[new ServiceIdentifier(serviceType, key, isKeyed)] = registration;
+        }
+
+        if (companionServiceType is not null &&
+            companionLifetime is not null)
+        {
+            var companionRegistration = new ServiceRegistration(
+                companionServiceType,
+                implementationType: null,
+                factoryExpression: null,
+                hasImplementationInstance: true,
+                key: null,
+                isKeyed: false,
+                companionLifetime.Value,
+                invocation.GetLocation(),
+                keyLiteral: null,
+                flowKey,
+                order);
+
+            _allRegistrations.Add(companionRegistration);
+            _registrations[new ServiceIdentifier(companionServiceType, null, false)] = companionRegistration;
         }
     }
 
@@ -694,9 +748,7 @@ public sealed class RegistrationCollector
     private static ServiceLifetime? ExtractLifetime(ExpressionSyntax expr, SemanticModel semanticModel)
     {
         // Handle Enum member access: ServiceLifetime.Scoped
-        if (expr is MemberAccessExpressionSyntax memberAccess &&
-            memberAccess.Expression is IdentifierNameSyntax enumType &&
-            enumType.Identifier.Text == "ServiceLifetime")
+        if (expr is MemberAccessExpressionSyntax memberAccess)
         {
             var lifetimeName = memberAccess.Name.Identifier.Text;
             if (System.Enum.TryParse<ServiceLifetime>(lifetimeName, out var parsedLifetime))
@@ -704,8 +756,16 @@ public sealed class RegistrationCollector
                 return parsedLifetime;
             }
         }
+
+        var symbol = semanticModel.GetSymbolInfo(expr).Symbol;
+        if (symbol?.ContainingType.Name == "ServiceLifetime" &&
+            System.Enum.TryParse<ServiceLifetime>(symbol.Name, out var symbolLifetime))
+        {
+            return symbolLifetime;
+        }
+
         // Handle Cast: (ServiceLifetime)0
-        else if (expr is CastExpressionSyntax castExpr)
+        if (expr is CastExpressionSyntax castExpr)
         {
             // We only handle constant values in casts for now
             var constantValue = semanticModel.GetConstantValue(castExpr);
@@ -739,6 +799,109 @@ public sealed class RegistrationCollector
         }
 
         return null;
+    }
+
+    private bool TryExtractDbContextRegistration(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        out INamedTypeSymbol? serviceType,
+        out INamedTypeSymbol? implementationType,
+        out ServiceLifetime? contextLifetime,
+        out INamedTypeSymbol? optionsServiceType,
+        out ServiceLifetime? optionsLifetime)
+    {
+        serviceType = null;
+        implementationType = null;
+        contextLifetime = null;
+        optionsServiceType = null;
+        optionsLifetime = null;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddDbContext" ||
+            !IsKnownEntityFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        serviceType = method.TypeArguments[0] as INamedTypeSymbol;
+        implementationType = method.TypeArguments.Length == 2
+            ? method.TypeArguments[1] as INamedTypeSymbol
+            : serviceType;
+
+        if (serviceType is null || implementationType is null)
+        {
+            return false;
+        }
+
+        if (!TryGetLifetimeArgument(
+                invocation,
+                method,
+                semanticModel,
+                "contextLifetime",
+                ServiceLifetime.Scoped,
+                out var extractedContextLifetime) ||
+            !TryGetLifetimeArgument(
+                invocation,
+                method,
+                semanticModel,
+                "optionsLifetime",
+                ServiceLifetime.Scoped,
+                out var extractedOptionsLifetime))
+        {
+            return false;
+        }
+
+        contextLifetime = extractedContextLifetime;
+        optionsLifetime = extractedOptionsLifetime;
+        optionsServiceType = TryConstructDbContextOptionsType(implementationType);
+        return true;
+    }
+
+    private INamedTypeSymbol? TryConstructDbContextOptionsType(INamedTypeSymbol contextImplementationType)
+    {
+        if (_dbContextOptionsOfT is null ||
+            contextImplementationType.IsUnboundGenericType)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _dbContextOptionsOfT.Construct(contextImplementationType);
+        }
+        catch (System.ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryGetLifetimeArgument(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        string parameterName,
+        ServiceLifetime defaultLifetime,
+        out ServiceLifetime lifetime)
+    {
+        var expression = GetInvocationArgumentExpression(invocation, method, parameterName);
+        if (expression is null)
+        {
+            lifetime = defaultLifetime;
+            return true;
+        }
+
+        var extractedLifetime = ExtractLifetime(expression, semanticModel);
+        if (extractedLifetime is null)
+        {
+            lifetime = default;
+            return false;
+        }
+
+        lifetime = extractedLifetime.Value;
+        return true;
     }
 
     private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
@@ -1055,11 +1218,45 @@ public sealed class RegistrationCollector
         return false;
     }
 
+    private static ExpressionSyntax? GetInvocationArgumentExpression(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        string parameterName)
+    {
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.Text == parameterName)
+            {
+                return argument.Expression;
+            }
+        }
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        var isReducedExtension = methodSymbol.ReducedFrom is not null;
+
+        for (var i = 0; i < sourceMethod.Parameters.Length; i++)
+        {
+            if (sourceMethod.Parameters[i].Name != parameterName)
+            {
+                continue;
+            }
+
+            var argumentIndex = isReducedExtension ? i - 1 : i;
+            if (argumentIndex >= 0 && argumentIndex < invocation.ArgumentList.Arguments.Count)
+            {
+                return invocation.ArgumentList.Arguments[argumentIndex].Expression;
+            }
+        }
+
+        return null;
+    }
+
     private bool IsKnownServiceCollectionExtensionsType(INamedTypeSymbol type)
     {
         if (SymbolEqualityComparer.Default.Equals(type, _serviceCollectionServiceExtensionsType) ||
             SymbolEqualityComparer.Default.Equals(type, _serviceCollectionDescriptorExtensionsType) ||
-            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionHostedServiceExtensionsType))
+            SymbolEqualityComparer.Default.Equals(type, _serviceCollectionHostedServiceExtensionsType) ||
+            SymbolEqualityComparer.Default.Equals(type, _entityFrameworkServiceCollectionExtensionsType))
         {
             return true;
         }
@@ -1068,7 +1265,24 @@ public sealed class RegistrationCollector
         return fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions" ||
-               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions";
+               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions";
+    }
+
+    private bool IsKnownEntityFrameworkServiceCollectionExtensionsType(INamedTypeSymbol? type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(type, _entityFrameworkServiceCollectionExtensionsType))
+        {
+            return true;
+        }
+
+        return type.ToDisplayString() ==
+               "Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions";
     }
 
     private bool TryExtractHostedServiceRegistration(

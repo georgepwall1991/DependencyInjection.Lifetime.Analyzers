@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.8
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.9
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.8">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.9">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.8" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.9" />
 ```
 
 Then reference it from the project file:
@@ -231,7 +231,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -699,7 +699,7 @@ services.AddSingleton<IMyService, MyService>();
 
 ### DI015 strict mode
 
-By default, DI015 assumes common host-provided framework services (logging/options/configuration) are available.
+By default, DI015 assumes common host-provided framework services (logging/options/configuration) are available. EF Core contexts registered through `AddDbContext(...)` are also modeled as registrations, including the `DbContextOptions<TContext>` dependency that normal context constructors require.
 Disable that assumption for stricter analysis:
 
 ```ini
@@ -828,7 +828,7 @@ services.AddSingleton<IMyService, GoodConcreteService>();
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 

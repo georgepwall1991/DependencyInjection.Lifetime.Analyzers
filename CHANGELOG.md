@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.9] - 2026-04-26
+
+### Changed
+
+- **Known Framework Scoped Lifetimes**: DI003 and DI019 now treat `IOptionsSnapshot<T>` as scoped even when the framework registration is not visible in source, while keeping `IOptions<T>` and `IOptionsMonitor<T>` safe for singleton/root-provider scenarios.
+- **EF Core AddDbContext Modeling**: Registration collection now models EF Core `AddDbContext(...)` calls, including explicit `contextLifetime` values, last-registration-wins options lifetimes, and synthetic `DbContextOptions<TContext>` registrations, so DI003/DI019/DI015 reason about DbContext lifetimes without false missing-registration reports.
+
 ## [2.8.8] - 2026-04-26
 
 ### Changed
