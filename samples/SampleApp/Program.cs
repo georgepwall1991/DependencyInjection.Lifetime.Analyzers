@@ -18,7 +18,7 @@ Console.WriteLine("  - DI002/: Service escapes scope (return and field)");
 Console.WriteLine("  - DI003/: Captive dependencies (3 warnings)");
 Console.WriteLine("  - DI004/: Use after dispose");
 Console.WriteLine("  - DI005/: CreateScope in async method");
-Console.WriteLine("  - DI006/: Static provider cache (3 warnings)");
+Console.WriteLine("  - DI006/: Static provider cache (4 warnings)");
 Console.WriteLine("  - DI007/: Service locator anti-pattern");
 Console.WriteLine("  - DI008/: Disposable transient service");
 Console.WriteLine("  - DI009/: Open generic captive dependency");

@@ -288,6 +288,12 @@
           "anchor": "public static IServiceProvider? ServiceProvider { get; set; }",
           "ruleId": "DI006",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI006/StaticProviderExamples.cs",
+          "anchor": "private static readonly Lazy<IServiceProvider?> _lazyProvider = new(() => _provider);",
+          "ruleId": "DI006",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": [

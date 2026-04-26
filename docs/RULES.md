@@ -217,7 +217,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including `Lazy<T>` wrappers around those provider types.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -229,6 +229,7 @@ public async Task RunAsync()
 public static class Locator
 {
     public static IServiceProvider Provider { get; set; } = null!;
+    private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
 }
 ```
 
@@ -246,7 +247,7 @@ public sealed class Locator
 }
 ```
 
-**Code Fix:** Yes. Removes `static` modifier in common cases.
+**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid.
 
 ---
 

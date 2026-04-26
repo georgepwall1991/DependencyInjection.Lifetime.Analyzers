@@ -134,6 +134,32 @@ public class DI006_StaticProviderCacheCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_RemovesStatic_FromPrivateLazyProviderField()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static Lazy<IServiceProvider> _provider = new(() => null!);
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyClass
+            {
+                private Lazy<IServiceProvider> _provider = new(() => null!);
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 43, 5, 52)
+            .WithArguments("Lazy<IServiceProvider>", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromStaticMethod()
     {
         var source = Usings + """

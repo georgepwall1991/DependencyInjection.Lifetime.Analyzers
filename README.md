@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.7
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.8
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.7">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.8">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.7" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.8" />
 ```
 
 Then reference it from the project file:
@@ -346,7 +346,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including `Lazy<T>` wrappers around those provider types.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -358,6 +358,7 @@ public async Task RunAsync()
 public static class Locator
 {
     public static IServiceProvider Provider { get; set; } = null!;
+    private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
 }
 ```
 
@@ -375,7 +376,7 @@ public sealed class Locator
 }
 ```
 
-**Code Fix:** Yes. Removes `static` modifier in common cases.
+**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid.
 
 ---
 

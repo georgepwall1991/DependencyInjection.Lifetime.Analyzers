@@ -89,6 +89,61 @@ public class DI006_StaticProviderCacheAnalyzerTests
                 .WithArguments("IServiceProvider", "ServiceProvider"));
     }
 
+    [Fact]
+    public async Task StaticField_LazyIServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static Lazy<IServiceProvider> _provider = new(() => null!);
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(5, 43, 5, 52)
+                .WithArguments("Lazy<IServiceProvider>", "_provider"));
+    }
+
+    [Fact]
+    public async Task StaticProperty_LazyIServiceScopeFactory_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                public static Lazy<IServiceScopeFactory> ScopeFactory { get; } = new(() => null!);
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(5, 46, 5, 58)
+                .WithArguments("Lazy<IServiceScopeFactory>", "ScopeFactory"));
+    }
+
+    [Fact]
+    public async Task StaticField_LazyIKeyedServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static Lazy<IKeyedServiceProvider> _provider = new(() => null!);
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.ReferenceAssembliesWithLatestKeyedDi,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(5, 48, 5, 57)
+                .WithArguments("Lazy<IKeyedServiceProvider>", "_provider"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (False Positives)
@@ -155,6 +210,19 @@ public class DI006_StaticProviderCacheAnalyzerTests
                 {
                     _scopeFactory = scopeFactory;
                 }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticField_LazyOtherType_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static Lazy<string> _name = new(() => "name");
             }
             """;
 
