@@ -177,7 +177,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** Yes. Moves simple immediate uses back into the owning scope when safe, or adds a narrow pragma suppression for context-dependent cases.
+**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases.
 
 ---
 

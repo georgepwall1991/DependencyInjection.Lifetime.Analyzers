@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.1
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.1">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.1" />
 ```
 
 Then reference it from the project file:
@@ -306,7 +306,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** Yes. Moves simple immediate uses back into the owning scope when safe, or adds a narrow pragma suppression for context-dependent cases.
+**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases.
 
 ---
 

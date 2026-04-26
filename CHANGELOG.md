@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-04-26
+
+### Changed
+
+- **DI004 Code Fix Safety**: The move-into-scope fix is now offered only for immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, preventing unsafe rewrites into unrelated later scopes or escape assignments.
+- **DI004 Fixer Regression Coverage**: Added guardrails for unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, and `await using` statement movement.
+
 ## [2.8.0] - 2026-04-23
 
 ### Changed

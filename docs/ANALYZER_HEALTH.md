@@ -1,10 +1,10 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-23 (critical analyzer hardening pass)
-**Version:** 2.7.0
-**Test result:** 744/744 passing.
+**Date:** 2026-04-26 (DI004 fixer safety pass)
+**Version:** 2.8.1
+**Test result:** 761/761 passing.
 **Analyzers:** 19 (DI001-DI019)
-**Code fix providers:** 10
+**Code fix providers:** 12
 
 ## Summary
 
@@ -13,7 +13,7 @@
 | DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
 | DI002 | Scope Escape | Warn | 29 | 5 | 9 | 7 | Hardened: AddTodo action tested, duplicate TODO bug fixed, property/out/ref sinks |
 | DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
-| DI004 | Use After Dispose | Warn | 29 | -- | 9 | -- | Strong after boundary hardening, GetServices foreach |
+| DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
 | DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
 | DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
@@ -32,7 +32,7 @@
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.4/10.
+**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.3/10.
 
 ## Scoring Methodology
 
@@ -70,9 +70,9 @@ Strong runtime-correctness rule. Instance-backed registrations are explicitly ex
 
 ### DI004 -- Use After Dispose (Warning)
 
-**Analyzer: 10/10** | Tests: 43 | **Fixer: 8/10** | Fix Tests: 4
+**Analyzer: 10/10** | Tests: 43 | **Fixer: 8.5/10** | Fix Tests: 8
 
-Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Fixer moves simple immediate uses into the scope and offers pragma suppression for context-dependent cases.
+Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, comments, return-only suppression, and `await using` blocks.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -171,6 +171,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | DI001 (Scope Disposal) | 11 | 8.5 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates) |
 | DI002 (Scope Escape) | 5 | 7 | Low -- both actions tested, duplicate TODO bug fixed, property sink covered |
 | DI003 (Captive Dependency) | 8 | 8 | Low -- solid shape coverage |
+| DI004 (Use After Dispose) | 8 | 8.5 | Low -- move fix is now gated to owning-scope immediate invocations, with unsafe escape/adjacent-scope shapes suppressed |
 | DI005 (Async Scope) | 9 | 8 | Low -- narrow transformation, well-tested |
 | DI006 (Static Provider Cache) | 14 | 9 | Low -- more tests than analyzer |
 | DI008 (Disposable Transient) | 13 | 9 | Low -- strong shape coverage |
@@ -201,14 +202,14 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 699 |
-| Analyzer tests | 518 |
-| Code fix tests | 93 |
+| Total tests | 761 |
+| Analyzer tests | 585 |
+| Code fix tests | 98 |
 | Infrastructure tests | 78 |
 | Analyzer mean score | 8.8/10 |
-| Fixer mean score | 8.4/10 |
-| Rules at 9+ | 14/18 (78%) |
-| Fixers at 8+ | 8/9 (89%) |
+| Fixer mean score | 8.3/10 |
+| Rules at 9+ | 12/19 (63%) |
+| Fixers at 8+ | 11/12 (92%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
 | Skipped tests | 0 |
@@ -224,6 +225,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | #34 | DI002 fixer didn't check for existing TODO, causing duplicate TODOs on iterative application | Low | DI002 |
 | Current | DI017 reported speculative cycles for ambiguous equally greedy constructor sets | Medium | DI017 |
 | Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
+| Current | DI004 move fix could be offered for an unrelated immediately preceding `using` block or for an escape assignment | Medium | DI004 |
 
 ## Watchlist
 
@@ -236,4 +238,4 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 ## Recommended Next Actions
 
 1. **Expand DI002 fixer sink coverage** -- lambda capture and deeper aliasing sinks remain context-sensitive
-2. **Keep growing DI004 fixer coverage** -- only simple immediate moves are automatic; architectural fixes remain suppression/manual-refactor territory
+2. **Review DI001 disposal proofs** -- conditional paths and exception-flow disposal proofs remain the most plausible analyzer false-positive source
