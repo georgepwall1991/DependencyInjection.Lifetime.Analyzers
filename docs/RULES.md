@@ -183,7 +183,7 @@ using (var scope = _scopeFactory.CreateScope())
 
 ## DI005: Use `CreateAsyncScope` in Async Methods
 
-**What it catches:** `CreateScope()` used in async flows where async disposal is needed.
+**What it catches:** `CreateScope()` used in async flows where async disposal is needed, including async methods, lambdas, local functions, anonymous methods, and top-level programs that use `await`.
 
 **Why it matters:** async disposables (`IAsyncDisposable`) may not be cleaned up correctly with sync disposal patterns.
 
@@ -211,7 +211,7 @@ public async Task RunAsync()
 }
 ```
 
-**Code Fix:** Yes. Rewrites scope creation/disposal pattern.
+**Code Fix:** Yes. Rewrites safe `using` scope creation/disposal patterns to `await using` plus `CreateAsyncScope()`.
 
 ---
 

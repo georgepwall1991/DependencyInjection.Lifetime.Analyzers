@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI001 conditional ownership pass)
-**Version:** 2.8.5
-**Test result:** 782/782 passing.
+**Date:** 2026-04-26 (DI005 top-level async pass)
+**Version:** 2.8.6
+**Test result:** 788/788 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -14,7 +14,7 @@
 | DI002 | Scope Escape | Warn | 33 | 6 | 9.5 | 8 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks |
 | DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
-| DI005 | Async Disposal | Warn | 17 | 9 | 8 | 8 | Narrow rule, well-tested |
+| DI005 | Async Disposal | Warn | 22 | 10 | 9 | 8.5 | Hardened: top-level async statements, nested async guardrails, safe using fixer coverage |
 | DI006 | Static Provider Cache | Warn | 11 | 14 | 8 | 9 | Simple rule, strong fixer |
 | DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
 | DI008 | Disposable Transient | Warn | 19 | 13 | 8 | 9 | Solid coverage both sides |
@@ -32,7 +32,7 @@
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 8.9/10. Fixer mean 8.5/10.
+**Aggregates:** Analyzer mean 9.0/10. Fixer mean 8.5/10.
 
 ## Scoring Methodology
 
@@ -76,9 +76,9 @@ Strong after explicit-disposal and post-boundary state hardening. Covers constru
 
 ### DI005 -- Async Disposal (Warning)
 
-**Analyzer: 8/10** | Tests: 17 | **Fixer: 8/10** | Fix Tests: 9
+**Analyzer: 9/10** | Tests: 22 | **Fixer: 8.5/10** | Fix Tests: 10
 
-Narrow rule with a clear trigger: `CreateScope()` in async methods. Fixer replaces with `CreateAsyncScope()` and handles `await using` conversion. Async methods, lambdas, local functions, and `IServiceProvider.CreateScope()` covered.
+Narrow rule with a clear trigger: `CreateScope()` in async flows. Coverage now includes async methods, lambdas, local functions, anonymous methods, top-level programs that use `await`, and `IServiceProvider.CreateScope()`. Top-level detection ignores nested async local functions, lambdas, and anonymous methods so otherwise synchronous top-level scope creation stays quiet. Fixer replaces safe `using` declarations/statements with `CreateAsyncScope()` plus `await using`, including top-level using declarations.
 
 ### DI006 -- Static Provider Cache (Warning)
 
@@ -174,7 +174,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | DI002 (Scope Escape) | 6 | 8 | Low -- pragma-only suppression now covers direct, alias, ref/out, property, and captured-delegate diagnostics |
 | DI003 (Captive Dependency) | 8 | 8 | Low -- solid shape coverage |
 | DI004 (Use After Dispose) | 8 | 8.5 | Low -- move fix is now gated to owning-scope immediate invocations, with unsafe escape/adjacent-scope shapes suppressed |
-| DI005 (Async Scope) | 9 | 8 | Low -- narrow transformation, well-tested |
+| DI005 (Async Scope) | 10 | 8.5 | Low -- narrow using/await-using transformation, including top-level async using declarations |
 | DI006 (Static Provider Cache) | 14 | 9 | Low -- more tests than analyzer |
 | DI008 (Disposable Transient) | 13 | 9 | Low -- strong shape coverage |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
@@ -204,13 +204,13 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 782 |
-| Analyzer tests | 602 |
-| Code fix tests | 102 |
+| Total tests | 788 |
+| Analyzer tests | 607 |
+| Code fix tests | 103 |
 | Infrastructure tests | 78 |
-| Analyzer mean score | 8.9/10 |
+| Analyzer mean score | 9.0/10 |
 | Fixer mean score | 8.5/10 |
-| Rules at 9+ | 14/19 (74%) |
+| Rules at 9+ | 15/19 (79%) |
 | Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
@@ -232,6 +232,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
 | Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
 | Current | DI001 treated conditionally assigned nullable scope locals as leaked when later conditional-access or non-null-guarded cleanup closed ownership | Low | DI001 |
+| Current | DI005 missed `CreateScope()` in top-level programs that use `await`, leaving async disposal guidance silent in common minimal-hosting and console entry points | Medium | DI005 |
 
 ## Watchlist
 
@@ -242,4 +243,4 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 ## Recommended Next Actions
 
 1. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
-2. **Revisit DI008/DI005 narrow edges opportunistically** -- both are stable warning rules; future passes should be driven by concrete false-positive or false-negative reports
+2. **Revisit DI008 narrow edges opportunistically** -- stable warning rule; future passes should be driven by concrete false-positive or false-negative reports

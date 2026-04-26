@@ -2,6 +2,9 @@ using System.Threading.Tasks;
 using DependencyInjection.Lifetime.Analyzers.CodeFixes;
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.CodeFixes;
@@ -351,6 +354,42 @@ public class DI005_AsyncScopeRequiredCodeFixTests
 
         await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public async Task CodeFix_ReplacesCreateScopeWithCreateAsyncScope_TopLevelUsingVarDeclaration()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = {|#0:provider.CreateScope()|};
+            await Task.Delay(100);
+            """;
+
+        var fixedSource = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            await using var scope = provider.CreateAsyncScope();
+            await Task.Delay(100);
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithLocation(0)
+            .WithArguments("top-level statements");
+
+        var test = new CSharpCodeFixTest<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider, DefaultVerifier>
+        {
+            TestCode = source,
+            FixedCode = fixedSource,
+            ReferenceAssemblies = AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.ReferenceAssembliesWithDi60
+        };
+
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        test.FixedState.OutputKind = OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.Add(expected);
+
+        await test.RunAsync();
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
@@ -349,6 +351,51 @@ public class DI005_AsyncDisposalAnalyzerTests
                 .WithArguments(""));
     }
 
+    [Fact]
+    public async Task CreateScope_InTopLevelAsyncStatements_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = {|#0:provider.CreateScope()|};
+            await Task.Delay(100);
+            """;
+
+        var test = CreateTopLevelTest(source);
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithLocation(0)
+                .WithArguments("top-level statements"));
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task CreateScope_InTopLevelAwaitUsingStatements_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = {|#0:provider.CreateScope()|};
+            await using var resource = new AsyncResource();
+
+            public sealed class AsyncResource : IAsyncDisposable
+            {
+                public ValueTask DisposeAsync() => default;
+            }
+            """;
+
+        var test = CreateTopLevelTest(source);
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithLocation(0)
+                .WithArguments("top-level statements"));
+
+        await test.RunAsync();
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (False Positives)
@@ -498,5 +545,60 @@ public class DI005_AsyncDisposalAnalyzerTests
         await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task CreateScope_InTopLevelSyncStatements_NoDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+            Console.WriteLine(scope.ServiceProvider);
+            """;
+
+        await CreateTopLevelTest(source).RunAsync();
+    }
+
+    [Fact]
+    public async Task CreateScope_InTopLevelStatementsWithNestedAsyncLocalFunction_NoDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+
+            async Task LaterAsync()
+            {
+                await Task.Delay(100);
+            }
+            """;
+
+        await CreateTopLevelTest(source).RunAsync();
+    }
+
+    [Fact]
+    public async Task CreateScope_InTopLevelStatementsWithNestedAsyncLambda_NoDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+            Func<Task> laterAsync = async () => await Task.Delay(100);
+            """;
+
+        await CreateTopLevelTest(source).RunAsync();
+    }
+
     #endregion
+
+    private static CSharpAnalyzerTest<DI005_AsyncDisposalAnalyzer, DefaultVerifier> CreateTopLevelTest(string source)
+    {
+        var test = new CSharpAnalyzerTest<DI005_AsyncDisposalAnalyzer, DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.ReferenceAssembliesWithDi60
+        };
+
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        return test;
+    }
 }
