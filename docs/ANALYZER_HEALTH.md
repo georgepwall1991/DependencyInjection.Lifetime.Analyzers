@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI002 delegate escape pass)
-**Version:** 2.8.2
-**Test result:** 768/768 passing.
+**Date:** 2026-04-26 (DI001 disposal-proof pass)
+**Version:** 2.8.3
+**Test result:** 770/770 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -10,7 +10,7 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 23 | 11 | 8 | 8.5 | Hardened: nested scopes, explicit types, trivia, async delegates |
+| DI001 | Scope Disposal | Warn | 25 | 11 | 8.5 | 8.5 | Hardened: conditional/catch-only disposal proofs, nested scopes, explicit types |
 | DI002 | Scope Escape | Warn | 33 | 6 | 9.5 | 8 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks |
 | DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
@@ -50,9 +50,9 @@
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 8/10** | Tests: 23 | **Fixer: 8.5/10** | Fix Tests: 11
+**Analyzer: 8.5/10** | Tests: 25 | **Fixer: 8.5/10** | Fix Tests: 11
 
-Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Fixer wraps in `using`/`await using` statement. Post-hardening: added tests for nested scopes, IServiceProvider entry, explicit type declarations, trivia preservation with leading comments, and async anonymous method delegates. Remaining debt: disposal-proof edge cases (conditional paths, exception flows).
+Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs now reject `Dispose()` / `DisposeAsync()` calls that are reachable only through conditional branches, switch sections, loops, or catch blocks, while continuing to accept straight-line and `finally` disposal patterns. Fixer wraps in `using`/`await using` statement. Remaining debt: nullable outer-variable disposal proofs after conditional creation remain a possible precision edge.
 
 ### DI002 -- Scope Escape (Warning)
 
@@ -202,8 +202,8 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 768 |
-| Analyzer tests | 589 |
+| Total tests | 770 |
+| Analyzer tests | 591 |
 | Code fix tests | 101 |
 | Infrastructure tests | 78 |
 | Analyzer mean score | 8.8/10 |
@@ -227,15 +227,16 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
 | Current | DI004 move fix could be offered for an unrelated immediately preceding `using` block or for an escape assignment | Medium | DI004 |
 | Current | DI002 missed scoped services captured by delegates that escaped through later return, field, property, or ref/out sinks | Medium | DI002 |
+| Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| DI001 analyzer | Disposal edge cases remain the most plausible false-positive source | Low |
 | DI014 analyzer | Root-provider ownership edge cases | Low |
+| DI001 analyzer | Nullable outer-variable disposal proofs after conditional creation | Low |
 
 ## Recommended Next Actions
 
-1. **Review DI001 disposal proofs** -- conditional paths and exception-flow disposal proofs remain the most plausible analyzer false-positive source
-2. **Review DI014 root-provider ownership** -- root-provider ownership edge cases remain the next warning-level precision target
+1. **Review DI014 root-provider ownership** -- root-provider ownership edge cases remain the next warning-level precision target
+2. **Review DI001 conditional creation ownership** -- nullable outer-variable patterns can still be reviewed for safe no-diagnostic coverage

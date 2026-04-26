@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.2
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.3
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.2">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.3">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.2" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.3" />
 ```
 
 Then reference it from the project file:
@@ -164,7 +164,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 
 ## DI001: Service Scope Not Disposed
 
-**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed.
+**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, switch section, loop, or catch block.
 
 **Why it matters:** undisposed scopes can retain scoped and transient disposable services longer than expected, causing memory and handle leaks.
 

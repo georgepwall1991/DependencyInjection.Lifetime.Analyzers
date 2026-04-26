@@ -171,6 +171,74 @@ public class DI001_ScopeDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_DisposedOnlyConditionally_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork(bool shouldDispose)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    if (shouldDispose)
+                    {
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 21, 15, 48)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
+    public async Task CreateScope_DisposedOnlyInCatch_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    try
+                    {
+                        var service = scope.ServiceProvider.GetService<object>();
+                    }
+                    catch
+                    {
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+                .WithSpan(15, 21, 15, 48)
+                .WithArguments("CreateScope"));
+    }
+
+    [Fact]
     public async Task NestedScopes_InnerNotDisposed_ReportsDiagnostic()
     {
         var source = Usings + """

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-04-26
+
+### Changed
+
+- **DI001 Disposal-Proof Precision**: DI001 now reports scopes whose only `Dispose()` / `DisposeAsync()` proof is guarded by a conditional branch, switch section, loop, or catch block, while preserving straight-line and `finally` disposal patterns.
+- **DI001 Regression Coverage**: Added focused analyzer guardrails for conditional and catch-only disposal so the rule no longer suppresses leaks just because a later disposal call appears syntactically in the method.
+
 ## [2.8.2] - 2026-04-26
 
 ### Changed
