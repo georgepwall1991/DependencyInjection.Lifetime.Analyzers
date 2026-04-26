@@ -255,6 +255,77 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_DisposedOnlyConditionally_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool shouldDispose)
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        if (shouldDispose)
+        {
+            provider.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 24));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_DisposedOnlyInCatch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        try
+        {
+            var service = provider.GetService(typeof(object));
+        }
+        catch
+        {
+            provider.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 24));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_InterveningReassignment_FirstProviderStillReported()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        provider = services.BuildServiceProvider();
+        provider.Dispose();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 24));
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_ShadowedVariableDisposed_OuterProviderStillReported()
     {
         var source = Usings + @"
@@ -276,5 +347,49 @@ public class Program
             AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
                 .WithLocation(10, 24));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedInsideTryDisposedInFinally_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        ServiceProvider? provider = null;
+        try
+        {
+            provider = services.BuildServiceProvider();
+        }
+        finally
+        {
+            provider?.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_DisposedBehindNullGuard_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        if (provider is not null)
+        {
+            provider.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 }

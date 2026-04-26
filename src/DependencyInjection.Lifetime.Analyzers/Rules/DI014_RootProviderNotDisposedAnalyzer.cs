@@ -188,13 +188,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         var (targetSymbol, containingType) = assignmentTarget.Value;
         if (targetSymbol is ILocalSymbol localSymbol)
         {
-            var containingBlock = GetContainingBlock(invocation.Syntax);
-            if (containingBlock is null)
+            var searchRoot = GetExecutableBoundary(invocation.Syntax) ?? GetContainingBlock(invocation.Syntax);
+            if (searchRoot is null)
             {
                 return false;
             }
 
-            return HasDisposeCallInBlock(containingBlock, invocation.Syntax, localSymbol, semanticModel);
+            return HasDisposeCallInBlock(searchRoot, invocation.Syntax, localSymbol, semanticModel);
         }
 
         if (targetSymbol is IFieldSymbol or IPropertySymbol)
@@ -244,13 +244,140 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (!IsReliableDisposeProof(invocationSyntax, creationSyntax, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
             if (SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+            {
+                if (HasInterveningReassignment(creationSyntax, invocationSyntax, variableSymbol, semanticModel))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasInterveningReassignment(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in creationSyntax.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(creationSyntax.Span.End, disposeSyntax.SpanStart)))
+        {
+            if (descendant is not AssignmentExpressionSyntax assignment)
+            {
+                continue;
+            }
+
+            if (!SharesExecutableBoundary(assignment, creationSyntax))
+            {
+                continue;
+            }
+
+            var assignedSymbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+            if (SymbolEqualityComparer.Default.Equals(assignedSymbol, variableSymbol))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsReliableDisposeProof(
+        InvocationExpressionSyntax disposeSyntax,
+        SyntaxNode creationSyntax,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        var boundary = GetExecutableBoundary(creationSyntax);
+        var current = disposeSyntax.Parent;
+        while (current is not null && current != boundary)
+        {
+            if (current is IfStatementSyntax ifStatement)
+            {
+                if (!IsNonNullGuardForTarget(ifStatement.Condition, variableSymbol, semanticModel))
+                {
+                    return false;
+                }
+            }
+            else if (current is ElseClauseSyntax or
+                     SwitchStatementSyntax or
+                     SwitchSectionSyntax or
+                     ConditionalExpressionSyntax or
+                     ForStatementSyntax or
+                     ForEachStatementSyntax or
+                     ForEachVariableStatementSyntax or
+                     WhileStatementSyntax or
+                     DoStatementSyntax or
+                     CatchClauseSyntax)
+            {
+                return false;
+            }
+
+            current = current.Parent;
+        }
+
+        return true;
+    }
+
+    private static bool IsNonNullGuardForTarget(
+        ExpressionSyntax condition,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        condition = UnwrapParentheses(condition);
+
+        if (condition is BinaryExpressionSyntax binary &&
+            binary.IsKind(SyntaxKind.NotEqualsExpression))
+        {
+            return IsNullLiteral(binary.Left) && ExpressionTargetsSymbol(binary.Right, variableSymbol, semanticModel) ||
+                   IsNullLiteral(binary.Right) && ExpressionTargetsSymbol(binary.Left, variableSymbol, semanticModel);
+        }
+
+        if (condition is IsPatternExpressionSyntax isPattern &&
+            ExpressionTargetsSymbol(isPattern.Expression, variableSymbol, semanticModel) &&
+            isPattern.Pattern is UnaryPatternSyntax unaryPattern &&
+            unaryPattern.Pattern is ConstantPatternSyntax constantPattern &&
+            IsNullLiteral(constantPattern.Expression))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ExpressionTargetsSymbol(
+        ExpressionSyntax expression,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        expression = UnwrapParentheses(expression);
+        var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
+        return SymbolEqualityComparer.Default.Equals(symbol, variableSymbol);
+    }
+
+    private static bool IsNullLiteral(ExpressionSyntax expression)
+    {
+        return UnwrapParentheses(expression).IsKind(SyntaxKind.NullLiteralExpression);
+    }
+
+    private static ExpressionSyntax UnwrapParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
     }
 
     private static bool HasDisposeCallInOwnerType(

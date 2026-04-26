@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI001 disposal-proof pass)
-**Version:** 2.8.3
-**Test result:** 770/770 passing.
+**Date:** 2026-04-26 (DI014 root-provider disposal-proof pass)
+**Version:** 2.8.4
+**Test result:** 776/776 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -23,7 +23,7 @@
 | DI011 | Service Provider Injection | Info | 19 | -- | 9 | -- | Activation-constructor logic |
 | DI012 | Conditional Registration | Info | 30 | 4 | 9 | 8 | Complex flow, ignored TryAdd fixer |
 | DI013 | Implementation Mismatch | Error | 59 | 8 | 9.5 | 8 | Variance-aware assignability, named-argument extraction, broad assists |
-| DI014 | Root Provider Not Disposed | Warn | 13 | 8 | 8 | 8.5 | Hardened: IsAsyncMethod bug fixed, async local fn, chained builders |
+| DI014 | Root Provider Not Disposed | Warn | 18 | 9 | 9 | 9 | Hardened: reliable local disposal proofs, reassignment leaks, safe manual-fix gating |
 | DI015 | Unresolvable Dependency | Warn | 54 | 10 | 9 | 8 | One of strongest overall |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 16 | -- | 9 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey |
@@ -32,7 +32,7 @@
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 8.8/10. Fixer mean 8.4/10.
+**Aggregates:** Analyzer mean 8.9/10. Fixer mean 8.5/10.
 
 ## Scoring Methodology
 
@@ -130,9 +130,11 @@ Most comprehensive test file in the repo. Covers variance-aware closed generic a
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
-**Analyzer: 8/10** | Tests: 13 | **Fixer: 8.5/10** | Fix Tests: 8
+**Analyzer: 9/10** | Tests: 18 | **Fixer: 9/10** | Fix Tests: 9
 
 Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered. Added tests for async local function inside sync method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
+
+Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
@@ -178,7 +180,7 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 4 | 8 | Low -- narrow standalone-statement removal |
 | DI013 (Implementation Mismatch) | 8 | 8 | Medium -- broad assists are symbol-backed, FixAll disabled |
-| DI014 (Root Provider) | 8 | 8.5 | Low -- IsAsyncMethod bug fixed, async local fn + chained builders covered |
+| DI014 (Root Provider) | 9 | 9 | Low -- reliable local disposal proofs, reassignment guardrails, async local fn + chained builders covered |
 | DI015 (Unresolvable Dependency) | 12 | 8.8 | Low -- keyed and factory self-binding generation is still tightly gated |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI019. These rules detect problems whose resolution requires architectural or context-dependent decisions.
@@ -202,13 +204,13 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 770 |
-| Analyzer tests | 591 |
-| Code fix tests | 101 |
+| Total tests | 776 |
+| Analyzer tests | 596 |
+| Code fix tests | 102 |
 | Infrastructure tests | 78 |
-| Analyzer mean score | 8.8/10 |
-| Fixer mean score | 8.4/10 |
-| Rules at 9+ | 12/19 (63%) |
+| Analyzer mean score | 8.9/10 |
+| Fixer mean score | 8.5/10 |
+| Rules at 9+ | 13/19 (68%) |
 | Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
@@ -228,15 +230,15 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI004 move fix could be offered for an unrelated immediately preceding `using` block or for an escape assignment | Medium | DI004 |
 | Current | DI002 missed scoped services captured by delegates that escaped through later return, field, property, or ref/out sinks | Medium | DI002 |
 | Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
+| Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| DI014 analyzer | Root-provider ownership edge cases | Low |
 | DI001 analyzer | Nullable outer-variable disposal proofs after conditional creation | Low |
 
 ## Recommended Next Actions
 
-1. **Review DI014 root-provider ownership** -- root-provider ownership edge cases remain the next warning-level precision target
-2. **Review DI001 conditional creation ownership** -- nullable outer-variable patterns can still be reviewed for safe no-diagnostic coverage
+1. **Review DI001 conditional creation ownership** -- nullable outer-variable patterns can still be reviewed for safe no-diagnostic coverage
+2. **Refresh low-priority info-rule docs** -- once warning-level ownership edges stay quiet, keep Info-rule remediation guidance polished without widening diagnostic scope
