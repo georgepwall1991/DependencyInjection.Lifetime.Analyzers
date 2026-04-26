@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.5] - 2026-04-26
+
+### Changed
+
+- **DI001 Conditional Ownership Precision**: DI001 now recognizes predeclared nullable scope locals assigned inside conditional or `try` blocks when a later conditional-access, non-null-guarded, or `finally` disposal reliably closes ownership.
+- **DI001 Regression Guardrails**: Added coverage for if/else conditional ownership, `try`/`finally` disposal, non-null guard disposal, reassignment leaks, and loop-created scopes that still require deliberate per-iteration disposal.
+
 ## [2.8.4] - 2026-04-26
 
 ### Changed

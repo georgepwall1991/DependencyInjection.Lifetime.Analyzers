@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (DI014 root-provider disposal-proof pass)
-**Version:** 2.8.4
-**Test result:** 776/776 passing.
+**Date:** 2026-04-26 (DI001 conditional ownership pass)
+**Version:** 2.8.5
+**Test result:** 782/782 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -10,7 +10,7 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 25 | 11 | 8.5 | 8.5 | Hardened: conditional/catch-only disposal proofs, nested scopes, explicit types |
+| DI001 | Scope Disposal | Warn | 31 | 11 | 9.5 | 8.5 | Hardened: conditional ownership proofs, non-null disposal guards, reassignment and loop guardrails |
 | DI002 | Scope Escape | Warn | 33 | 6 | 9.5 | 8 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks |
 | DI003 | Captive Dependency | Warn | 34 | 8 | 9 | 8 | Solid both sides, IEnumerable/GetServices captures |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
@@ -50,9 +50,9 @@
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 8.5/10** | Tests: 25 | **Fixer: 8.5/10** | Fix Tests: 11
+**Analyzer: 9.5/10** | Tests: 31 | **Fixer: 8.5/10** | Fix Tests: 11
 
-Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs now reject `Dispose()` / `DisposeAsync()` calls that are reachable only through conditional branches, switch sections, loops, or catch blocks, while continuing to accept straight-line and `finally` disposal patterns. Fixer wraps in `using`/`await using` statement. Remaining debt: nullable outer-variable disposal proofs after conditional creation remain a possible precision edge.
+Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, or catch blocks, while continuing to accept straight-line and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement.
 
 ### DI002 -- Scope Escape (Warning)
 
@@ -204,13 +204,13 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 776 |
-| Analyzer tests | 596 |
+| Total tests | 782 |
+| Analyzer tests | 602 |
 | Code fix tests | 102 |
 | Infrastructure tests | 78 |
 | Analyzer mean score | 8.9/10 |
 | Fixer mean score | 8.5/10 |
-| Rules at 9+ | 13/19 (68%) |
+| Rules at 9+ | 14/19 (74%) |
 | Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
@@ -231,14 +231,15 @@ Detects scoped services, and service graphs that reach scoped services, resolved
 | Current | DI002 missed scoped services captured by delegates that escaped through later return, field, property, or ref/out sinks | Medium | DI002 |
 | Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
 | Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
+| Current | DI001 treated conditionally assigned nullable scope locals as leaked when later conditional-access or non-null-guarded cleanup closed ownership | Low | DI001 |
 
 ## Watchlist
 
 | Item | Reason | Priority |
 |------|--------|----------|
-| DI001 analyzer | Nullable outer-variable disposal proofs after conditional creation | Low |
+| Info-rule docs | Keep remediation guidance polished now that warning-level ownership edges are hardened | Low |
 
 ## Recommended Next Actions
 
-1. **Review DI001 conditional creation ownership** -- nullable outer-variable patterns can still be reviewed for safe no-diagnostic coverage
-2. **Refresh low-priority info-rule docs** -- once warning-level ownership edges stay quiet, keep Info-rule remediation guidance polished without widening diagnostic scope
+1. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
+2. **Revisit DI008/DI005 narrow edges opportunistically** -- both are stable warning rules; future passes should be driven by concrete false-positive or false-negative reports
