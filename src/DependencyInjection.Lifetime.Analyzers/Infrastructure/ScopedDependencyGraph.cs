@@ -368,6 +368,12 @@ internal sealed class ScopedDependencyGraph
 
         if (!namedType.IsGenericType || namedType.IsUnboundGenericType)
         {
+            var nonGenericAnyKeyRegistration = GetLatestAnyKeyFallbackRegistration(requestedType, key, isKeyed);
+            if (nonGenericAnyKeyRegistration is not null)
+            {
+                yield return nonGenericAnyKeyRegistration;
+            }
+
             yield break;
         }
 
@@ -376,7 +382,44 @@ internal sealed class ScopedDependencyGraph
             registration is not null)
         {
             yield return registration;
+            yield break;
         }
+
+        var anyKeyRegistration = GetLatestAnyKeyFallbackRegistration(requestedType, key, isKeyed);
+        if (anyKeyRegistration is not null)
+        {
+            yield return anyKeyRegistration;
+        }
+    }
+
+    private ServiceRegistration? GetLatestAnyKeyFallbackRegistration(
+        ITypeSymbol requestedType,
+        object? key,
+        bool isKeyed)
+    {
+        if (!isKeyed ||
+            SyntaxValueHelpers.IsKeyedServiceAnyKey(key))
+        {
+            return null;
+        }
+
+        ServiceRegistration? latest = null;
+        foreach (var registration in _registrationCollector.AllRegistrations)
+        {
+            if (!registration.IsKeyed ||
+                !SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key) ||
+                !IsMatchingServiceType(registration.ServiceType, requestedType))
+            {
+                continue;
+            }
+
+            if (latest is null || registration.Order > latest.Order)
+            {
+                latest = registration;
+            }
+        }
+
+        return latest;
     }
 
     private IEnumerable<ServiceRegistration> GetAllMatchingRegistrations(
@@ -413,8 +456,36 @@ internal sealed class ScopedDependencyGraph
         }
     }
 
-    private static bool IsMatchingKey(object? registrationKey, object? requestedKey) =>
-        Equals(registrationKey, requestedKey);
+    private static bool IsMatchingKey(object? registrationKey, object? requestedKey)
+    {
+        if (Equals(registrationKey, requestedKey))
+        {
+            return true;
+        }
+
+        return !SyntaxValueHelpers.IsKeyedServiceAnyKey(requestedKey) &&
+               SyntaxValueHelpers.IsKeyedServiceAnyKey(registrationKey);
+    }
+
+    private static bool IsMatchingServiceType(
+        INamedTypeSymbol registeredType,
+        ITypeSymbol requestedType)
+    {
+        if (SymbolEqualityComparer.Default.Equals(registeredType, requestedType))
+        {
+            return true;
+        }
+
+        if (requestedType is not INamedTypeSymbol namedType ||
+            !namedType.IsGenericType ||
+            namedType.IsUnboundGenericType)
+        {
+            return false;
+        }
+
+        var openGenericType = namedType.ConstructUnboundGenericType();
+        return SymbolEqualityComparer.Default.Equals(registeredType, openGenericType);
+    }
 
     private bool ShouldSkipParameter(IParameterSymbol parameter)
     {

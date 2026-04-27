@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.11] - 2026-04-27
+
+### Changed
+
+- **DI019 Root Collection Resolution**: DI019 now reports root-provider `GetService` / `GetRequiredService` calls for `IEnumerable<T>` when any resolved collection element is scoped.
+- **DI019 ASP.NET Core Root Surfaces**: DI019 now recognizes additional root provider entry points such as `IApplicationBuilder.ApplicationServices`, `IEndpointRouteBuilder.ServiceProvider`, null-conditional root-provider resolutions, and keyed `AnyKey` scoped fallback registrations.
+
 ## [2.8.10] - 2026-04-27
 
 ### Changed
