@@ -28,6 +28,10 @@ public class DI003_CaptiveDependencyAnalyzerTests
         {
             public class DbContext { }
             public class DbContextOptions<TContext> where TContext : DbContext { }
+            public interface IDbContextFactory<TContext> where TContext : DbContext
+            {
+                TContext CreateDbContext();
+            }
         }
 
         namespace Microsoft.Extensions.DependencyInjection
@@ -46,6 +50,27 @@ public class DI003_CaptiveDependencyAnalyzerTests
                     ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
                     where TContextService : class
                     where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+            }
+        }
+
+        """;
+
+    private const string HostedServiceStubs = """
+        namespace Microsoft.Extensions.Hosting
+        {
+            public interface IHostedService
+            {
+                System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken);
+                System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken);
+            }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class ServiceCollectionHostedServiceExtensions
+            {
+                public static IServiceCollection AddHostedService<THostedService>(this IServiceCollection services)
+                    where THostedService : class, Microsoft.Extensions.Hosting.IHostedService => services;
             }
         }
 
@@ -429,6 +454,174 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
                 .WithLocation(0)
                 .WithArguments("SingletonService", "scoped", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingAddDbContextOptions_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(DbContextOptions<MyDbContext> options) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "DbContextOptions"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingScopedRepositoryAndUnitOfWork_ReportsDiagnostics()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public interface IRepository<T> { }
+            public sealed class EfRepository<T> : IRepository<T>
+            {
+                public EfRepository(MyDbContext dbContext) { }
+            }
+
+            public interface IUnitOfWork { }
+            public sealed class EfUnitOfWork : IUnitOfWork
+            {
+                public EfUnitOfWork(MyDbContext dbContext) { }
+            }
+
+            public interface ISingletonService { }
+            public sealed class SingletonService : ISingletonService
+            {
+                public SingletonService(IRepository<string> repository, IUnitOfWork unitOfWork) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
+                    services.AddScoped<IUnitOfWork, EfUnitOfWork>();
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "IRepository"),
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "IUnitOfWork"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingDbContextFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IDbContextFactory<MyDbContext> dbContextFactory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HostedServiceResolvingScopedProcessorFromScope_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.Extensions.Hosting;
+
+            """ + EfCoreStubs + HostedServiceStubs + """
+            public class MyDbContext : DbContext { }
+
+            public interface IProcessor
+            {
+                System.Threading.Tasks.Task RunAsync(System.Threading.CancellationToken cancellationToken);
+            }
+
+            public sealed class Processor : IProcessor
+            {
+                public Processor(MyDbContext dbContext) { }
+                public System.Threading.Tasks.Task RunAsync(System.Threading.CancellationToken cancellationToken) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+
+            public sealed class ProcessorHostedService : IHostedService
+            {
+                private readonly System.IServiceProvider _serviceProvider;
+
+                public ProcessorHostedService(System.IServiceProvider serviceProvider)
+                {
+                    _serviceProvider = serviceProvider;
+                }
+
+                public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var processor = scope.ServiceProvider.GetRequiredService<IProcessor>();
+                    return processor.RunAsync(cancellationToken);
+                }
+
+                public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                    services.AddScoped<IProcessor, Processor>();
+                    services.AddHostedService<ProcessorHostedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

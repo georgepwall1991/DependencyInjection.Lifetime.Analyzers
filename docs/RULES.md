@@ -144,6 +144,36 @@ public sealed class SingletonService : ISingletonService
 }
 ```
 
+**DbContext-backed processors:**
+
+```csharp
+services.AddDbContext<AppDbContext>();
+services.AddScoped<IProcessor, Processor>();
+services.AddHostedService<ProcessorHostedService>();
+
+public sealed class ProcessorHostedService : IHostedService
+{
+    private readonly IServiceProvider _serviceProvider;
+
+    public ProcessorHostedService(IServiceProvider serviceProvider)
+    {
+        _serviceProvider = serviceProvider;
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var processor = scope.ServiceProvider.GetRequiredService<IProcessor>();
+        await processor.RunAsync(cancellationToken);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+}
+```
+
+Repository and unit-of-work abstractions are reported when their registered lifetime is scoped or transient. DI003 does not infer DbContext-backed behavior from names like `IRepository<T>` or `IUnitOfWork` alone.
+
 **Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, keyed `AddKeyedSingleton`, and supported `ServiceDescriptor` forms).
 
 ---

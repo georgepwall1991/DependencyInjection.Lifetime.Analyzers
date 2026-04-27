@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.13] - 2026-04-27
+
+### Changed
+
+- **DI003 DbContext Guardrails**: Added regression coverage and documentation for DbContext-backed singleton captive dependencies, including `DbContextOptions<TContext>`, scoped repository/unit-of-work abstractions, `IDbContextFactory<TContext>` no-diagnostic behavior, and hosted-service scoped processor guidance.
+
 ## [2.8.12] - 2026-04-27
 
 ### Changed
