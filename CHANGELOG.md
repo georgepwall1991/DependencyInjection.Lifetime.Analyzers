@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.10] - 2026-04-27
+
+### Changed
+
+- **DI003 Keyed Inheritance Coverage**: DI003 now detects keyed singleton registrations that inherit their service key into `[FromKeyedServices]` constructor dependencies or keyed factory lambdas.
+- **DI003 Collection Capture Precision**: DI003 now evaluates all matching `IEnumerable<T>`, `GetServices<T>()`, and `GetKeyedServices<T>()` elements so earlier scoped/transient collection registrations cannot be hidden by a later singleton registration.
+
 ## [2.8.9] - 2026-04-26
 
 ### Changed
