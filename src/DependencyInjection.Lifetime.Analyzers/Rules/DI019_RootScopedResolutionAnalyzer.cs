@@ -327,6 +327,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         isEnumerableRequest = sourceMethod.Name is "GetServices" or "GetKeyedServices";
+        if (!isEnumerableRequest &&
+            TryUnwrapEnumerableServiceType(serviceType, out var elementType))
+        {
+            serviceType = elementType;
+            isEnumerableRequest = true;
+        }
+
         isKeyed = sourceMethod.Name is "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices";
         if (isKeyed &&
             !TryExtractKeyFromResolution(invocation, methodSymbol, semanticModel, out key))
@@ -335,6 +342,26 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return true;
+    }
+
+    private static bool TryUnwrapEnumerableServiceType(
+        ITypeSymbol serviceType,
+        out ITypeSymbol elementType)
+    {
+        if (serviceType is INamedTypeSymbol
+            {
+                IsGenericType: true
+            } namedType &&
+            (namedType.ConstructedFrom.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T ||
+             namedType.Name == "IEnumerable" &&
+             namedType.ContainingNamespace.ToDisplayString() == "System.Collections.Generic"))
+        {
+            elementType = namedType.TypeArguments[0];
+            return true;
+        }
+
+        elementType = serviceType;
+        return false;
     }
 
     private static bool IsServiceResolutionMethod(IMethodSymbol sourceMethod, WellKnownTypes wellKnownTypes)
@@ -353,8 +380,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return wellKnownTypes.IsServiceProvider(sourceMethod.ContainingType) ||
-               wellKnownTypes.IsKeyedServiceProvider(sourceMethod.ContainingType);
+               wellKnownTypes.IsKeyedServiceProvider(sourceMethod.ContainingType) ||
+               IsConcreteServiceProvider(sourceMethod.ContainingType);
     }
+
+    private static bool IsConcreteServiceProvider(ITypeSymbol? type) =>
+        type?.Name == "ServiceProvider" &&
+        type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
 
     private static bool TryGetResolvedServiceType(
         InvocationExpressionSyntax invocation,
@@ -420,6 +452,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         out ExpressionSyntax receiver)
     {
         receiver = null!;
+
+        if (invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull == invocation)
+        {
+            receiver = conditionalAccess.Expression;
+            return true;
+        }
 
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
         {
@@ -499,8 +538,60 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        if (expression is MemberAccessExpressionSyntax rootProviderProperty &&
+            IsKnownRootProviderProperty(rootProviderProperty, semanticModel, wellKnownTypes))
+        {
+            return true;
+        }
+
         return false;
     }
+
+    private static bool IsKnownRootProviderProperty(
+        MemberAccessExpressionSyntax memberAccess,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
+    {
+        if (!wellKnownTypes.IsServiceProvider(semanticModel.GetTypeInfo(memberAccess).Type))
+        {
+            return false;
+        }
+
+        var ownerType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+        return memberAccess.Name.Identifier.Text switch
+        {
+            "ApplicationServices" => IsNamedOrImplements(
+                ownerType,
+                "Microsoft.AspNetCore.Builder",
+                "IApplicationBuilder"),
+            "ServiceProvider" => IsNamedOrImplements(
+                ownerType,
+                "Microsoft.AspNetCore.Routing",
+                "IEndpointRouteBuilder"),
+            _ => false
+        };
+    }
+
+    private static bool IsNamedOrImplements(
+        ITypeSymbol? type,
+        string namespaceName,
+        string typeName)
+    {
+        if (type is not INamedTypeSymbol namedType)
+        {
+            return false;
+        }
+
+        return IsKnownType(namedType, namespaceName, typeName) ||
+               namedType.AllInterfaces.Any(iface => IsKnownType(iface, namespaceName, typeName));
+    }
+
+    private static bool IsKnownType(
+        INamedTypeSymbol type,
+        string namespaceName,
+        string typeName) =>
+        type.Name == typeName &&
+        type.ContainingNamespace.ToDisplayString() == namespaceName;
 
     private static bool IsScopedProviderExpression(
         ExpressionSyntax expression,

@@ -409,6 +409,58 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task RootGetRequiredServiceEnumerableWithScopedRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IEnumerable<IScopedService>>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task RootGetServiceTypeofEnumerableWithScopedRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetService(typeof(IEnumerable<IScopedService>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
     public async Task RootKeyedResolutionWithScopedRegistration_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -433,6 +485,150 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
                 .WithLocation(0)
                 .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task RootKeyedResolutionWithAnyKeyScopedRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>(KeyedService.AnyKey);
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredKeyedService<IScopedService>("tenant-a")|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.ReferenceAssembliesWithLatestDi,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ApplicationBuilderApplicationServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public interface IApplicationBuilder
+                {
+                    IServiceProvider ApplicationServices { get; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Builder.IApplicationBuilder app)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:app.ApplicationServices.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task EndpointRouteBuilderServiceProviderResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Routing
+            {
+                public interface IEndpointRouteBuilder
+                {
+                    IServiceProvider ServiceProvider { get; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:endpoints.ServiceProvider.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task NullConditionalRootProviderResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    IServiceProvider? provider = services.BuildServiceProvider();
+                    provider?.GetService(typeof(IScopedService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithSpan(13, 18, 13, 53)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task UnrelatedServiceProviderPropertyResolvingScoped_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public sealed class ProviderHolder
+            {
+                public IServiceProvider ServiceProvider { get; init; } = null!;
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, ProviderHolder holder)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    holder.ServiceProvider.GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]
