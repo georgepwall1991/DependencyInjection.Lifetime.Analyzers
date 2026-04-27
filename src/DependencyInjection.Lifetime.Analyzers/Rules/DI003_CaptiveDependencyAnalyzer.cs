@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -58,6 +59,25 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
         public override bool Equals(object? obj) =>
             obj is ReportedDiagnosticKey other && Equals(other);
+    }
+
+    private sealed class FactoryKeyContext
+    {
+        public static readonly FactoryKeyContext None = new(
+            keyParameter: null,
+            inheritedKey: null);
+
+        public FactoryKeyContext(
+            IParameterSymbol? keyParameter,
+            object? inheritedKey)
+        {
+            KeyParameter = keyParameter;
+            InheritedKey = inheritedKey;
+        }
+
+        public IParameterSymbol? KeyParameter { get; }
+
+        public object? InheritedKey { get; }
     }
 
     /// <inheritdoc />
@@ -149,6 +169,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
         var semanticModel = GetSemanticModel(factory.SyntaxTree, context.Compilation, semanticModelsByTree);
         var invocations = FactoryAnalysis.GetFactoryInvocations(factory, semanticModel);
+        var factoryKeyContext = CreateFactoryKeyContext(factory, semanticModel, registration);
 
         foreach (var invocation in invocations)
         {
@@ -161,7 +182,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
             var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
             var methodName = sourceMethod.Name;
-            bool isKeyedResolution = methodName == "GetKeyedService" || methodName == "GetRequiredKeyedService";
+            bool isKeyedResolution =
+                methodName is "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices";
+            bool isEnumerableResolution = methodName is "GetServices" or "GetKeyedServices";
 
             if (!IsServiceResolutionMethod(methodSymbol))
             {
@@ -195,18 +218,28 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             bool isKeyed = false;
             if (isKeyedResolution)
             {
-                key = ExtractKeyFromResolution(invocation, methodSymbol, invocationSemanticModel);
+                if (!TryExtractKeyFromResolution(
+                        invocation,
+                        methodSymbol,
+                        invocationSemanticModel,
+                        factoryKeyContext,
+                        out key))
+                {
+                    continue;
+                }
+
                 isKeyed = true;
             }
 
-            var dependencyLifetime = GetDependencyLifetime(
-                registrationCollector,
-                lifetimeClassifier,
-                dependencyType,
-                key,
-                isKeyed);
-            if (dependencyLifetime is null ||
-                !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+            if (!TryGetCaptiveDependencyLifetime(
+                    registration.Lifetime,
+                    registrationCollector,
+                    lifetimeClassifier,
+                    dependencyType,
+                    key,
+                    isKeyed,
+                    isEnumerableResolution,
+                    out var dependencyLifetime))
             {
                 continue;
             }
@@ -217,7 +250,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 invocation.GetLocation(),
                 registration.ServiceType.Name,
                 dependencyType,
-                dependencyLifetime.Value,
+                dependencyLifetime,
                 key,
                 isKeyed,
                 reportedDiagnostics);
@@ -248,7 +281,8 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     {
         var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
         var methodName = sourceMethod.Name;
-        if (methodName is not ("GetService" or "GetRequiredService" or "GetServices" or "GetKeyedService" or "GetRequiredKeyedService"))
+        if (methodName is not ("GetService" or "GetRequiredService" or "GetServices" or
+            "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices"))
         {
             return false;
         }
@@ -287,11 +321,14 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         type.Name == "IKeyedServiceProvider" &&
         type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
 
-    private static object? ExtractKeyFromResolution(
+    private static bool TryExtractKeyFromResolution(
         InvocationExpressionSyntax invocation,
         IMethodSymbol methodSymbol,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel,
+        FactoryKeyContext factoryKeyContext,
+        out object? key)
     {
+        key = null;
         var keyExpression =
             GetInvocationArgumentExpression(invocation, methodSymbol, "serviceKey") ??
             GetInvocationArgumentExpression(invocation, methodSymbol, "key");
@@ -309,13 +346,19 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        return keyExpression is null
-            ? null
-            : ExtractConstantValue(keyExpression, semanticModel);
-    }
+        if (keyExpression is null)
+        {
+            return false;
+        }
 
-    private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
-        SyntaxValueHelpers.TryExtractConstantValue(expr, semanticModel, out var value) ? value : null;
+        if (TryGetInheritedFactoryKey(keyExpression, semanticModel, factoryKeyContext, out key))
+        {
+            return true;
+        }
+
+        return SyntaxValueHelpers.TryExtractServiceKeyValue(keyExpression, semanticModel, out key, out _) &&
+               !SyntaxValueHelpers.IsKeyedServiceAnyKey(key);
+    }
 
     private static ExpressionSyntax? GetInvocationArgumentExpression(
         InvocationExpressionSyntax invocation,
@@ -365,23 +408,23 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         {
             foreach (var parameter in constructor.Parameters)
             {
-                var parameterType = UnwrapEnumerableDependency(parameter.Type);
-                var (key, isKeyed) = GetServiceKey(parameter);
-                var dependencyLifetime = GetDependencyLifetime(
-                    registrationCollector,
-                    lifetimeClassifier,
-                    parameterType,
-                    key,
-                    isKeyed);
-
-                if (dependencyLifetime is null)
+                var parameterType = UnwrapEnumerableDependency(parameter.Type, out var isEnumerableDependency);
+                var serviceKey = GetServiceKey(parameter, registration);
+                if (serviceKey.IsUnknown ||
+                    SyntaxValueHelpers.IsKeyedServiceAnyKey(serviceKey.Key))
                 {
-                    // Unknown dependency - don't report
                     continue;
                 }
 
-                // Check for captive dependency: longer-lived service capturing shorter-lived dependency
-                if (IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+                if (TryGetCaptiveDependencyLifetime(
+                        registration.Lifetime,
+                        registrationCollector,
+                        lifetimeClassifier,
+                        parameterType,
+                        serviceKey.Key,
+                        serviceKey.IsKeyed,
+                        isEnumerableDependency,
+                        out var dependencyLifetime))
                 {
                     ReportDiagnostic(
                         context,
@@ -389,9 +432,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                         registration.Location,
                         implementationType.Name,
                         parameterType,
-                        dependencyLifetime.Value,
-                        key,
-                        isKeyed,
+                        dependencyLifetime,
+                        serviceKey.Key,
+                        serviceKey.IsKeyed,
                         reportedDiagnostics);
                 }
             }
@@ -412,16 +455,19 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         {
             foreach (var parameter in constructor.Parameters)
             {
-                var parameterType = UnwrapEnumerableDependency(parameter.Type);
-                var (key, isKeyed) = GetServiceKey(parameter);
-                var dependencyLifetime = GetDependencyLifetime(
-                    registrationCollector,
-                    lifetimeClassifier,
-                    parameterType,
-                    key,
-                    isKeyed);
-                if (dependencyLifetime is null ||
-                    !IsCaptiveDependency(registration.Lifetime, dependencyLifetime.Value))
+                var parameterType = UnwrapEnumerableDependency(parameter.Type, out var isEnumerableDependency);
+                var serviceKey = GetServiceKey(parameter);
+                if (serviceKey.IsUnknown ||
+                    SyntaxValueHelpers.IsKeyedServiceAnyKey(serviceKey.Key) ||
+                    !TryGetCaptiveDependencyLifetime(
+                        registration.Lifetime,
+                        registrationCollector,
+                        lifetimeClassifier,
+                        parameterType,
+                        serviceKey.Key,
+                        serviceKey.IsKeyed,
+                        isEnumerableDependency,
+                        out var dependencyLifetime))
                 {
                     continue;
                 }
@@ -432,9 +478,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     diagnosticLocation,
                     registration.ServiceType.Name,
                     parameterType,
-                    dependencyLifetime.Value,
-                    key,
-                    isKeyed,
+                    dependencyLifetime,
+                    serviceKey.Key,
+                    serviceKey.IsKeyed,
                     reportedDiagnostics);
             }
         }
@@ -486,8 +532,122 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         #pragma warning restore RS1030
     }
 
-    private static (object? key, bool isKeyed) GetServiceKey(IParameterSymbol parameter) =>
-        KeyedServiceHelpers.GetServiceKey(parameter);
+    private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(
+        IParameterSymbol parameter,
+        ServiceRegistration registration) =>
+        KeyedServiceHelpers.GetServiceKey(
+            parameter,
+            registration.IsKeyed ? registration.Key : null,
+            registration.IsKeyed,
+            registration.IsKeyed ? registration.KeyLiteral : null);
+
+    private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(IParameterSymbol parameter) =>
+        KeyedServiceHelpers.GetServiceKey(
+            parameter,
+            inheritedKey: null,
+            hasInheritedKey: false,
+            inheritedKeyLiteral: null);
+
+    private static bool TryGetCaptiveDependencyLifetime(
+        ServiceLifetime consumerLifetime,
+        RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed,
+        bool isEnumerableDependency,
+        out ServiceLifetime dependencyLifetime)
+    {
+        if (isEnumerableDependency &&
+            TryGetEnumerableCaptiveDependencyLifetime(
+                consumerLifetime,
+                registrationCollector,
+                dependencyType,
+                key,
+                isKeyed,
+                out dependencyLifetime))
+        {
+            return true;
+        }
+
+        var registeredLifetime = GetDependencyLifetime(
+            registrationCollector,
+            lifetimeClassifier,
+            dependencyType,
+            key,
+            isKeyed);
+        if (registeredLifetime is not null &&
+            IsCaptiveDependency(consumerLifetime, registeredLifetime.Value))
+        {
+            dependencyLifetime = registeredLifetime.Value;
+            return true;
+        }
+
+        dependencyLifetime = default;
+        return false;
+    }
+
+    private static bool TryGetEnumerableCaptiveDependencyLifetime(
+        ServiceLifetime consumerLifetime,
+        RegistrationCollector registrationCollector,
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed,
+        out ServiceLifetime dependencyLifetime)
+    {
+        foreach (var registration in GetMatchingRegistrations(
+                     registrationCollector,
+                     dependencyType,
+                     key,
+                     isKeyed))
+        {
+            if (!IsCaptiveDependency(consumerLifetime, registration.Lifetime))
+            {
+                continue;
+            }
+
+            dependencyLifetime = registration.Lifetime;
+            return true;
+        }
+
+        dependencyLifetime = default;
+        return false;
+    }
+
+    private static IEnumerable<ServiceRegistration> GetMatchingRegistrations(
+        RegistrationCollector registrationCollector,
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed)
+    {
+        foreach (var registration in registrationCollector.AllRegistrations)
+        {
+            if (registration.IsKeyed != isKeyed ||
+                !Equals(registration.Key, key))
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, dependencyType))
+            {
+                yield return registration;
+                continue;
+            }
+
+            if (dependencyType is not INamedTypeSymbol namedDependencyType ||
+                !namedDependencyType.IsGenericType ||
+                namedDependencyType.IsUnboundGenericType)
+            {
+                continue;
+            }
+
+            var openDependencyType = namedDependencyType.ConstructUnboundGenericType();
+            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, openDependencyType))
+            {
+                yield return registration;
+            }
+        }
+    }
 
     private static ServiceLifetime? GetDependencyLifetime(
         RegistrationCollector registrationCollector,
@@ -507,15 +667,124 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
             : null;
     }
 
-    private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol dependencyType)
+    private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol dependencyType, out bool isEnumerableDependency)
     {
+        isEnumerableDependency = false;
         if (dependencyType is INamedTypeSymbol { IsGenericType: true } namedType &&
             namedType.ConstructedFrom.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
         {
+            isEnumerableDependency = true;
             return namedType.TypeArguments[0];
         }
 
         return dependencyType;
+    }
+
+    private static FactoryKeyContext CreateFactoryKeyContext(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        ServiceRegistration registration)
+    {
+        if (!registration.IsKeyed ||
+            SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key) ||
+            !TryGetFactoryKeyParameter(factoryExpression, semanticModel, out var keyParameter))
+        {
+            return FactoryKeyContext.None;
+        }
+
+        return new FactoryKeyContext(keyParameter, registration.Key);
+    }
+
+    private static bool TryGetFactoryKeyParameter(
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel,
+        out IParameterSymbol keyParameter)
+    {
+        keyParameter = null!;
+        factoryExpression = UnwrapExpression(factoryExpression);
+
+        switch (factoryExpression)
+        {
+            case ParenthesizedLambdaExpressionSyntax parenthesizedLambda
+                when parenthesizedLambda.ParameterList.Parameters.Count >= 2:
+                return TryGetParameterSymbol(
+                    parenthesizedLambda.ParameterList.Parameters[1],
+                    semanticModel,
+                    out keyParameter);
+
+            case AnonymousMethodExpressionSyntax anonymousMethod
+                when anonymousMethod.ParameterList?.Parameters.Count >= 2:
+                return TryGetParameterSymbol(
+                    anonymousMethod.ParameterList.Parameters[1],
+                    semanticModel,
+                    out keyParameter);
+
+            case IdentifierNameSyntax or MemberAccessExpressionSyntax:
+                var symbolInfo = semanticModel.GetSymbolInfo(factoryExpression);
+                var methodSymbol = symbolInfo.Symbol as IMethodSymbol ??
+                                   symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+                if (methodSymbol?.Parameters.Length >= 2)
+                {
+                    keyParameter = methodSymbol.Parameters[1];
+                    return true;
+                }
+
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryGetParameterSymbol(
+        ParameterSyntax parameterSyntax,
+        SemanticModel semanticModel,
+        out IParameterSymbol parameterSymbol)
+    {
+        if (semanticModel.GetDeclaredSymbol(parameterSyntax) is IParameterSymbol symbol)
+        {
+            parameterSymbol = symbol;
+            return true;
+        }
+
+        parameterSymbol = null!;
+        return false;
+    }
+
+    private static bool TryGetInheritedFactoryKey(
+        ExpressionSyntax keyExpression,
+        SemanticModel semanticModel,
+        FactoryKeyContext factoryKeyContext,
+        out object? key)
+    {
+        key = null;
+        if (factoryKeyContext.KeyParameter is null ||
+            semanticModel.GetSymbolInfo(keyExpression).Symbol is not IParameterSymbol parameterSymbol ||
+            !SymbolEqualityComparer.Default.Equals(parameterSymbol, factoryKeyContext.KeyParameter))
+        {
+            return false;
+        }
+
+        key = factoryKeyContext.InheritedKey;
+        return true;
+    }
+
+    private static ExpressionSyntax UnwrapExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesizedExpression:
+                    expression = parenthesizedExpression.Expression;
+                    continue;
+                case CastExpressionSyntax castExpression:
+                    expression = castExpression.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
     }
 
     private static bool IsCaptiveDependency(ServiceLifetime consumerLifetime, ServiceLifetime dependencyLifetime)

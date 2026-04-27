@@ -224,6 +224,93 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonCapturingEnumerableWithEarlierScopedElement_ViaConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class ScopedDependency : IDependency { }
+            public class SingletonDependency : IDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IDependency> dependencies) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, ScopedDependency>();
+                    services.AddSingleton<IDependency, SingletonDependency>();
+                    {|#0:services.AddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "IDependency"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingEnumerableWithOnlySingletonElements_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class SingletonDependency1 : IDependency { }
+            public class SingletonDependency2 : IDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IDependency> dependencies) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, SingletonDependency1>();
+                    services.AddSingleton<IDependency, SingletonDependency2>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedCapturingEnumerableWithScopedElement_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class ScopedDependency : IDependency { }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService
+            {
+                public ScopedService(System.Collections.Generic.IEnumerable<IDependency> dependencies) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, ScopedDependency>();
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task SingletonCapturingOptionsSnapshot_ViaConstructor_ReportsDiagnostic()
     {
         var source = Usings + OptionsStubs + """
@@ -730,6 +817,40 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonCapturingEnumerableWithEarlierScopedElement_ViaFactoryGetServices_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class ScopedDependency : IDependency { }
+            public class SingletonDependency : IDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IDependency> dependencies) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, ScopedDependency>();
+                    services.AddSingleton<IDependency, SingletonDependency>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService({|#0:sp.GetServices<IDependency>()|}));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IDependency"));
+    }
+
+    [Fact]
     public async Task SingletonFactoryCallingUnrelatedGetServices_NoDiagnostic()
     {
         var source = Usings + """
@@ -989,6 +1110,235 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
                 .WithLocation(31, 40)
                 .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task KeyedSingletonCapturingInheritedKeyedScoped_ViaConstructor_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                [System.AttributeUsage(System.AttributeTargets.Parameter)]
+                public sealed class FromKeyedServicesAttribute : System.Attribute
+                {
+                    public FromKeyedServicesAttribute() { }
+                    public FromKeyedServicesAttribute(object? serviceKey) { }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class
+                        where TImplementation : class, TService
+                        => services;
+
+                    public static IServiceCollection AddKeyedSingleton<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class
+                        where TImplementation : class, TService
+                        => services;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService([FromKeyedServices] IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("green");
+                    {|#0:services.AddKeyedSingleton<ISingletonService, SingletonService>("green")|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task KeyedSingletonFactoryUsingInheritedKey_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class
+                        where TImplementation : class, TService
+                        => services;
+
+                    public static IServiceCollection AddKeyedSingleton<TService>(this IServiceCollection services, object? serviceKey, System.Func<System.IServiceProvider, object?, TService> implementationFactory)
+                        where TService : class
+                        => services;
+
+                    public static T GetRequiredKeyedService<T>(this IServiceProvider provider, object? serviceKey) => throw new System.NotImplementedException();
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("green");
+                    services.AddKeyedSingleton<ISingletonService>(
+                        "green",
+                        (sp, key) => new SingletonService({|#0:sp.GetRequiredKeyedService<IScopedService>(key)|}));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonCapturingKeyedScopedEnumerable_ViaFactoryGetKeyedServices_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class
+                        where TImplementation : class, TService
+                        => services;
+
+                    public static System.Collections.Generic.IEnumerable<T> GetKeyedServices<T>(this IServiceProvider provider, object? serviceKey) => throw new System.NotImplementedException();
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("green");
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService({|#0:sp.GetKeyedServices<IScopedService>("green")|}));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task SingletonFactoryGetKeyedServices_WithDynamicKey_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class
+                        where TImplementation : class, TService
+                        => services;
+
+                    public static System.Collections.Generic.IEnumerable<T> GetKeyedServices<T>(this IServiceProvider provider, object? serviceKey) => throw new System.NotImplementedException();
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                private object? GetKey() => "green";
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("green");
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService(sp.GetKeyedServices<IScopedService>(GetKey())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonFactoryCallingUnrelatedGetKeyedServices_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface IRepository
+            {
+                System.Collections.Generic.IEnumerable<T> GetKeyedServices<T>(object? serviceKey);
+            }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(System.Collections.Generic.IEnumerable<IScopedService> scopedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var repository = new Repository();
+
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(_ => new SingletonService(repository.GetKeyedServices<IScopedService>("green")));
+                }
+            }
+
+            public class Repository : IRepository
+            {
+                public System.Collections.Generic.IEnumerable<T> GetKeyedServices<T>(object? serviceKey) => System.Array.Empty<T>();
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]
