@@ -217,7 +217,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including `Lazy<T>` wrappers around those provider types.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), dictionary value caches, and simple holder types that only wrap a provider.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -230,6 +230,20 @@ public static class Locator
 {
     public static IServiceProvider Provider { get; set; } = null!;
     private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
+    private static readonly Dictionary<string, IServiceProvider> TenantProviders = new();
+    private static ProviderHolder Holder = null!;
+}
+```
+
+```csharp
+public sealed class ProviderHolder
+{
+    private readonly IServiceProvider _provider;
+
+    public ProviderHolder(IServiceProvider provider)
+    {
+        _provider = provider;
+    }
 }
 ```
 
@@ -248,6 +262,8 @@ public sealed class Locator
 ```
 
 **Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid.
+
+**Options:** `dotnet_code_quality.DI006.detect_holder_pattern = false` disables the simple holder-type detector if a codebase intentionally uses provider-wrapper types.
 
 ---
 
@@ -297,6 +313,8 @@ public sealed class MyService
 
 **Code Fix:** No. This is usually architectural refactoring.
 
+DI007 stays quiet in recognized composition/factory boundaries: DI registration factories, middleware `Invoke`/`InvokeAsync`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
+
 ---
 
 ## DI008: Disposable Transient Service
@@ -325,9 +343,11 @@ services.AddScoped<IMyService, DisposableService>();
 // or ensure explicit disposal ownership if transient is intentional
 ```
 
-DI008 follows generic, `typeof(...)`, keyed, and named-argument registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
+DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
 
 **Code Fix:** Yes. Suggests safer lifetime alternatives.
+
+**Options:** `dotnet_code_quality.DI008.allowed_disposable_types = MyType, My.Namespace.OtherType` suppresses known intentional disposable transients by simple or full type name.
 
 ---
 

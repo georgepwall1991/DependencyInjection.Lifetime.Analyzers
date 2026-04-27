@@ -199,11 +199,16 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
                     {
                         return true;
                     }
+
+                    if (IsProviderFactoryDelegateBoundary(node, semanticModel, wellKnownTypes))
+                    {
+                        return true;
+                    }
                     break;
 
                 // Check if we're inside a method
                 case MethodDeclarationSyntax methodDecl:
-                    return IsAllowedMethod(methodDecl);
+                    return IsAllowedMethod(methodDecl, semanticModel);
 
                 // Check if we're inside a constructor
                 case ConstructorDeclarationSyntax:
@@ -215,6 +220,152 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsProviderFactoryDelegateBoundary(
+        SyntaxNode lambda,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
+    {
+        if (!TryGetInvocationArgument(lambda, out var invocation, out var argument, out var argumentIndex))
+        {
+            return false;
+        }
+
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
+            !TryGetArgumentParameter(methodSymbol, argument, argumentIndex, out var parameter))
+        {
+            return false;
+        }
+
+        if (!IsDelegateWithServiceProviderParameter(parameter.Type))
+        {
+            return false;
+        }
+
+        return IsFactoryBoundaryInvocation(invocation, methodSymbol, semanticModel, wellKnownTypes);
+    }
+
+    private static bool TryGetInvocationArgument(
+        SyntaxNode lambda,
+        out InvocationExpressionSyntax invocation,
+        out ArgumentSyntax argument,
+        out int argumentIndex)
+    {
+        invocation = null!;
+        argument = null!;
+        argumentIndex = -1;
+
+        if (lambda.Parent is not ArgumentSyntax argumentSyntax ||
+            argumentSyntax.Parent is not ArgumentListSyntax argumentList ||
+            argumentList.Parent is not InvocationExpressionSyntax invocationSyntax)
+        {
+            return false;
+        }
+
+        invocation = invocationSyntax;
+        argument = argumentSyntax;
+        argumentIndex = argumentList.Arguments.IndexOf(argumentSyntax);
+        return argumentIndex >= 0;
+    }
+
+    private static bool IsDelegateWithServiceProviderParameter(ITypeSymbol type)
+    {
+        return type is INamedTypeSymbol named &&
+               named.DelegateInvokeMethod is not null &&
+               named.DelegateInvokeMethod.Parameters.Any(parameter => IsSystemIServiceProvider(parameter.Type));
+    }
+
+    private static bool IsFactoryBoundaryInvocation(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
+    {
+        return IsServiceCollectionFactoryBoundary(invocation, method, semanticModel, wellKnownTypes) ||
+               IsOptionsFactoryBoundary(invocation, method, semanticModel);
+    }
+
+    private static bool IsServiceCollectionFactoryBoundary(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+        if (!originalMethod.Name.StartsWith("Add") && !originalMethod.Name.StartsWith("TryAdd"))
+        {
+            return false;
+        }
+
+        if (originalMethod.IsExtensionMethod &&
+            originalMethod.Parameters.Length > 0 &&
+            wellKnownTypes.IsServiceCollection(originalMethod.Parameters[0].Type))
+        {
+            return true;
+        }
+
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+            return IsOrImplementsServiceCollection(receiverType, wellKnownTypes);
+        }
+
+        return false;
+    }
+
+    private static bool IsOrImplementsServiceCollection(ITypeSymbol? type, WellKnownTypes wellKnownTypes)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (wellKnownTypes.IsServiceCollection(type))
+        {
+            return true;
+        }
+
+        return type.AllInterfaces.Any(wellKnownTypes.IsServiceCollection);
+    }
+
+    private static bool IsOptionsFactoryBoundary(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+        if (originalMethod.Name is not ("Configure" or "Validate" or "PostConfigure"))
+        {
+            return false;
+        }
+
+        if (originalMethod.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.Options")
+        {
+            return true;
+        }
+
+        if (originalMethod.IsExtensionMethod &&
+            originalMethod.Parameters.Length > 0 &&
+            IsOptionsType(originalMethod.Parameters[0].Type))
+        {
+            return true;
+        }
+
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+            return IsOptionsType(receiverType);
+        }
+
+        return false;
+    }
+
+    private static bool IsOptionsType(ITypeSymbol? type)
+    {
+        return type is not null &&
+               (type.Name is "OptionsBuilder" or "IServiceCollection" ||
+                type.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.Options");
     }
 
     private static bool IsFactoryRegistrationContext(SyntaxNode lambda, SemanticModel semanticModel)
@@ -253,11 +404,11 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsAllowedMethod(MethodDeclarationSyntax methodDecl)
+    private static bool IsAllowedMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
     {
         var methodName = methodDecl.Identifier.Text;
 
-        // Allow in middleware Invoke/InvokeAsync methods
+        // Allow in middleware Invoke/InvokeAsync methods (convention-based middleware as well as IMiddleware impls)
         if (methodName == "Invoke" || methodName == "InvokeAsync")
         {
             return true;
@@ -269,6 +420,150 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // Allow in hosting entry points: BackgroundService.ExecuteAsync override and IHostedService.StartAsync/StopAsync
+        if (methodName is "ExecuteAsync" or "StartAsync" or "StopAsync" or
+            "StartingAsync" or "StartedAsync" or "StoppingAsync" or "StoppedAsync")
+        {
+            if (IsHostingMethod(methodDecl, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        // Allow in OptionsBuilder.Validate / IValidateOptions.Validate / IConfigureOptions.Configure / IPostConfigureOptions.PostConfigure
+        if (methodName is "Validate" or "Configure" or "PostConfigure")
+        {
+            if (IsOptionsConfigurationMethod(methodDecl, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsHostingMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
+        if (symbol?.ContainingType is not INamedTypeSymbol containingType)
+        {
+            return false;
+        }
+
+        if (symbol.Name == "ExecuteAsync" &&
+            symbol.IsOverride &&
+            symbol.Parameters.Length == 1 &&
+            IsCancellationToken(symbol.Parameters[0].Type))
+        {
+            for (var t = containingType.BaseType; t is not null; t = t.BaseType)
+            {
+                if (t.Name == "BackgroundService" &&
+                    t.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.Hosting")
+                {
+                    return true;
+                }
+            }
+        }
+
+        foreach (var iface in containingType.AllInterfaces)
+        {
+            if (iface.Name is not ("IHostedService" or "IHostedLifecycleService") ||
+                iface.ContainingNamespace?.ToDisplayString() != "Microsoft.Extensions.Hosting")
+            {
+                continue;
+            }
+
+            foreach (var member in iface.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (member.Name != symbol.Name)
+                {
+                    continue;
+                }
+
+                var implementation = containingType.FindImplementationForInterfaceMember(member);
+                if (SymbolEqualityComparer.Default.Equals(implementation, symbol))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsCancellationToken(ITypeSymbol type)
+    {
+        return type.Name == "CancellationToken" &&
+               type.ContainingNamespace?.ToDisplayString() == "System.Threading";
+    }
+
+    private static bool IsOptionsConfigurationMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
+        if (symbol?.ContainingType is not INamedTypeSymbol containingType)
+        {
+            return false;
+        }
+
+        foreach (var iface in containingType.AllInterfaces)
+        {
+            if (iface.Name is not ("IConfigureOptions" or "IConfigureNamedOptions" or
+                    "IPostConfigureOptions" or "IValidateOptions") ||
+                iface.ContainingNamespace?.ToDisplayString() != "Microsoft.Extensions.Options")
+            {
+                continue;
+            }
+
+            foreach (var member in iface.GetMembers().OfType<IMethodSymbol>())
+            {
+                if (member.Name != symbol.Name)
+                {
+                    continue;
+                }
+
+                var implementation = containingType.FindImplementationForInterfaceMember(member);
+                if (SymbolEqualityComparer.Default.Equals(implementation, symbol))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetArgumentParameter(
+        IMethodSymbol method,
+        ArgumentSyntax argument,
+        int argumentIndex,
+        out IParameterSymbol parameter)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+
+        if (argument.NameColon is { } nameColon)
+        {
+            var argumentName = nameColon.Name.Identifier.ValueText;
+            foreach (var candidate in originalMethod.Parameters)
+            {
+                if (candidate.Name == argumentName)
+                {
+                    parameter = candidate;
+                    return true;
+                }
+            }
+
+            parameter = null!;
+            return false;
+        }
+
+        var parameterIndex = argumentIndex + (method.ReducedFrom is not null ? 1 : 0);
+        if (parameterIndex >= 0 && parameterIndex < originalMethod.Parameters.Length)
+        {
+            parameter = originalMethod.Parameters[parameterIndex];
+            return true;
+        }
+
+        parameter = null!;
         return false;
     }
 

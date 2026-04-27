@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-04-26 (known framework scoped-lifetime pass)
-**Version:** 2.8.9
-**Test result:** 814/814 passing.
+**Date:** 2026-04-27 (DI006/DI007/DI008 GOAT-tier hardening pass)
+**Version:** 2.8.12
+**Test result:** 877/877 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -15,9 +15,9 @@
 | DI003 | Captive Dependency | Warn | 39 | 8 | 9.5 | 8 | Hardened: known framework scoped lifetimes and EF AddDbContext contexts |
 | DI004 | Use After Dispose | Warn | 43 | 8 | 10 | 8.5 | Fixer now gated to the owning using scope and invocation-style uses |
 | DI005 | Async Disposal | Warn | 22 | 10 | 9 | 8.5 | Hardened: top-level async statements, nested async guardrails, safe using fixer coverage |
-| DI006 | Static Provider Cache | Warn | 15 | 15 | 8.5 | 9 | Hardened: direct and `Lazy<T>` provider caches, including keyed providers |
-| DI007 | Service Locator | Info | 22 | -- | 8 | -- | Informational, noise-hardened |
-| DI008 | Disposable Transient | Warn | 22 | 14 | 8.5 | 9 | Hardened: named `typeof` argument mapping and keyed factory guardrails |
+| DI006 | Static Provider Cache | Warn | 28 | 15 | 9.5 | 9 | Hardened: nested wrapper recursion, dictionary-of-providers shapes, simple holder-pattern detection, and `.editorconfig` opt-out |
+| DI007 | Service Locator | Info | 32 | -- | 9.5 | -- | Hardened: exact hosting/options method implementation checks and bounded provider-factory delegate suppression |
+| DI008 | Disposable Transient | Warn | 44 | 16 | 9.5 | 9.2 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, open generics, descriptor collections, factory guardrails, and allowlist option |
 | DI009 | Open Generic Mismatch | Warn | 22 | 15 | 9 | 9 | Refactored with RegistrationKind/LifetimeKind, defensive SimpleNameSyntax fix |
 | DI010 | Constructor Over-Injection | Info | 24 | -- | 9.5 | -- | Strongest info-level rule |
 | DI011 | Service Provider Injection | Info | 19 | -- | 9 | -- | Activation-constructor logic |
@@ -32,7 +32,7 @@
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 9.1/10. Fixer mean 8.5/10.
+**Aggregates:** Analyzer mean 9.3/10. Fixer mean 8.5/10.
 
 ## Scoring Methodology
 
@@ -82,21 +82,21 @@ Narrow rule with a clear trigger: `CreateScope()` in async flows. Coverage now i
 
 ### DI006 -- Static Provider Cache (Warning)
 
-**Analyzer: 8.5/10** | Tests: 15 | **Fixer: 9/10** | Fix Tests: 15
+**Analyzer: 9.5/10** | Tests: 28 | **Fixer: 9/10** | Fix Tests: 15
 
-Simple symbol-level rule with low ambiguity. Focused tests cover fields, properties, inherited provider types, keyed providers, static classes, direct static caches, and deferred `Lazy<T>` provider caches. The fixer remains conservative: it removes `static` only for private, non-partial, non-static-context member shapes where existing references stay valid.
+Symbol-level rule with low ambiguity. Coverage now spans direct provider types, keyed providers, inherited provider types, static classes, partial members, and a wrapper-recognition layer that recurses through `Lazy<T>`, `Lazy<Task<T>>`, `Lazy<ValueTask<T>>`, `Func<T>`, `AsyncLocal<T>`, and `ThreadLocal<T>` plus dictionary-of-providers shapes (`Dictionary<,>`, `IDictionary<,>`, `IReadOnlyDictionary<,>`, `ConcurrentDictionary<,>`) whose value type is a provider abstraction. Simple holder types whose only instance member is a provider abstraction are detected, with `dotnet_code_quality.DI006.detect_holder_pattern = false` available for intentional wrapper-heavy codebases. Negative coverage keeps non-provider dictionary values, instance holders, and multi-member holder types silent. The fixer remains conservative: it removes `static` only for private, non-partial, non-static-context member shapes where existing references stay valid.
 
 ### DI007 -- Service Locator Anti-Pattern (Info)
 
-**Analyzer: 8/10** | Tests: 22
+**Analyzer: 9.5/10** | Tests: 32
 
-Informational by design. Good factory and lambda allowance handling. Correctly suppresses in factory registrations, middleware Invoke methods, and IServiceScopeFactory usage. No code fix -- service locator elimination requires architectural decisions.
+Informational by design, now context-aware via symbol checks rather than method-name spelling alone. Allowed contexts cover factory registrations, middleware `Invoke`/`InvokeAsync` methods, `Create*`/`Build*` factory methods, exact hosting entry points (`BackgroundService.ExecuteAsync` overrides, `IHostedService.StartAsync`/`StopAsync`, and `IHostedLifecycleService` lifecycle methods), exact options implementations (`IConfigureOptions<T>.Configure`, `IConfigureNamedOptions<T>`, `IPostConfigureOptions<T>.PostConfigure`, `IValidateOptions<T>.Validate`), and provider-aware DI/options factory delegates only when the lambda is an argument to a recognized factory boundary. Guardrails keep local `Func<IServiceProvider, T>` delegates and helper methods inside hosted/options types reportable. No code fix -- service locator elimination requires architectural decisions.
 
 ### DI008 -- Disposable Transient (Warning)
 
-**Analyzer: 8.5/10** | Tests: 22 | **Fixer: 9/10** | Fix Tests: 14
+**Analyzer: 9.5/10** | Tests: 44 | **Fixer: 9.2/10** | Fix Tests: 16
 
-Solid coverage across generic registrations, `typeof`, keyed registrations, `IDisposable`, and `IAsyncDisposable`. The latest pass maps `serviceType:` and `implementationType:` by bound Roslyn parameters instead of source order, so out-of-order named non-generic overloads report the disposable implementation correctly. Keyed factory registrations with out-of-order named arguments stay quiet, preserving the rule's safe factory boundary. Fixer changes transient to scoped/singleton with strong shape coverage, including named `typeof` overloads.
+Strong coverage across generic registrations, `typeof`, keyed registrations, open generics, `IDisposable`, and `IAsyncDisposable`. The latest pass extends detection to `services.Add(ServiceDescriptor.Transient<...>())`, `services.Add(ServiceDescriptor.Describe(..., ServiceLifetime.Transient))`, `services.Add(new ServiceDescriptor(..., ServiceLifetime.Transient))`, `TryAddTransient` / `TryAddKeyedTransient` from `ServiceCollectionDescriptorExtensions`, and both single-descriptor and collection-shaped `TryAddEnumerable(...)` calls. Lifetime is recognised through both descriptor factory methods and explicit `ServiceLifetime` arguments, and factory shapes (lambdas, method groups, delegate-typed arguments) continue to suppress correctly inside the descriptor path. Receiver-type analysis on `services.Add(...)` filters out arbitrary `ICollection<T>.Add` calls. Named `serviceType:` / `implementationType:` mapping uses bound Roslyn parameters so out-of-order named overloads report the disposable implementation correctly. `dotnet_code_quality.DI008.allowed_disposable_types` supports intentional disposable-transient allowlists by simple or full type name. Fixer changes transient to scoped/singleton across direct `AddTransient` and `ServiceDescriptor.Transient(...)` forms, with factory conversion still restricted to safe generic direct registrations.
 
 ### DI009 -- Open Generic Lifetime Mismatch (Warning)
 
@@ -176,7 +176,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI004 (Use After Dispose) | 8 | 8.5 | Low -- move fix is now gated to owning-scope immediate invocations, with unsafe escape/adjacent-scope shapes suppressed |
 | DI005 (Async Scope) | 10 | 8.5 | Low -- narrow using/await-using transformation, including top-level async using declarations |
 | DI006 (Static Provider Cache) | 15 | 9 | Low -- direct and `Lazy<T>` cache shapes covered with conservative fix gating |
-| DI008 (Disposable Transient) | 14 | 9 | Low -- strong shape coverage, including named `typeof` overloads |
+| DI008 (Disposable Transient) | 16 | 9.2 | Low -- strong shape coverage, including named `typeof` overloads and `ServiceDescriptor.Transient(...)` lifetime replacement |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 4 | 8 | Low -- narrow standalone-statement removal |
 | DI013 (Implementation Mismatch) | 8 | 8 | Medium -- broad assists are symbol-backed, FixAll disabled |
@@ -204,13 +204,13 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 814 |
-| Analyzer tests | 625 |
-| Code fix tests | 105 |
-| Infrastructure tests | 84 |
-| Analyzer mean score | 9.1/10 |
+| Total tests | 877 |
+| Analyzer tests | 670 |
+| Code fix tests | 107 |
+| Infrastructure tests | 100 |
+| Analyzer mean score | 9.3/10 |
 | Fixer mean score | 8.5/10 |
-| Rules at 9+ | 16/19 (84%) |
+| Rules at 9+ | 19/19 (100%) |
 | Fixers at 8+ | 12/12 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
@@ -236,6 +236,16 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | Current | DI008 read non-generic `typeof` overload arguments by source order, missing out-of-order named `implementationType:` calls and risking keyed factory false positives | Medium | DI008 |
 | Current | DI006 missed deferred static provider caches hidden behind `Lazy<IServiceProvider>`, `Lazy<IServiceScopeFactory>`, or `Lazy<IKeyedServiceProvider>` wrappers | Medium | DI006 |
 | Current | Hidden framework registrations left `IOptionsSnapshot<T>` and EF Core `AddDbContext(...)` lifetimes invisible to DI003/DI019 and could make DI015 report normal `DbContextOptions<TContext>` constructor dependencies as missing | Medium | DI003/DI019/DI015 |
+| Current | DI008 missed `services.Add(ServiceDescriptor.Transient<...>())`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, and `new ServiceDescriptor(..., ServiceLifetime.Transient)` registrations because detection was scoped to `AddTransient`/`AddKeyedTransient` only | Medium | DI008 |
+| Current | DI008 missed `TryAddTransient`, `TryAddKeyedTransient`, and `TryAddEnumerable(ServiceDescriptor.Transient<...>())` registrations on `ServiceCollectionDescriptorExtensions`, leaving common helper-extension shapes silent | Medium | DI008 |
+| Current | DI006 missed nested provider wrappers (`Lazy<Task<IServiceProvider>>`, `Lazy<ValueTask<IKeyedServiceProvider>>`, `AsyncLocal<IServiceProvider>`, `ThreadLocal<IServiceScopeFactory>`, `Func<IServiceProvider>`) because the wrapper layer only matched a single-level `Lazy<provider>` | Medium | DI006 |
+| Current | DI006 missed dictionary-of-providers caches (`Dictionary<,>`, `IDictionary<,>`, `IReadOnlyDictionary<,>`, `ConcurrentDictionary<,>` whose `TValue` is a provider type) used as multi-tenant service-provider tables | Medium | DI006 |
+| Current | DI007 only allowlisted middleware/factory contexts by method-name spelling, flagging legitimate service-locator inside `BackgroundService.ExecuteAsync`, `IHostedService.StartAsync`/`StopAsync`, `IConfigureOptions<T>.Configure`, `IPostConfigureOptions<T>`, and `IValidateOptions<T>` even when the surrounding type makes them factory boundaries | Medium | DI007 |
+| Current | DI007 missed convention-based provider-factory delegates from third-party `IServiceCollection` extensions, treating any non-`ServiceCollectionServiceExtensions` `Add*` overload accepting `Func<IServiceProvider, T>` as a service-locator site rather than a factory boundary | Medium | DI007 |
+| Current | DI008 initially treated generic `ServiceDescriptor.Transient<T>(factory)` calls as container-created transients because the generic descriptor path returned before inspecting factory arguments | Medium | DI008 |
+| Current | DI008 initially missed `TryAddEnumerable(IEnumerable<ServiceDescriptor>)` descriptor collections such as arrays and `List<ServiceDescriptor>` initializers | Medium | DI008 |
+| Current | DI007 initially suppressed local `Func<IServiceProvider, T>` delegates outside registration/options boundaries because delegate conversion alone was treated as a factory context | Medium | DI007 |
+| Current | DI007 initially allowed any helper method named like a hosting/options method inside a hosted/options type instead of verifying the method actually implemented or overrode the framework contract | Medium | DI007 |
 
 ## Watchlist
 
