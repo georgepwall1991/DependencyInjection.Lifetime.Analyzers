@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.12] - 2026-04-27
+
+### Changed
+
+- **DI006 Provider Cache Hardening**: DI006 now reports nested provider wrappers, provider-valued dictionaries, and simple holder types, with an `.editorconfig` opt-out for intentional holder patterns.
+- **DI007 Context Precision**: DI007 now verifies hosted-service, options, and factory-boundary contexts more precisely so legitimate framework factories stay quiet while local provider delegates remain reportable.
+- **DI008 Registration Coverage**: DI008 now covers `ServiceDescriptor`, `TryAddTransient` / `TryAddKeyedTransient`, and `TryAddEnumerable` descriptor shapes while preserving factory-registration guardrails and adding an intentional disposable-type allowlist.
+- **DI008 Code Fix Coverage**: DI008 lifetime fixes now support `ServiceDescriptor.Transient(...)` registrations in addition to direct `AddTransient(...)` calls.
+
 ## [2.8.11] - 2026-04-27
 
 ### Changed

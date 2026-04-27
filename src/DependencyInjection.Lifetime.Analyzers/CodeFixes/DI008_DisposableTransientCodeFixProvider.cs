@@ -62,6 +62,26 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
         var kind = GetRegistrationKind(invocation);
         if (kind == RegistrationKind.None)
         {
+            var descriptorInvocation = FindServiceDescriptorTransientInvocation(invocation, semanticModel);
+            if (descriptorInvocation is null)
+            {
+                return;
+            }
+
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: Resources.DI008_FixTitle_ChangeToScoped,
+                    createChangedDocument: c => ChangeDescriptorLifetimeAsync(context.Document, descriptorInvocation, "Scoped", c),
+                    equivalenceKey: ChangeToScopedEquivalenceKey),
+                diagnostic);
+
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: Resources.DI008_FixTitle_ChangeToSingleton,
+                    createChangedDocument: c => ChangeDescriptorLifetimeAsync(context.Document, descriptorInvocation, "Singleton", c),
+                    equivalenceKey: ChangeToSingletonEquivalenceKey),
+                diagnostic);
+
             return;
         }
 
@@ -121,6 +141,45 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
         };
     }
 
+    private static InvocationExpressionSyntax? FindServiceDescriptorTransientInvocation(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        foreach (var candidate in invocation.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (candidate.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
+                continue;
+            }
+
+            var methodName = memberAccess.Name switch
+            {
+                GenericNameSyntax genericName => genericName.Identifier.Text,
+                IdentifierNameSyntax identifierName => identifierName.Identifier.Text,
+                _ => null,
+            };
+
+            if (methodName != "Transient")
+            {
+                continue;
+            }
+
+            if (semanticModel.GetSymbolInfo(candidate).Symbol is not IMethodSymbol methodSymbol)
+            {
+                continue;
+            }
+
+            var containingType = methodSymbol.ContainingType;
+            if (containingType?.Name == "ServiceDescriptor" &&
+                containingType.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.DependencyInjection")
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static async Task<Document> ChangeLifetimeAsync(
         Document document,
         InvocationExpressionSyntax invocation,
@@ -137,6 +196,22 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
         var kind = GetRegistrationKind(invocation);
         var targetName = kind == RegistrationKind.Keyed ? keyedMethodName : nonKeyedMethodName;
         var newInvocation = ReplaceMethodName(invocation, targetName);
+        return document.WithSyntaxRoot(root.ReplaceNode(invocation, newInvocation));
+    }
+
+    private static async Task<Document> ChangeDescriptorLifetimeAsync(
+        Document document,
+        InvocationExpressionSyntax invocation,
+        string descriptorMethodName,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            return document;
+        }
+
+        var newInvocation = ReplaceMethodName(invocation, descriptorMethodName);
         return document.WithSyntaxRoot(root.ReplaceNode(invocation, newInvocation));
     }
 
