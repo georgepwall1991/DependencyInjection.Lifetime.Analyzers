@@ -59,7 +59,6 @@ public sealed class DI001_ScopeMustBeDisposedCodeFixProvider : CodeFixProvider
 
         // Check if we're in an async context
         var isAsyncContext = IsInAsyncContext(invocation);
-        var isCreateAsyncScope = IsCreateAsyncScopeInvocation(invocation);
 
         // Always offer "Add 'using' statement" option
         context.RegisterCodeFix(
@@ -69,8 +68,8 @@ public sealed class DI001_ScopeMustBeDisposedCodeFixProvider : CodeFixProvider
                 equivalenceKey: AddUsingEquivalenceKey),
             diagnostic);
 
-        // Offer "Add 'await using' statement" if in async context or using CreateAsyncScope
-        if (isAsyncContext || isCreateAsyncScope)
+        // Offer "Add 'await using' statement" only when the nearest callable can await it.
+        if (isAsyncContext)
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -130,16 +129,6 @@ public sealed class DI001_ScopeMustBeDisposedCodeFixProvider : CodeFixProvider
             }
 
             current = current.Parent;
-        }
-
-        return false;
-    }
-
-    private static bool IsCreateAsyncScopeInvocation(InvocationExpressionSyntax invocation)
-    {
-        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
-        {
-            return memberAccess.Name.Identifier.Text == "CreateAsyncScope";
         }
 
         return false;

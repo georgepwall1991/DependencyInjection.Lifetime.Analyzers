@@ -153,16 +153,18 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
                 case MemberDeclarationSyntax memberDeclaration when HasStaticModifier(memberDeclaration.GetModifiers()):
                     return true;
                 case AccessorDeclarationSyntax accessorDeclaration:
-                {
-                    var accessorParent = accessorDeclaration.Parent?.Parent as MemberDeclarationSyntax;
-                    if (accessorParent is not null && HasStaticModifier(accessorParent.GetModifiers()))
                     {
-                        return true;
-                    }
+                        var accessorParent = accessorDeclaration.Parent?.Parent as MemberDeclarationSyntax;
+                        if (accessorParent is not null && HasStaticModifier(accessorParent.GetModifiers()))
+                        {
+                            return true;
+                        }
 
-                    break;
-                }
+                        break;
+                    }
                 case LocalFunctionStatementSyntax localFunction when localFunction.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)):
+                    return true;
+                case LambdaExpressionSyntax lambda when lambda.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)):
                     return true;
             }
         }

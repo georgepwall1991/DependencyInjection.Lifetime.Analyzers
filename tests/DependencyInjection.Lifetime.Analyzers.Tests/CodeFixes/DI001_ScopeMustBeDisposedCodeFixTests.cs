@@ -219,6 +219,57 @@ public class DI001_ScopeMustBeDisposedCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_DoesNotOfferAwaitUsing_ForCreateAsyncScopeInSyncMethod()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    using var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 21, 15, 53)
+            .WithArguments("CreateAsyncScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddUsing");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI001_AddAwaitUsing");
+    }
+
+    [Fact]
     public async Task CodeFix_AddsAwaitUsing_InAsyncLocalFunction()
     {
         var source = Usings + """

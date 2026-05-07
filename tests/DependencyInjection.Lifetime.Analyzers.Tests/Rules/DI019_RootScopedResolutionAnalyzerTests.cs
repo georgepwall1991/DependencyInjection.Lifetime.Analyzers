@@ -28,6 +28,11 @@ public class DI019_RootScopedResolutionAnalyzerTests
         {
             public class DbContext { }
             public class DbContextOptions<TContext> where TContext : DbContext { }
+            public class DbContextOptionsBuilder { }
+            public interface IDbContextFactory<TContext> where TContext : DbContext
+            {
+                TContext CreateDbContext();
+            }
         }
 
         namespace Microsoft.Extensions.DependencyInjection
@@ -38,6 +43,38 @@ public class DI019_RootScopedResolutionAnalyzerTests
                     this IServiceCollection services,
                     ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
                     ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContext<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+
+                public static IServiceCollection AddDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder>? optionsAction = null,
+                    ServiceLifetime lifetime = ServiceLifetime.Singleton)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContextPool<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContextPool<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+
+                public static IServiceCollection AddPooledDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
                     where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
             }
         }
@@ -246,6 +283,410 @@ public class DI019_RootScopedResolutionAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextImplementationFromServiceOverload_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : DbContext, IMyDbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<IMyDbContext, MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<MyDbContext>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("MyDbContext", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingSingletonAddDbContextImplementationFromServiceOverload_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : DbContext, IMyDbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContext<IMyDbContext, MyDbContext>(
+                        ServiceLifetime.Singleton,
+                        ServiceLifetime.Singleton);
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingSingletonImplementationBeforeAddDbContextServiceOverload_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : DbContext, IMyDbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<MyDbContext>();
+                    services.AddDbContext<IMyDbContext, MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextFactoryContext_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContextFactory<MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<MyDbContext>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("MyDbContext", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextFactoryAndOptions_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContextFactory<MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<IDbContextFactory<MyDbContext>>();
+                    provider.GetRequiredService<DbContextOptions<MyDbContext>>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingSingletonContextBeforeAddDbContextFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<MyDbContext>();
+                    services.AddDbContextFactory<MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingScopedOptionsBeforeAddDbContextFactory_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<DbContextOptions<MyDbContext>>();
+                    services.AddDbContextFactory<MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<DbContextOptions<MyDbContext>>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("DbContextOptions<MyDbContext>", "DbContextOptions<MyDbContext>"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingScopedFactoryBeforeAddDbContextFactory_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IDbContextFactory<MyDbContext>>();
+                    services.AddDbContextFactory<MyDbContext>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IDbContextFactory<MyDbContext>>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IDbContextFactory<MyDbContext>", "IDbContextFactory<MyDbContext>"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextFactoryTransientContext_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContextFactory<MyDbContext>(lifetime: ServiceLifetime.Transient);
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextPoolContext_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContextPool<MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<MyDbContext>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("MyDbContext", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingAddDbContextPoolImplementationFromServiceOverload_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : DbContext, IMyDbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddDbContextPool<IMyDbContext, MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<MyDbContext>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("MyDbContext", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingScopedOptionsBeforeAddDbContextPool_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<DbContextOptions<MyDbContext>>();
+                    services.AddDbContextPool<MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<DbContextOptions<MyDbContext>>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("DbContextOptions<MyDbContext>", "DbContextOptions<MyDbContext>"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingPooledDbContextFactoryContext_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddPooledDbContextFactory<MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<MyDbContext>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("MyDbContext", "MyDbContext"));
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingPooledDbContextFactoryAndOptions_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddPooledDbContextFactory<MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<IDbContextFactory<MyDbContext>>();
+                    provider.GetRequiredService<DbContextOptions<MyDbContext>>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProviderResolvingExistingScopedFactoryBeforePooledDbContextFactory_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.EntityFrameworkCore;
+
+            """ + EfCoreStubs + """
+            public class MyDbContext : DbContext { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IDbContextFactory<MyDbContext>>();
+                    services.AddPooledDbContextFactory<MyDbContext>(_ => { });
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IDbContextFactory<MyDbContext>>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IDbContextFactory<MyDbContext>", "IDbContextFactory<MyDbContext>"));
     }
 
     [Fact]

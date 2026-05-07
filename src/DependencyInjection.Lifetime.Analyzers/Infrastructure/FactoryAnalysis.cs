@@ -249,9 +249,59 @@ internal static class FactoryAnalysis
                 when blockSyntax.Statements[0] is ReturnStatementSyntax { Expression: not null } returnStatement:
                 returnExpression = returnStatement.Expression;
                 return true;
+            case BlockSyntax { Statements.Count: > 1 } blockSyntax
+                when TryGetFinalReturnExpression(blockSyntax, out returnExpression):
+                return true;
             default:
                 returnExpression = null!;
                 return false;
         }
+    }
+
+    private static bool TryGetFinalReturnExpression(
+        BlockSyntax blockSyntax,
+        out ExpressionSyntax returnExpression)
+    {
+        returnExpression = null!;
+
+        if (blockSyntax.Statements[blockSyntax.Statements.Count - 1] is not ReturnStatementSyntax { Expression: not null } returnStatement)
+        {
+            return false;
+        }
+
+        if (blockSyntax.Statements
+            .Take(blockSyntax.Statements.Count - 1)
+            .Any(statement => ContainsFactoryExitReturn(statement, blockSyntax)))
+        {
+            return false;
+        }
+
+        returnExpression = returnStatement.Expression;
+        return true;
+    }
+
+    private static bool ContainsFactoryExitReturn(
+        StatementSyntax statement,
+        BlockSyntax factoryBlock)
+    {
+        return statement
+            .DescendantNodesAndSelf()
+            .OfType<ReturnStatementSyntax>()
+            .Any(returnStatement => !IsInsideNestedCallable(returnStatement, factoryBlock));
+    }
+
+    private static bool IsInsideNestedCallable(
+        SyntaxNode node,
+        BlockSyntax factoryBlock)
+    {
+        for (var current = node.Parent; current is not null && current != factoryBlock; current = current.Parent)
+        {
+            if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

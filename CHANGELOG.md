@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.14] - 2026-05-07
+
+### Changed
+
+- **DI007 middleware boundary precision**: DI007 now treats `Invoke` / `InvokeAsync` as middleware exceptions only when they match the ASP.NET Core middleware shape (`Task` return and first `HttpContext` parameter), so arbitrary `Invoke` methods no longer suppress service-locator diagnostics.
+- **DI007 generic-task middleware guardrail**: DI007 now rejects `Task<T>` returning `Invoke` / `InvokeAsync` methods as middleware boundaries, preserving diagnostics for non-middleware invoker methods.
+- **DI007 factory-method precision**: DI007 now treats `Create*` / `Build*` methods as factory exceptions only when they return a value, so `void`, plain `Task`, and plain `ValueTask` side-effect methods no longer bypass service-locator reporting by name alone.
+- **DI011 middleware boundary precision**: DI011 now uses the same ASP.NET Core middleware shape before suppressing provider-injection diagnostics, so arbitrary invoker classes no longer bypass `IServiceProvider` injection reporting.
+- **DI011 generic-task middleware guardrail**: DI011 now rejects `Task<T>` returning `Invoke` / `InvokeAsync` methods as middleware boundaries, preserving provider-injection diagnostics for ordinary registered services.
+- **DI011 factory-shape precision**: DI011 now treats `*Factory` classes and interfaces as provider-injection exceptions only when they expose value-returning factory members, so name-only factory markers and side-effect methods no longer suppress reporting. Singleton `IServiceScopeFactory` bridge patterns stay quiet to avoid conflicting with DI003's recommended scoped-work pattern.
+- **DI003 fixer shape coverage**: Added lifetime-rewrite coverage for `TryAddSingleton(...)` registrations, inline factory diagnostics, named `ServiceDescriptor.Describe(..., lifetime: ...)` arguments, and `new ServiceDescriptor(...)` registrations so the fixer continues to update the owning registration or lifetime argument precisely.
+- **DI012 fixer safety**: The ignored-`TryAdd*` code fix is now offered only for standalone block or top-level statements, avoiding unsafe removal of embedded single-line statement bodies such as `if (...) services.TryAdd...;` while preserving minimal-hosting `Program.cs` fixes.
+- **DI012 keyed fixer coverage**: Added code-fix coverage for ignored `TryAddKeyed*` registrations so keyed conditional-registration fixes stay aligned with DI012's keyed analyzer grouping.
+- **DI012 EF helper precision**: DI012 now respects EF Core helper registrations that preserve earlier explicit context registrations, avoiding duplicate-registration noise after `AddDbContextFactory(...)` and `AddPooledDbContextFactory(...)`.
+- **DI013 fixer safety**: The invalid-registration removal assist is now offered only for standalone block or top-level statements, avoiding unsafe deletion of embedded single-line registration bodies while keeping symbol-backed type rewrite assists and minimal-hosting `Program.cs` removals available.
+- **DI013 implementation-instance fixer coverage**: Added code-fix coverage for removing invalid implementation-instance registrations, retargeting them to an interface/base type implemented by the supplied instance, and preserving embedded single-line bodies by using symbol-backed rewrites instead of removal.
+- **DI001 fixer safety**: The scope-disposal fixer no longer offers `await using` in synchronous callables just because `CreateAsyncScope()` was used, avoiding uncompilable fixes while preserving the plain `using` assist.
+- **DI004 awaited move-fix coverage**: Added coverage proving the move-into-scope fixer keeps awaited immediate service calls inside the owning `using` block, preserving async use-after-dispose repairs.
+- **DI005 fixer safety**: The async-scope fixer now rewrites only direct `using` resources, avoiding unsafe transformations when `CreateScope()` is nested inside another disposable resource initializer.
+- **DI006 fixer safety**: The remove-`static` fixer now treats static lambdas as static contexts, avoiding invalid rewrites when cached providers are referenced from `static () => ...` delegates.
+- **DI008 descriptor fixer coverage**: DI008 lifetime fixes now update `ServiceLifetime.Transient` arguments inside `ServiceDescriptor.Describe(...)` and `new ServiceDescriptor(...)` descriptor registrations, matching the analyzer's descriptor coverage.
+- **DI014 nearest-callable fixer guardrail**: Added coverage ensuring the root-provider disposal fixer emits plain `using` inside synchronous lambdas even when they are nested in async methods, preserving the nearest-callable async boundary.
+- **Public constructor activation precision**: DI010, DI011, and shared lifetime analysis now evaluate public activatable constructors instead of protected/internal helper constructors, matching DI018's no-public-constructor model and avoiding noisy design-smell diagnostics on constructors the container cannot call.
+- **DI010 factory-return coverage**: DI010 now recognizes straight-line factory blocks and local-function method groups that perform setup statements before a single final `return new Service(...)`, including setup code with nested helper returns, while keeping branching multi-return factories conservative.
+- **DI017 factory coverage lock**: Added regression coverage for circular dependencies through `ActivatorUtilities.GetServiceOrCreateInstance<T>(sp)` factory registrations, keeping it aligned with the shared factory-dependency path used by DI015.
+- **Factory opacity guardrails**: Added paired DI015/DI017 regression coverage for mixed factory bodies that contain both a recognized `ActivatorUtilities` request and an unrelated helper invocation. DI015 still reports high-confidence missing dependencies, while DI017 keeps speculative cycle detection quiet through opaque factory behavior.
+- **DI015 fixer registration-site coverage**: Added self-binding code-fix coverage for `TryAddTransient(...)` registrations and local `IServiceCollection` aliases, keeping the fixer aligned with the analyzer's reachable registration flow.
+- **EF Core factory registration modeling**: DI003, DI015, and DI019 now model `AddDbContextFactory<TContext>()` registrations, treating the convenience `TContext` registration as scoped while keeping the factory and options lifetimes aligned with EF Core's configured factory lifetime. Custom `AddDbContextFactory<TContext,TFactory>()` context resolution is modeled as factory-backed so DI015 does not inspect dependencies owned by the custom factory.
+- **EF Core pooled registration modeling**: DI003, DI015, and DI019 now model `AddDbContextPool(...)` and `AddPooledDbContextFactory(...)` registrations, including singleton options/factory services and scoped pooled context resolution. `AddDbContextFactory(..., ServiceLifetime.Transient)` now models the convenience context registration as transient instead of scoped.
+- **EF Core service/implementation self-registration modeling**: DI003, DI015, and DI019 now model the implementation-type self-registration added by `AddDbContext<TService,TImplementation>(...)` and `AddDbContextPool<TService,TImplementation>(...)`, so direct `TImplementation` dependencies are no longer invisible when EF registers through an interface. Existing explicit `TImplementation` registrations keep their original lifetime.
+- **EF Core `TryAdd` lifetime precision**: EF helper registrations now preserve existing explicit context, options, and factory registrations instead of overwriting them with synthetic `AddDbContext*` lifetimes, including scoped options/factory guardrails for DI003 and DI019 across factory and pooled registration helpers.
+
 ## [2.8.13] - 2026-04-27
 
 ### Changed
@@ -90,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **DI002 Delegate Escape Coverage**: DI002 now reports scoped services captured by delegates that later escape through returns, fields, properties, or `ref` / `out` parameters, while staying quiet when the delegate is reassigned before escaping.
-- **DI002 Fixer Regression Coverage**: Expanded pragma-suppression coverage for alias-return, `ref` parameter, and captured-delegate escape diagnostics so the fixer continues to suppress the originating resolution statement safely.
+- **DI002 Fixer Regression Coverage**: Expanded pragma-suppression coverage for alias-return, local-function return, lambda-body assignment, `ref` parameter, and captured-delegate escape diagnostics so the fixer continues to suppress the originating resolution statement safely.
 
 ## [2.8.1] - 2026-04-26
 

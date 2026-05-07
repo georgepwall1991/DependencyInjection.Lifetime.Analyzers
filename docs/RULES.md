@@ -102,7 +102,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -174,7 +174,7 @@ public sealed class ProcessorHostedService : IHostedService
 
 Repository and unit-of-work abstractions are reported when their registered lifetime is scoped or transient. DI003 does not infer DbContext-backed behavior from names like `IRepository<T>` or `IUnitOfWork` alone.
 
-**Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, keyed `AddKeyedSingleton`, and supported `ServiceDescriptor` forms).
+**Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, `TryAddSingleton`, keyed `AddKeyedSingleton`, inline factory registrations, and supported `ServiceDescriptor` forms).
 
 ---
 
@@ -343,7 +343,7 @@ public sealed class MyService
 
 **Code Fix:** No. This is usually architectural refactoring.
 
-DI007 stays quiet in recognized composition/factory boundaries: DI registration factories, middleware `Invoke`/`InvokeAsync`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
+DI007 stays quiet in recognized composition/factory boundaries: DI registration factories, value-returning `Create*`/`Build*` factory methods, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
 
 ---
 
@@ -375,7 +375,7 @@ services.AddScoped<IMyService, DisposableService>();
 
 DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
 
-**Code Fix:** Yes. Suggests safer lifetime alternatives.
+**Code Fix:** Yes. Suggests safer lifetime alternatives and rewrites local descriptor lifetime arguments where the registration is unambiguous.
 
 **Options:** `dotnet_code_quality.DI008.allowed_disposable_types = MyType, My.Namespace.OtherType` suppresses known intentional disposable transients by simple or full type name.
 
@@ -439,7 +439,7 @@ public sealed class ReportingService
 
 **Better pattern:** split into focused collaborators and inject smaller abstractions.
 
-For normal type registrations, DI010 evaluates the constructor(s) the container could realistically activate instead of every accessible constructor. It also covers straightforward factory registrations that directly return `new MyService(...)` or `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on more dynamic factories.
+For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories.
 
 By default, DI010 reports when a constructor has more than `4` meaningful dependencies. It ignores primitives/value types, optional parameters, provider-plumbing types already covered by `DI011`, and common framework abstractions such as `ILogger<T>`, `IOptions<T>`, and `IConfiguration`.
 
@@ -473,31 +473,9 @@ public sealed class MyService
 
 **Better pattern:** inject concrete dependencies directly.
 
-**Code Fix:** Yes. Adds a missing self-binding registration only when DI015 can prove a single direct constructor dependency is a concrete, non-keyed type and the registration call is local and unambiguous.
+**Code Fix:** No. Replacing provider plumbing with explicit dependencies is a design decision.
 
-**Fixable case:**
-
-```csharp
-public sealed class MissingDependency { }
-
-public sealed class MyService : IMyService
-{
-    public MyService(MissingDependency missing) { }
-}
-
-services.AddScoped<IMyService, MyService>();
-```
-
-DI015 can offer:
-
-```csharp
-services.AddScoped<MissingDependency>();
-services.AddScoped<IMyService, MyService>();
-```
-
-**Not auto-fixable:** abstractions/interfaces, keyed dependencies, multiple missing dependencies, transitive-only missing leaves, `ServiceDescriptor` registrations, and factory-rooted diagnostics.
-
-**Known exceptions in this rule:** factory-style types, middleware `Invoke`/`InvokeAsync` paths, hosted services, and endpoint filter factories.
+**Known exceptions in this rule:** factory-style types with value-returning factory members, singleton services that use `IServiceScopeFactory` to create scopes deliberately, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, hosted services, endpoint filter factories, and provider parameters on non-public constructors the container cannot activate.
 
 ---
 
@@ -526,7 +504,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 **Better pattern:** decide and signal intent clearly: `TryAdd*` first, or explicit override with comments/tests.
 
-**Code Fix:** Yes for ignored `TryAdd*` calls that are standalone statements; the fixer removes the redundant ignored registration. Duplicate override cases remain manual.
+**Code Fix:** Yes for ignored `TryAdd*` and `TryAddKeyed*` calls that are block-contained standalone statements; the fixer removes the redundant ignored registration. Duplicate override cases and embedded single-line statement bodies remain manual.
 
 ---
 
@@ -554,7 +532,7 @@ public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 ```
 
-**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation.
+**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid block-contained standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation, including invalid implementation-instance registrations. Embedded single-line statement bodies stay manual unless a symbol-backed type rewrite is available.
 
 ---
 
@@ -616,11 +594,11 @@ services.AddScoped<IMissingDependency, MissingDependency>();
 services.AddSingleton<IMyService, MyService>();
 ```
 
-**Code Fix:** Yes. Adds a missing self-binding registration when DI015 can prove a single direct concrete dependency is safe to register. Supports local constructor diagnostics, direct `GetRequiredService<TConcrete>()` factory diagnostics, and keyed self-bindings when the key can be emitted as a C# literal.
+**Code Fix:** Yes. Adds a missing self-binding registration when DI015 can prove a single direct concrete dependency is safe to register. Supports local constructor diagnostics, `TryAdd*` registration sites, local `IServiceCollection` aliases, direct `GetRequiredService<TConcrete>()` factory diagnostics, and keyed self-bindings when the key can be emitted as a C# literal.
 
 ### DI015 strict mode
 
-By default, DI015 assumes common host-provided framework services (logging/options/configuration) are available. EF Core contexts registered through `AddDbContext(...)` are also modeled as registrations, including the `DbContextOptions<TContext>` dependency that normal context constructors require.
+By default, DI015 assumes common host-provided framework services (logging/options/configuration) are available. EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` are also modeled as registrations, including service/implementation overload self-registrations and the `DbContextOptions<TContext>` and `IDbContextFactory<TContext>` dependencies those patterns require.
 Disable that assumption for stricter analysis:
 
 ```ini
@@ -755,7 +733,7 @@ services.AddSingleton<IMyService, GoodConcreteService>();
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 

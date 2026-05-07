@@ -65,6 +65,26 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
             var descriptorInvocation = FindServiceDescriptorTransientInvocation(invocation, semanticModel);
             if (descriptorInvocation is null)
             {
+                var lifetimeExpression = FindSingleServiceDescriptorTransientLifetimeExpression(invocation, semanticModel);
+                if (lifetimeExpression is null)
+                {
+                    return;
+                }
+
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        title: Resources.DI008_FixTitle_ChangeToScoped,
+                        createChangedDocument: c => ChangeDescriptorLifetimeArgumentAsync(context.Document, lifetimeExpression, "Scoped", c),
+                        equivalenceKey: ChangeToScopedEquivalenceKey),
+                    diagnostic);
+
+                context.RegisterCodeFix(
+                    CodeAction.Create(
+                        title: Resources.DI008_FixTitle_ChangeToSingleton,
+                        createChangedDocument: c => ChangeDescriptorLifetimeArgumentAsync(context.Document, lifetimeExpression, "Singleton", c),
+                        equivalenceKey: ChangeToSingletonEquivalenceKey),
+                    diagnostic);
+
                 return;
             }
 
@@ -180,6 +200,101 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
         return null;
     }
 
+    private static ExpressionSyntax? FindSingleServiceDescriptorTransientLifetimeExpression(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        ExpressionSyntax? match = null;
+
+        foreach (var candidate in invocation.DescendantNodesAndSelf())
+        {
+            if (!TryGetServiceDescriptorTransientLifetimeExpression(candidate, semanticModel, out var lifetimeExpression))
+            {
+                continue;
+            }
+
+            if (match is not null)
+            {
+                return null;
+            }
+
+            match = lifetimeExpression;
+        }
+
+        return match;
+    }
+
+    private static bool TryGetServiceDescriptorTransientLifetimeExpression(
+        SyntaxNode candidate,
+        SemanticModel semanticModel,
+        out ExpressionSyntax lifetimeExpression)
+    {
+        lifetimeExpression = null!;
+
+        switch (candidate)
+        {
+            case InvocationExpressionSyntax invocation:
+                if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
+                    methodSymbol.Name != "Describe" ||
+                    !IsServiceDescriptorType(methodSymbol.ContainingType))
+                {
+                    return false;
+                }
+
+                return TryFindTransientLifetimeArgument(invocation.ArgumentList, semanticModel, out lifetimeExpression);
+
+            case ObjectCreationExpressionSyntax creation:
+                var createdType = semanticModel.GetTypeInfo(creation).Type;
+                if (!IsServiceDescriptorType(createdType))
+                {
+                    return false;
+                }
+
+                return TryFindTransientLifetimeArgument(creation.ArgumentList, semanticModel, out lifetimeExpression);
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsServiceDescriptorType(ITypeSymbol? type) =>
+        type?.Name == "ServiceDescriptor" &&
+        type.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
+
+    private static bool TryFindTransientLifetimeArgument(
+        ArgumentListSyntax? argumentList,
+        SemanticModel semanticModel,
+        out ExpressionSyntax lifetimeExpression)
+    {
+        lifetimeExpression = null!;
+
+        if (argumentList is null)
+        {
+            return false;
+        }
+
+        foreach (var argument in argumentList.Arguments)
+        {
+            var expression = argument.Expression;
+            var typeInfo = semanticModel.GetTypeInfo(expression);
+            var typeName = typeInfo.Type?.Name ?? typeInfo.ConvertedType?.Name;
+            if (typeName != "ServiceLifetime")
+            {
+                continue;
+            }
+
+            var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
+            if (symbol?.Name == "Transient" &&
+                symbol.ContainingType?.Name == "ServiceLifetime")
+            {
+                lifetimeExpression = expression;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static async Task<Document> ChangeLifetimeAsync(
         Document document,
         InvocationExpressionSyntax invocation,
@@ -213,6 +328,38 @@ public sealed class DI008_DisposableTransientCodeFixProvider : CodeFixProvider
 
         var newInvocation = ReplaceMethodName(invocation, descriptorMethodName);
         return document.WithSyntaxRoot(root.ReplaceNode(invocation, newInvocation));
+    }
+
+    private static async Task<Document> ChangeDescriptorLifetimeArgumentAsync(
+        Document document,
+        ExpressionSyntax lifetimeExpression,
+        string lifetimeName,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null)
+        {
+            return document;
+        }
+
+        var newLifetimeExpression = ReplaceLifetimeMemberName(lifetimeExpression, lifetimeName);
+        return document.WithSyntaxRoot(root.ReplaceNode(lifetimeExpression, newLifetimeExpression));
+    }
+
+    private static ExpressionSyntax ReplaceLifetimeMemberName(ExpressionSyntax lifetimeExpression, string lifetimeName)
+    {
+        switch (lifetimeExpression)
+        {
+            case MemberAccessExpressionSyntax memberAccess:
+                var newName = SyntaxFactory.IdentifierName(lifetimeName).WithTriviaFrom(memberAccess.Name);
+                return memberAccess.WithName(newName).WithTriviaFrom(lifetimeExpression);
+
+            case IdentifierNameSyntax identifierName:
+                return SyntaxFactory.IdentifierName(lifetimeName).WithTriviaFrom(identifierName);
+
+            default:
+                return SyntaxFactory.ParseExpression($"ServiceLifetime.{lifetimeName}").WithTriviaFrom(lifetimeExpression);
+        }
     }
 
     private static InvocationExpressionSyntax ReplaceMethodName(InvocationExpressionSyntax invocation, string newMethodName)

@@ -251,6 +251,30 @@ public class DI006_StaticProviderCacheCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromStaticLambda()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+
+                public void DoWork()
+                {
+                    Func<object?> helper = static () => _provider.GetService<object>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_WhenMultiVariableFieldDeclaration()
     {
         var source = Usings + """

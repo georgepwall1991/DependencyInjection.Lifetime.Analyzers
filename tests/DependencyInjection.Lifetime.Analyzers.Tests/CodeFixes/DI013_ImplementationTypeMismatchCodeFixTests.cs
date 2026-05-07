@@ -53,6 +53,45 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
     }
 
     [Fact]
+    public async Task RemoveInvalidRegistration_InstanceRegistration_RemovesStatement()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton(typeof(IService), new WrongService())|};
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"),
+                fixedSource,
+                DI013_ImplementationTypeMismatchCodeFixProvider.RemoveInvalidRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task RemoveInvalidRegistration_KeyedTypeofRegistration_RemovesStatement()
     {
         var source = Usings + """
@@ -122,6 +161,35 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
 
         await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
             .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"),
+                fixedSource,
+                DI013_ImplementationTypeMismatchCodeFixProvider.RemoveInvalidRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task RemoveInvalidRegistration_TopLevelStatement_RemovesGlobalStatement()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            {|#0:services.AddSingleton(typeof(IService), typeof(WrongService))|};
+
+            public interface IService {}
+            public sealed class WrongService {}
+            """;
+
+        var fixedSource = Usings + """
+            var services = new ServiceCollection();
+
+            public interface IService {}
+            public sealed class WrongService {}
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyCodeFixInConsoleApplicationAsync(
                 source,
                 CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
                     .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
@@ -216,6 +284,92 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
     }
 
     [Fact]
+    public async Task ChangeServiceType_InstanceRegistration_RewritesServiceTypeof()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public interface IWrongService {}
+            public sealed class WrongService : IWrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton(typeof(IService), new WrongService())|};
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IService {}
+            public interface IWrongService {}
+            public sealed class WrongService : IWrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(global::IWrongService), new WrongService());
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"),
+                fixedSource,
+                DI013_ImplementationTypeMismatchCodeFixProvider.ChangeServiceTypeEquivalenceKeyPrefix + "IWrongService");
+    }
+
+    [Fact]
+    public async Task EmbeddedInstanceRegistration_WithSafeServiceTypeRewrite_RewritesServiceTypeof()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public interface IWrongService {}
+            public sealed class WrongService : IWrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool enabled)
+                {
+                    if (enabled)
+                        {|#0:services.AddSingleton(typeof(IService), new WrongService())|};
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IService {}
+            public interface IWrongService {}
+            public sealed class WrongService : IWrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool enabled)
+                {
+                    if (enabled)
+                        services.AddSingleton(typeof(global::IWrongService), new WrongService());
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"),
+                fixedSource,
+                DI013_ImplementationTypeMismatchCodeFixProvider.ChangeServiceTypeEquivalenceKeyPrefix + "IWrongService");
+    }
+
+    [Fact]
     public async Task RemoveInvalidRegistration_TryAddRegistration_RemovesStatement()
     {
         var source = Usings + """
@@ -280,6 +434,32 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
                     .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
                     .WithLocation(0)
                     .WithArguments("String", "IService"));
+    }
+
+    [Fact]
+    public async Task EmbeddedInvalidRegistration_WithNoSafeRewrite_OffersNoFix()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool enabled)
+                {
+                    if (enabled)
+                        {|#0:services.AddSingleton(typeof(IService), typeof(WrongService))|};
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"));
     }
 
     [Fact]

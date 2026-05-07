@@ -100,6 +100,23 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     }
 
     /// <summary>
+    /// Verifies a code fix in an executable project so top-level Program.cs statements are valid.
+    /// </summary>
+    public static async Task VerifyCodeFixInConsoleApplicationAsync(
+        string source,
+        DiagnosticResult expected,
+        string fixedSource,
+        string codeActionEquivalenceKey)
+    {
+        var test = CreateTest(source, fixedSource);
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        test.FixedState.OutputKind = OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.Add(expected);
+        test.CodeActionEquivalenceKey = codeActionEquivalenceKey;
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies a specific code fix by equivalence key with multiple expected diagnostics
     /// and explicit fixed-state diagnostics.
     /// </summary>

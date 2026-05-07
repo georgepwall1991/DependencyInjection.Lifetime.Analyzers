@@ -250,6 +250,116 @@ public class DI003_CaptiveDependencyCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_TryAddSingletonCapturingScoped_ChangesToTryAddScoped()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:services.TryAddSingleton<ISingletonService, SingletonService>()|};
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.TryAddScoped<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithLocation(0)
+            .WithArguments("SingletonService", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_InlineFactoryCapturingScoped_ChangesRegistrationLifetime()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService({|#0:sp.GetRequiredService<IScopedService>()|}));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddScoped<ISingletonService>(
+                        sp => new SingletonService(sp.GetRequiredService<IScopedService>()));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithLocation(0)
+            .WithArguments("ISingletonService", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
     public async Task CodeFix_KeyedRegistration_ChangesToScoped()
     {
         var source = Usings + """
@@ -397,6 +507,122 @@ public class DI003_CaptiveDependencyCodeFixTests
         var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
             .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
             .WithSpan(17, 9, 17, 129)
+            .WithArguments("SingletonService", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_ServiceDescriptorDescribeNamedLifetime_ChangesLifetimeArgument()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Describe(
+                        serviceType: typeof(IScopedService),
+                        implementationType: typeof(ScopedService),
+                        lifetime: ServiceLifetime.Scoped));
+                    services.Add(ServiceDescriptor.Describe(
+                        implementationType: typeof(SingletonService),
+                        lifetime: ServiceLifetime.Singleton,
+                        serviceType: typeof(ISingletonService)));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Describe(
+                        serviceType: typeof(IScopedService),
+                        implementationType: typeof(ScopedService),
+                        lifetime: ServiceLifetime.Scoped));
+                    services.Add(ServiceDescriptor.Describe(
+                        implementationType: typeof(SingletonService),
+                        lifetime: ServiceLifetime.Scoped,
+                        serviceType: typeof(ISingletonService)));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithSpan(20, 9, 23, 53)
+            .WithArguments("SingletonService", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_ServiceDescriptorConstructor_ChangesLifetimeArgument()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(new ServiceDescriptor(typeof(IScopedService), typeof(ScopedService), ServiceLifetime.Scoped));
+                    services.Add(new ServiceDescriptor(typeof(ISingletonService), typeof(SingletonService), ServiceLifetime.Singleton));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(new ServiceDescriptor(typeof(IScopedService), typeof(ScopedService), ServiceLifetime.Scoped));
+                    services.Add(new ServiceDescriptor(typeof(ISingletonService), typeof(SingletonService), ServiceLifetime.Scoped));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithSpan(17, 9, 17, 124)
             .WithArguments("SingletonService", "scoped", "IScopedService");
 
         await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>

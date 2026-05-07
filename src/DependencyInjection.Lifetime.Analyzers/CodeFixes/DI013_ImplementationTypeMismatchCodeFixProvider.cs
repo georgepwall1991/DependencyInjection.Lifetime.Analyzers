@@ -114,7 +114,7 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
     {
         public RegistrationSyntaxInfo(
             InvocationExpressionSyntax registrationInvocation,
-            ExpressionStatementSyntax? removableStatement,
+            SyntaxNode? removableStatement,
             TypeSyntax serviceTypeSyntax,
             TypeSyntax? implementationTypeSyntax,
             INamedTypeSymbol serviceType,
@@ -130,7 +130,7 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
 
         public InvocationExpressionSyntax RegistrationInvocation { get; }
 
-        public ExpressionStatementSyntax? RemovableStatement { get; }
+        public SyntaxNode? RemovableStatement { get; }
 
         public TypeSyntax ServiceTypeSyntax { get; }
 
@@ -250,10 +250,9 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
         INamedTypeSymbol serviceType,
         INamedTypeSymbol implementationType)
     {
-        var removableStatement = registrationInvocation.Parent is ExpressionStatementSyntax statement &&
-            ReferenceEquals(statement.Expression, registrationInvocation)
-                ? statement
-                : null;
+        var removableStatement = TryGetRemovableRegistrationNode(registrationInvocation, out var removalNode)
+            ? removalNode
+            : null;
 
         return new RegistrationSyntaxInfo(
             registrationInvocation,
@@ -262,6 +261,28 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
             implementationTypeSyntax,
             serviceType,
             implementationType);
+    }
+
+    private static bool TryGetRemovableRegistrationNode(
+        InvocationExpressionSyntax registrationInvocation,
+        out SyntaxNode removalNode)
+    {
+        removalNode = null!;
+
+        if (registrationInvocation.Parent is not ExpressionStatementSyntax statement ||
+            !ReferenceEquals(statement.Expression, registrationInvocation))
+        {
+            return false;
+        }
+
+        removalNode = statement.Parent switch
+        {
+            BlockSyntax => statement,
+            GlobalStatementSyntax globalStatement => globalStatement,
+            _ => null!,
+        };
+
+        return removalNode is not null;
     }
 
     private static bool TryGetGenericRegistrationSyntax(
@@ -415,7 +436,7 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
 
     private static async Task<Document> RemoveInvalidRegistrationAsync(
         Document document,
-        ExpressionStatementSyntax statement,
+        SyntaxNode removalNode,
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
@@ -424,15 +445,16 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
             return document;
         }
 
-        SyntaxNode? newRoot;
-        if (statement.Parent is BlockSyntax block)
+        var newRoot = removalNode switch
         {
-            newRoot = root.ReplaceNode(block, block.WithStatements(block.Statements.Remove(statement)));
-        }
-        else
-        {
-            newRoot = root.RemoveNode(statement, SyntaxRemoveOptions.KeepNoTrivia);
-        }
+            ExpressionStatementSyntax { Parent: BlockSyntax block } statement =>
+                root.ReplaceNode(block, block.WithStatements(block.Statements.Remove(statement))),
+            GlobalStatementSyntax { Parent: CompilationUnitSyntax compilationUnit } globalStatement =>
+                root.ReplaceNode(
+                    compilationUnit,
+                    compilationUnit.WithMembers(compilationUnit.Members.Remove(globalStatement))),
+            _ => null,
+        };
 
         return newRoot is null ? document : document.WithSyntaxRoot(newRoot);
     }

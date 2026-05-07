@@ -127,6 +127,11 @@ public class DI015_UnresolvableDependencyAnalyzerTests
         {
             public class DbContext { }
             public class DbContextOptions<TContext> where TContext : DbContext { }
+            public class DbContextOptionsBuilder { }
+            public interface IDbContextFactory<TContext> where TContext : DbContext
+            {
+                TContext CreateDbContext();
+            }
         }
 
         namespace Microsoft.Extensions.DependencyInjection
@@ -137,6 +142,45 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                     this IServiceCollection services,
                     ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
                     ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContext<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+                    ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+
+                public static IServiceCollection AddDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder>? optionsAction = null,
+                    ServiceLifetime lifetime = ServiceLifetime.Singleton)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContextFactory<TContext, TFactory>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder>? optionsAction = null,
+                    ServiceLifetime lifetime = ServiceLifetime.Singleton)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext
+                    where TFactory : class, Microsoft.EntityFrameworkCore.IDbContextFactory<TContext> => services;
+
+                public static IServiceCollection AddDbContextPool<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddDbContextPool<TContextService, TContextImplementation>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
+                    where TContextService : class
+                    where TContextImplementation : Microsoft.EntityFrameworkCore.DbContext, TContextService => services;
+
+                public static IServiceCollection AddPooledDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
                     where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
             }
         }
@@ -453,6 +497,41 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
                 .WithLocation(55, 19)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task Factory_WithActivatorUtilitiesAndHelperInvocationMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(sp =>
+                    {
+                        Audit();
+                        return ActivatorUtilities.CreateInstance<MyService>(sp);
+                    });
+                }
+
+                private static void Audit() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(57, 20)
                 .WithArguments("IMyService", "IMissingDependency"));
     }
 
@@ -1447,6 +1526,183 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 public void ConfigureServices(IServiceCollection services)
                 {
                     services.AddDbContext<MyDbContext>();
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithAddDbContextFactoryDependencies_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(
+                    MyDbContext dbContext,
+                    Microsoft.EntityFrameworkCore.IDbContextFactory<MyDbContext> dbContextFactory,
+                    Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContextFactory<MyDbContext>();
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithCustomDbContextFactoryContextDependency_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public interface IExternalDependency { }
+
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(IExternalDependency dependency) { }
+            }
+
+            public sealed class MyDbContextFactory : Microsoft.EntityFrameworkCore.IDbContextFactory<MyDbContext>
+            {
+                public MyDbContext CreateDbContext() => throw new System.NotImplementedException();
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContextFactory<MyDbContext, MyDbContextFactory>();
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithAddDbContextServiceImplementationDependency_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext, IMyDbContext { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContext<IMyDbContext, MyDbContext>();
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithPooledEfDependencies_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(
+                    MyDbContext dbContext,
+                    Microsoft.EntityFrameworkCore.IDbContextFactory<MyDbContext> dbContextFactory,
+                    Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddPooledDbContextFactory<MyDbContext>(_ => { });
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithAddDbContextPoolServiceImplementationDependency_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public interface IMyDbContext { }
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext, IMyDbContext { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContextPool<IMyDbContext, MyDbContext>(_ => { });
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithAddDbContextPoolDependency_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions<MyDbContext> options) { }
+            }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MyDbContext dbContext) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddDbContextPool<MyDbContext>(_ => { });
                     services.AddSingleton<IMyService, MyService>();
                 }
             }

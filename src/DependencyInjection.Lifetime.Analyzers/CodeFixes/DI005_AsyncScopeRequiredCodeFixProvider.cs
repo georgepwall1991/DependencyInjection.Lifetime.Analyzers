@@ -97,13 +97,37 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
         var localDeclaration = invocation.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>();
         if (localDeclaration is not null &&
             localDeclaration.UsingKeyword != default &&
-            localDeclaration.AwaitKeyword == default)
+            localDeclaration.AwaitKeyword == default &&
+            IsDirectLocalDeclarationInitializer(invocation, localDeclaration))
         {
             return true;
         }
 
         var usingStatement = invocation.FirstAncestorOrSelf<UsingStatementSyntax>();
-        return usingStatement is not null && usingStatement.AwaitKeyword == default;
+        return usingStatement is not null &&
+            usingStatement.AwaitKeyword == default &&
+            IsDirectUsingStatementResource(invocation, usingStatement);
+    }
+
+    private static bool IsDirectLocalDeclarationInitializer(
+        InvocationExpressionSyntax invocation,
+        LocalDeclarationStatementSyntax localDeclaration)
+    {
+        return localDeclaration.Declaration.Variables.Count == 1 &&
+            localDeclaration.Declaration.Variables[0].Initializer?.Value == invocation;
+    }
+
+    private static bool IsDirectUsingStatementResource(
+        InvocationExpressionSyntax invocation,
+        UsingStatementSyntax usingStatement)
+    {
+        if (usingStatement.Expression == invocation)
+        {
+            return true;
+        }
+
+        return usingStatement.Declaration?.Variables.Count == 1 &&
+            usingStatement.Declaration.Variables[0].Initializer?.Value == invocation;
     }
 
     private static LocalDeclarationStatementSyntax TransformUsingVarDeclaration(

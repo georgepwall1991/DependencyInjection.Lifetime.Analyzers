@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -71,13 +72,14 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            // Skip factory classes (name ends with "Factory")
+            // Skip factory-shaped classes, but do not let name-only factory markers
+            // suppress provider-injection diagnostics.
             if (IsFactoryClass(implementationType))
             {
                 continue;
             }
 
-            // Skip middleware classes (has Invoke or InvokeAsync method)
+            // Skip real ASP.NET Core middleware classes.
             if (IsMiddlewareClass(implementationType))
             {
                 continue;
@@ -104,7 +106,8 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                     {
                         ReportDiagnostic(context, registration, implementationType, "IServiceProvider");
                     }
-                    else if (wellKnownTypes.IsServiceScopeFactory(parameterType))
+                    else if (wellKnownTypes.IsServiceScopeFactory(parameterType) &&
+                             registration.Lifetime != ServiceLifetime.Singleton)
                     {
                         ReportDiagnostic(context, registration, implementationType, "IServiceScopeFactory");
                     }
@@ -147,23 +150,87 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
 
     private static bool IsFactoryClass(INamedTypeSymbol type)
     {
-        // Check if class name ends with "Factory"
-        if (type.Name.EndsWith("Factory"))
+        if (!IsFactoryNamedType(type) &&
+            !type.AllInterfaces.Any(IsFactoryNamedType))
         {
-            return true;
+            return false;
         }
 
-        // Check if any interface implemented ends with "Factory"
-        return type.AllInterfaces.Any(i => i.Name.EndsWith("Factory"));
+        return HasFactoryLikeMember(type) ||
+               type.AllInterfaces
+                   .Where(IsFactoryNamedType)
+                   .Any(HasFactoryLikeMember);
+    }
+
+    private static bool IsFactoryNamedType(INamedTypeSymbol type)
+    {
+        return type.Name.EndsWith("Factory", StringComparison.Ordinal);
+    }
+
+    private static bool HasFactoryLikeMember(INamedTypeSymbol type)
+    {
+        for (var current = type; current is not null && current.SpecialType != SpecialType.System_Object; current = current.BaseType)
+        {
+            if (current.GetMembers().OfType<IMethodSymbol>().Any(IsFactoryLikeMethod))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsFactoryLikeMethod(IMethodSymbol method)
+    {
+        if (method.MethodKind != MethodKind.Ordinary ||
+            method.ReturnsVoid)
+        {
+            return false;
+        }
+
+        if (method.ReturnType is INamedTypeSymbol namedType &&
+            IsNonGenericTaskLikeType(namedType))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsNonGenericTaskLikeType(INamedTypeSymbol type)
+    {
+        return !type.IsGenericType &&
+               type.Name is "Task" or "ValueTask" &&
+               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
     }
 
     private static bool IsMiddlewareClass(INamedTypeSymbol type)
     {
-        // Check if the class has an Invoke or InvokeAsync method (middleware pattern)
         return type.GetMembers()
             .OfType<IMethodSymbol>()
-            .Any(m => m.Name is "Invoke" or "InvokeAsync" &&
-                      m.DeclaredAccessibility == Accessibility.Public);
+            .Any(IsMiddlewareInvokeMethod);
+    }
+
+    private static bool IsMiddlewareInvokeMethod(IMethodSymbol method)
+    {
+        return method.Name is "Invoke" or "InvokeAsync" &&
+               method.DeclaredAccessibility == Accessibility.Public &&
+               IsTaskType(method.ReturnType) &&
+               method.Parameters.Length > 0 &&
+               IsAspNetCoreHttpContext(method.Parameters[0].Type);
+    }
+
+    private static bool IsTaskType(ITypeSymbol type)
+    {
+        return type is INamedTypeSymbol { IsGenericType: false } &&
+               type.Name == "Task" &&
+               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+    }
+
+    private static bool IsAspNetCoreHttpContext(ITypeSymbol type)
+    {
+        return type.Name == "HttpContext" &&
+               type.ContainingNamespace?.ToDisplayString() == "Microsoft.AspNetCore.Http";
     }
 
     private static bool IsHostedServiceClass(INamedTypeSymbol type)

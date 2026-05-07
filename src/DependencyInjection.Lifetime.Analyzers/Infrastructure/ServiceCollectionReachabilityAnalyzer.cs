@@ -429,7 +429,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     flowKey,
                     order++,
                     registration.IsTryAdd,
-                    registration.MethodName));
+                    registration.MethodName,
+                    registration.SkipIfAlreadyRegistered));
         }
     }
 

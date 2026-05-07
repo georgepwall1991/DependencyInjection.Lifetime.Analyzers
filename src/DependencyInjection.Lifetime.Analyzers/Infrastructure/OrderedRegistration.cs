@@ -55,6 +55,11 @@ public sealed class OrderedRegistration
     public bool IsKeyed { get; }
 
     /// <summary>
+    /// Gets whether this registration behaves like TryAdd for an earlier registration.
+    /// </summary>
+    public bool SkipIfAlreadyRegistered { get; }
+
+    /// <summary>
     /// Creates a new ordered registration.
     /// </summary>
     public OrderedRegistration(
@@ -66,7 +71,8 @@ public sealed class OrderedRegistration
         string? flowKey,
         int order,
         bool isTryAdd,
-        string methodName)
+        string methodName,
+        bool skipIfAlreadyRegistered = false)
     {
         ServiceType = serviceType;
         Key = key;
@@ -77,5 +83,6 @@ public sealed class OrderedRegistration
         Order = order;
         IsTryAdd = isTryAdd;
         MethodName = methodName;
+        SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
     }
 }
