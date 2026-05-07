@@ -26,6 +26,7 @@ public sealed class RegistrationCollector
     private readonly INamedTypeSymbol? _serviceDescriptorType;
     private readonly INamedTypeSymbol? _hostedServiceType;
     private readonly INamedTypeSymbol? _dbContextOptionsOfT;
+    private readonly INamedTypeSymbol? _dbContextFactoryOfT;
     private int _registrationOrder;
 
     private RegistrationCollector(
@@ -36,7 +37,8 @@ public sealed class RegistrationCollector
         INamedTypeSymbol? entityFrameworkServiceCollectionExtensionsType,
         INamedTypeSymbol? serviceDescriptorType,
         INamedTypeSymbol? hostedServiceType,
-        INamedTypeSymbol? dbContextOptionsOfT)
+        INamedTypeSymbol? dbContextOptionsOfT,
+        INamedTypeSymbol? dbContextFactoryOfT)
     {
         _serviceCollectionType = serviceCollectionType;
         _serviceCollectionServiceExtensionsType = serviceCollectionServiceExtensionsType;
@@ -46,6 +48,7 @@ public sealed class RegistrationCollector
         _serviceDescriptorType = serviceDescriptorType;
         _hostedServiceType = hostedServiceType;
         _dbContextOptionsOfT = dbContextOptionsOfT;
+        _dbContextFactoryOfT = dbContextFactoryOfT;
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
         _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
@@ -88,6 +91,15 @@ public sealed class RegistrationCollector
         }
     }
 
+    private sealed class ServiceIdentifierComparer : IEqualityComparer<ServiceIdentifier>
+    {
+        public static readonly ServiceIdentifierComparer Instance = new();
+
+        public bool Equals(ServiceIdentifier x, ServiceIdentifier y) => x.Equals(y);
+
+        public int GetHashCode(ServiceIdentifier obj) => obj.GetHashCode();
+    }
+
     /// <summary>
     /// Creates a registration collector for the given compilation.
     /// Returns null if IServiceCollection is not available.
@@ -125,6 +137,9 @@ public sealed class RegistrationCollector
         var dbContextOptionsOfT = compilation.GetTypeByMetadataName(
             "Microsoft.EntityFrameworkCore.DbContextOptions`1");
 
+        var dbContextFactoryOfT = compilation.GetTypeByMetadataName(
+            "Microsoft.EntityFrameworkCore.IDbContextFactory`1");
+
         return new RegistrationCollector(
             serviceCollectionType,
             serviceCollectionServiceExtensionsType,
@@ -133,13 +148,18 @@ public sealed class RegistrationCollector
             entityFrameworkServiceCollectionExtensionsType,
             serviceDescriptorType,
             hostedServiceType,
-            dbContextOptionsOfT);
+            dbContextOptionsOfT,
+            dbContextFactoryOfT);
     }
 
     /// <summary>
     /// Gets all collected registrations.
     /// </summary>
-    public IEnumerable<ServiceRegistration> Registrations => _registrations.Values;
+    public IEnumerable<ServiceRegistration> Registrations => GetSourceOrderedRegistrations()
+        .GroupBy(
+            registration => new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed),
+            ServiceIdentifierComparer.Instance)
+        .Select(group => group.Last());
 
     /// <summary>
     /// Gets all ordered registrations for analyzing registration order.
@@ -154,14 +174,18 @@ public sealed class RegistrationCollector
     /// <summary>
     /// Gets all collected Add* registrations (including duplicates) that include implementation metadata.
     /// </summary>
-    public IEnumerable<ServiceRegistration> AllRegistrations => _allRegistrations;
+    public IEnumerable<ServiceRegistration> AllRegistrations => GetSourceOrderedRegistrations();
 
     /// <summary>
     /// Tries to get the registration for a specific service type and key.
     /// </summary>
     public bool TryGetRegistration(INamedTypeSymbol serviceType, object? key, bool isKeyed, out ServiceRegistration? registration)
     {
-        return _registrations.TryGetValue(new ServiceIdentifier(serviceType, key, isKeyed), out registration);
+        registration = Registrations.LastOrDefault(candidate =>
+            SymbolEqualityComparer.Default.Equals(candidate.ServiceType, serviceType) &&
+            Equals(candidate.Key, key) &&
+            candidate.IsKeyed == isKeyed);
+        return registration is not null;
     }
 
     /// <summary>
@@ -170,7 +194,8 @@ public sealed class RegistrationCollector
     public ServiceLifetime? GetLifetime(ITypeSymbol? serviceType, object? key = null, bool isKeyed = false)
     {
         if (serviceType is INamedTypeSymbol namedType &&
-            _registrations.TryGetValue(new ServiceIdentifier(namedType, key, isKeyed), out var registration))
+            TryGetRegistration(namedType, key, isKeyed, out var registration) &&
+            registration is not null)
         {
             return registration.Lifetime;
         }
@@ -180,13 +205,57 @@ public sealed class RegistrationCollector
             !closedGenericType.IsUnboundGenericType)
         {
             var openGenericType = closedGenericType.ConstructUnboundGenericType();
-            if (_registrations.TryGetValue(new ServiceIdentifier(openGenericType, key, isKeyed), out registration))
+            if (TryGetRegistration(openGenericType, key, isKeyed, out registration) &&
+                registration is not null)
             {
                 return registration.Lifetime;
             }
         }
 
         return null;
+    }
+
+    private IEnumerable<ServiceRegistration> GetSourceOrderedRegistrations()
+    {
+        var ordered = _allRegistrations
+            .Select(registration =>
+            {
+                var lineSpan = registration.Location.GetLineSpan();
+                var path = lineSpan.Path;
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    path = registration.Location.SourceTree?.FilePath ?? string.Empty;
+                }
+
+                return new
+                {
+                    Registration = registration,
+                    Path = path ?? string.Empty,
+                    Line = lineSpan.StartLinePosition.Line,
+                    Column = lineSpan.StartLinePosition.Character,
+                    DiscoveryOrder = registration.Order
+                };
+            })
+            .OrderBy(item => item.Path, System.StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Line)
+            .ThenBy(item => item.Column)
+            .ThenBy(item => item.DiscoveryOrder)
+            .Select(item => item.Registration);
+
+        var seen = new HashSet<ServiceIdentifier>(ServiceIdentifierComparer.Instance);
+        foreach (var registration in ordered)
+        {
+            var identifier = new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed);
+            if ((registration.SkipIfAlreadyRegistered || registration.IsTryAdd) &&
+                seen.Contains(identifier))
+            {
+                continue;
+            }
+
+            seen.Add(identifier);
+            yield return registration;
+        }
     }
 
     /// <summary>
@@ -250,8 +319,8 @@ public sealed class RegistrationCollector
         object? key = null;
         bool hasImplementationInstance = false;
         bool isKeyed = IsKeyedMethod(methodName);
-        INamedTypeSymbol? companionServiceType = null;
-        ServiceLifetime? companionLifetime = null;
+        bool skipPrimaryIfAlreadyRegistered = false;
+        var companionRegistrations = new List<CompanionRegistration>();
 
         if (TryExtractHostedServiceRegistration(invocation, methodSymbol, semanticModel, out var hostedServiceType, out var hostedImplementationType, out var hostedFactoryExpression))
         {
@@ -276,15 +345,149 @@ public sealed class RegistrationCollector
             factoryExpression = null;
             lifetime = dbContextLifetime;
             isKeyed = false;
-            companionServiceType = dbContextOptionsServiceType;
-            companionLifetime = dbContextOptionsLifetime;
+            skipPrimaryIfAlreadyRegistered = true;
+
+            if (dbContextOptionsServiceType is not null &&
+                dbContextOptionsLifetime is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        dbContextOptionsServiceType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        dbContextOptionsLifetime.Value,
+                        skipIfAlreadyRegistered: true));
+            }
+
+            if (dbContextLifetime is ServiceLifetime effectiveDbContextLifetime)
+            {
+                AddFactoryBackedImplementationSelfRegistration(
+                    companionRegistrations,
+                    dbContextServiceType,
+                    dbContextImplementationType,
+                    effectiveDbContextLifetime);
+            }
+        }
+        else if (TryExtractDbContextFactoryRegistration(
+                     invocation,
+                     methodSymbol,
+                     semanticModel,
+                     out var dbContextFactoryContextType,
+                     out var dbContextFactoryContextLifetime,
+                     out var dbContextFactoryOptionsServiceType,
+                     out var dbContextFactoryOptionsLifetime,
+                     out var dbContextFactoryServiceType,
+                     out var dbContextFactoryImplementationType,
+                     out var dbContextFactoryLifetime))
+        {
+            serviceType = dbContextFactoryContextType;
+            implementationType = dbContextFactoryImplementationType is null
+                ? dbContextFactoryContextType
+                : null;
+            factoryExpression = null;
+            hasImplementationInstance = dbContextFactoryImplementationType is not null;
+            lifetime = dbContextFactoryContextLifetime;
+            isKeyed = false;
+            skipPrimaryIfAlreadyRegistered = true;
+
+            if (dbContextFactoryOptionsServiceType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        dbContextFactoryOptionsServiceType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        dbContextFactoryOptionsLifetime,
+                        skipIfAlreadyRegistered: true));
+            }
+
+            if (dbContextFactoryServiceType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        dbContextFactoryServiceType,
+                        dbContextFactoryImplementationType,
+                        hasImplementationInstance: dbContextFactoryImplementationType is null,
+                        dbContextFactoryLifetime,
+                        skipIfAlreadyRegistered: true));
+            }
+        }
+        else if (TryExtractDbContextPoolRegistration(
+                     invocation,
+                     methodSymbol,
+                     out var dbContextPoolServiceType,
+                     out var dbContextPoolImplementationType,
+                     out var dbContextPoolOptionsServiceType,
+                     out var dbContextPoolOptionsLifetime))
+        {
+            serviceType = dbContextPoolServiceType;
+            implementationType = dbContextPoolImplementationType;
+            factoryExpression = null;
+            lifetime = ServiceLifetime.Scoped;
+            isKeyed = false;
+            skipPrimaryIfAlreadyRegistered = true;
+
+            if (dbContextPoolOptionsServiceType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        dbContextPoolOptionsServiceType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        dbContextPoolOptionsLifetime,
+                        skipIfAlreadyRegistered: true));
+            }
+
+            AddFactoryBackedImplementationSelfRegistration(
+                companionRegistrations,
+                dbContextPoolServiceType,
+                dbContextPoolImplementationType,
+                ServiceLifetime.Scoped);
+        }
+        else if (TryExtractPooledDbContextFactoryRegistration(
+                     methodSymbol,
+                     out var pooledFactoryContextType,
+                     out var pooledFactoryOptionsServiceType,
+                     out var pooledFactoryOptionsLifetime,
+                     out var pooledFactoryServiceType,
+                     out var pooledFactoryLifetime))
+        {
+            // EF Core registers a scoped TContext convenience service for pooled factories.
+            serviceType = pooledFactoryContextType;
+            implementationType = pooledFactoryContextType;
+            factoryExpression = null;
+            lifetime = ServiceLifetime.Scoped;
+            isKeyed = false;
+            skipPrimaryIfAlreadyRegistered = true;
+
+            if (pooledFactoryOptionsServiceType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        pooledFactoryOptionsServiceType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        pooledFactoryOptionsLifetime,
+                        skipIfAlreadyRegistered: true));
+            }
+
+            if (pooledFactoryServiceType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        pooledFactoryServiceType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        pooledFactoryLifetime,
+                        skipIfAlreadyRegistered: true));
+            }
         }
         else if (lifetime.HasValue)
         {
             // Extract service, implementation types, factory expression, and key from standard methods
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, key) = ExtractTypes(methodSymbol, invocation, semanticModel);
         }
-        else if ((methodName == "Add" || methodName == "TryAdd") && 
+        else if ((methodName == "Add" || methodName == "TryAdd") &&
                  (isExtension || isAddMethod))
         {
             // Handle Add(ServiceDescriptor)
@@ -301,9 +504,10 @@ public sealed class RegistrationCollector
             return;
         }
 
-        // Always track ordered registrations (for DI012 analysis)
         var order = Interlocked.Increment(ref _registrationOrder);
         var flowKey = ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(invocation, semanticModel);
+        var serviceIdentifier = new ServiceIdentifier(serviceType, key, isKeyed);
+        var hasEffectiveRegistration = _registrations.ContainsKey(serviceIdentifier);
         var orderedRegistration = new OrderedRegistration(
             serviceType,
             key,
@@ -313,15 +517,15 @@ public sealed class RegistrationCollector
             flowKey,
             order,
             isTryAdd,
-            methodName);
+            methodName,
+            skipPrimaryIfAlreadyRegistered);
         _orderedRegistrations.Add(orderedRegistration);
 
         // Store registrations that can actually become effective at runtime. TryAdd* only
         // participates when no earlier effective registration exists for the same service/key.
         // Discovery order is still used here for the runtime-effective registration cache,
         // but DI012 now applies a stable source-location ordering when it evaluates duplicates.
-        var hasEffectiveRegistration = _registrations.ContainsKey(new ServiceIdentifier(serviceType, key, isKeyed));
-        if (implementationType is not null || factoryExpression is not null)
+        if (implementationType is not null || factoryExpression is not null || hasImplementationInstance)
         {
             if (isTryAdd && hasEffectiveRegistration)
             {
@@ -342,33 +546,93 @@ public sealed class RegistrationCollector
                 invocation.GetLocation(),
                 keyLiteral,
                 flowKey,
-                order);
+                order,
+                skipPrimaryIfAlreadyRegistered,
+                isTryAdd);
 
             _allRegistrations.Add(registration);
 
-            // Store by service type and key (later registrations override earlier ones, like DI container behavior)
-            _registrations[new ServiceIdentifier(serviceType, key, isKeyed)] = registration;
+            if (!skipPrimaryIfAlreadyRegistered || !hasEffectiveRegistration)
+            {
+                // Store by service type and key (later registrations override earlier ones, like DI container behavior)
+                _registrations[serviceIdentifier] = registration;
+            }
         }
 
-        if (companionServiceType is not null &&
-            companionLifetime is not null)
+        foreach (var companionRegistrationInfo in companionRegistrations)
         {
+            var companionIdentifier = new ServiceIdentifier(companionRegistrationInfo.ServiceType, null, false);
             var companionRegistration = new ServiceRegistration(
-                companionServiceType,
-                implementationType: null,
+                companionRegistrationInfo.ServiceType,
+                companionRegistrationInfo.ImplementationType,
                 factoryExpression: null,
-                hasImplementationInstance: true,
+                companionRegistrationInfo.HasImplementationInstance,
                 key: null,
                 isKeyed: false,
-                companionLifetime.Value,
+                companionRegistrationInfo.Lifetime,
                 invocation.GetLocation(),
                 keyLiteral: null,
                 flowKey,
-                order);
+                order,
+                companionRegistrationInfo.SkipIfAlreadyRegistered,
+                isTryAdd: false);
 
             _allRegistrations.Add(companionRegistration);
-            _registrations[new ServiceIdentifier(companionServiceType, null, false)] = companionRegistration;
+            if (!companionRegistrationInfo.SkipIfAlreadyRegistered ||
+                !_registrations.ContainsKey(companionIdentifier))
+            {
+                _registrations[companionIdentifier] = companionRegistration;
+            }
         }
+    }
+
+    private static void AddFactoryBackedImplementationSelfRegistration(
+        List<CompanionRegistration> companionRegistrations,
+        INamedTypeSymbol? serviceType,
+        INamedTypeSymbol? implementationType,
+        ServiceLifetime lifetime)
+    {
+        if (serviceType is null ||
+            implementationType is null ||
+            SymbolEqualityComparer.Default.Equals(serviceType, implementationType))
+        {
+            return;
+        }
+
+        companionRegistrations.Add(
+            new CompanionRegistration(
+                implementationType,
+                implementationType: null,
+                hasImplementationInstance: true,
+                lifetime,
+                skipIfAlreadyRegistered: true));
+    }
+
+    private readonly struct CompanionRegistration
+    {
+        public CompanionRegistration(
+            INamedTypeSymbol serviceType,
+            INamedTypeSymbol? implementationType,
+            bool hasImplementationInstance,
+            ServiceLifetime lifetime,
+            bool skipIfAlreadyRegistered = false)
+        {
+            ServiceType = serviceType;
+            ImplementationType = implementationType;
+            HasImplementationInstance = hasImplementationInstance;
+            Lifetime = lifetime;
+            SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
+        }
+
+        public INamedTypeSymbol ServiceType { get; }
+
+        public INamedTypeSymbol? ImplementationType { get; }
+
+        public bool HasImplementationInstance { get; }
+
+        public ServiceLifetime Lifetime { get; }
+
+        public bool SkipIfAlreadyRegistered { get; }
     }
 
     private bool IsServiceCollectionExtensionMethod(IMethodSymbol method)
@@ -741,7 +1005,7 @@ public sealed class RegistrationCollector
     private static bool IsServiceLifetimeExpression(ExpressionSyntax expr, SemanticModel semanticModel)
     {
         var typeInfo = semanticModel.GetTypeInfo(expr);
-        return typeInfo.Type?.Name == "ServiceLifetime" || 
+        return typeInfo.Type?.Name == "ServiceLifetime" ||
                (typeInfo.ConvertedType?.Name == "ServiceLifetime");
     }
 
@@ -771,10 +1035,10 @@ public sealed class RegistrationCollector
             var constantValue = semanticModel.GetConstantValue(castExpr);
             if (constantValue.HasValue && constantValue.Value is int intValue)
             {
-                 if (System.Enum.IsDefined(typeof(ServiceLifetime), intValue))
-                 {
-                     return (ServiceLifetime)intValue;
-                 }
+                if (System.Enum.IsDefined(typeof(ServiceLifetime), intValue))
+                {
+                    return (ServiceLifetime)intValue;
+                }
             }
         }
 
@@ -862,20 +1126,162 @@ public sealed class RegistrationCollector
 
     private INamedTypeSymbol? TryConstructDbContextOptionsType(INamedTypeSymbol contextImplementationType)
     {
-        if (_dbContextOptionsOfT is null ||
-            contextImplementationType.IsUnboundGenericType)
+        return TryConstructGenericType(_dbContextOptionsOfT, contextImplementationType);
+    }
+
+    private INamedTypeSymbol? TryConstructDbContextFactoryType(INamedTypeSymbol contextImplementationType)
+    {
+        return TryConstructGenericType(_dbContextFactoryOfT, contextImplementationType);
+    }
+
+    private static INamedTypeSymbol? TryConstructGenericType(
+        INamedTypeSymbol? genericType,
+        INamedTypeSymbol typeArgument)
+    {
+        if (genericType is null ||
+            typeArgument.IsUnboundGenericType)
         {
             return null;
         }
 
         try
         {
-            return _dbContextOptionsOfT.Construct(contextImplementationType);
+            return genericType.Construct(typeArgument);
         }
         catch (System.ArgumentException)
         {
             return null;
         }
+    }
+
+    private bool TryExtractDbContextFactoryRegistration(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        SemanticModel semanticModel,
+        out INamedTypeSymbol? contextType,
+        out ServiceLifetime contextLifetime,
+        out INamedTypeSymbol? optionsServiceType,
+        out ServiceLifetime optionsLifetime,
+        out INamedTypeSymbol? factoryServiceType,
+        out INamedTypeSymbol? factoryImplementationType,
+        out ServiceLifetime factoryLifetime)
+    {
+        contextType = null;
+        contextLifetime = default;
+        optionsServiceType = null;
+        optionsLifetime = default;
+        factoryServiceType = null;
+        factoryImplementationType = null;
+        factoryLifetime = default;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddDbContextFactory" ||
+            !IsKnownEntityFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        contextType = method.TypeArguments[0] as INamedTypeSymbol;
+        if (contextType is null)
+        {
+            return false;
+        }
+
+        if (!TryGetLifetimeArgument(
+                invocation,
+                method,
+                semanticModel,
+                "lifetime",
+                ServiceLifetime.Singleton,
+                out var extractedLifetime))
+        {
+            return false;
+        }
+
+        optionsLifetime = extractedLifetime;
+        factoryLifetime = extractedLifetime;
+        contextLifetime = extractedLifetime == ServiceLifetime.Transient
+            ? ServiceLifetime.Transient
+            : ServiceLifetime.Scoped;
+        optionsServiceType = TryConstructDbContextOptionsType(contextType);
+        factoryServiceType = TryConstructDbContextFactoryType(contextType);
+        factoryImplementationType = method.TypeArguments.Length == 2
+            ? method.TypeArguments[1] as INamedTypeSymbol
+            : null;
+
+        return true;
+    }
+
+    private bool TryExtractDbContextPoolRegistration(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        out INamedTypeSymbol? serviceType,
+        out INamedTypeSymbol? implementationType,
+        out INamedTypeSymbol? optionsServiceType,
+        out ServiceLifetime optionsLifetime)
+    {
+        serviceType = null;
+        implementationType = null;
+        optionsServiceType = null;
+        optionsLifetime = ServiceLifetime.Singleton;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddDbContextPool" ||
+            !IsKnownEntityFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        serviceType = method.TypeArguments[0] as INamedTypeSymbol;
+        implementationType = method.TypeArguments.Length == 2
+            ? method.TypeArguments[1] as INamedTypeSymbol
+            : serviceType;
+
+        if (serviceType is null || implementationType is null)
+        {
+            return false;
+        }
+
+        optionsServiceType = TryConstructDbContextOptionsType(implementationType);
+        return true;
+    }
+
+    private bool TryExtractPooledDbContextFactoryRegistration(
+        IMethodSymbol method,
+        out INamedTypeSymbol? contextType,
+        out INamedTypeSymbol? optionsServiceType,
+        out ServiceLifetime optionsLifetime,
+        out INamedTypeSymbol? factoryServiceType,
+        out ServiceLifetime factoryLifetime)
+    {
+        contextType = null;
+        optionsServiceType = null;
+        optionsLifetime = ServiceLifetime.Singleton;
+        factoryServiceType = null;
+        factoryLifetime = ServiceLifetime.Singleton;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddPooledDbContextFactory" ||
+            !IsKnownEntityFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length != 1)
+        {
+            return false;
+        }
+
+        contextType = method.TypeArguments[0] as INamedTypeSymbol;
+        if (contextType is null)
+        {
+            return false;
+        }
+
+        optionsServiceType = TryConstructDbContextOptionsType(contextType);
+        factoryServiceType = TryConstructDbContextFactoryType(contextType);
+        return true;
     }
 
     private static bool TryGetLifetimeArgument(
@@ -930,7 +1336,7 @@ public sealed class RegistrationCollector
         if (method.IsGenericMethod && method.TypeArguments.Length > 0)
         {
             serviceType = method.TypeArguments[0] as INamedTypeSymbol;
-            
+
             if (method.TypeArguments.Length > 1)
             {
                 implementationType = method.TypeArguments[1] as INamedTypeSymbol;
@@ -946,12 +1352,12 @@ public sealed class RegistrationCollector
                 // If factory is present, implementation is unknown (null).
                 implementationType = serviceType;
             }
-            
+
             // Key extraction for generic methods
             // AddKeyedSingleton<T>(key, ...) -> key is 1st argument
             if (isKeyed && arguments.Count > 0)
             {
-                 key = ExtractConstantValue(arguments[0].Expression, semanticModel);
+                key = ExtractConstantValue(arguments[0].Expression, semanticModel);
             }
 
             return (serviceType, implementationType, factoryExpression, hasImplementationInstance, key);
@@ -980,10 +1386,10 @@ public sealed class RegistrationCollector
             }
             else if (isKeyed && keyIndex == -1 && typeofArgs.Count > 0)
             {
-                 // If we found the service type (typeofArgs[0]), the next non-typeof argument might be the key
-                 // AddKeyedSingleton(typeof(T), key, ...)
-                 keyIndex = i;
-                 key = ExtractConstantValue(arg.Expression, semanticModel);
+                // If we found the service type (typeofArgs[0]), the next non-typeof argument might be the key
+                // AddKeyedSingleton(typeof(T), key, ...)
+                keyIndex = i;
+                key = ExtractConstantValue(arg.Expression, semanticModel);
             }
             else if (semanticModel.GetTypeInfo(arg.Expression).Type is INamedTypeSymbol namedType)
             {
@@ -1005,10 +1411,10 @@ public sealed class RegistrationCollector
             }
             else if (factoryExpression is null)
             {
-                 // Only default to serviceType if NO factory is present
+                // Only default to serviceType if NO factory is present
                 implementationType = serviceType;
             }
-            
+
             return (serviceType, implementationType, factoryExpression, hasImplementationInstance, key);
         }
 

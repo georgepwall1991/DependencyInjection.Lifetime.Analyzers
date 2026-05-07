@@ -37,7 +37,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
                 .WithSpan(11, 20, 11, 61)
                 .WithArguments("IMyService"));
-        
+
     }
 
     [Fact]
@@ -272,6 +272,172 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                 .WithArguments("IMyService"));
     }
 
+    [Fact]
+    public async Task GetRequiredService_InNonMiddlewareInvokeMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IMyService { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task Invoke()
+                {
+                    var service = {|#0:_provider.GetRequiredService<IMyService>()|};
+                    return Task.CompletedTask;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InGenericTaskInvokeAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
+
+            public interface IMyService { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task<IMyService> InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context)
+                {
+                    return Task.FromResult({|#0:_provider.GetRequiredService<IMyService>()|});
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InVoidCreateMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void CreateCache()
+                {
+                    var service = {|#0:_provider.GetRequiredService<IMyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InPlainTaskBuildMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IMyService { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task BuildCacheAsync()
+                {
+                    var service = {|#0:_provider.GetRequiredService<IMyService>()|};
+                    return Task.CompletedTask;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InPlainValueTaskCreateMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IMyService { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public ValueTask CreateCacheAsync()
+                {
+                    var service = {|#0:_provider.GetRequiredService<IMyService>()|};
+                    return default;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
+                .WithArguments("IMyService"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -308,6 +474,11 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
 
             public interface IMyService { }
 
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
+
             public class MyMiddleware
             {
                 private readonly IServiceProvider _provider;
@@ -317,7 +488,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                     _provider = provider;
                 }
 
-                public Task Invoke()
+                public Task Invoke(Microsoft.AspNetCore.Http.HttpContext context)
                 {
                     var service = _provider.GetRequiredService<IMyService>();
                     return Task.CompletedTask;
@@ -336,6 +507,11 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
 
             public interface IMyService { }
 
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
+
             public class MyMiddleware
             {
                 private readonly IServiceProvider _provider;
@@ -345,7 +521,7 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
                     _provider = provider;
                 }
 
-                public Task InvokeAsync()
+                public Task InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context)
                 {
                     var service = _provider.GetRequiredService<IMyService>();
                     return Task.CompletedTask;
@@ -452,7 +628,6 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     [Fact]
     public async Task GetRequiredService_InBuildMethod_NoDiagnostic()
     {
-        // Build* methods are treated as factory patterns - allowed
         var source = Usings + """
             public interface IMyService { }
 
@@ -467,6 +642,34 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
 
                 public IMyService BuildService()
                 {
+                    return _provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InAsyncCreateFactoryMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IMyService { }
+
+            public class MyFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task<IMyService> CreateServiceAsync()
+                {
+                    await Task.Yield();
                     return _provider.GetRequiredService<IMyService>();
                 }
             }

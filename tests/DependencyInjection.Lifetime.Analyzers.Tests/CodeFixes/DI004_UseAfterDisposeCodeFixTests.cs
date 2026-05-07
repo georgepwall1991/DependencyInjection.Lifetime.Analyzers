@@ -559,6 +559,100 @@ public class DI004_UseAfterDisposeCodeFixTests
     }
 
     [Fact]
+    public async Task MoveUseIntoScope_AwaitedImmediateInvocation_MovesStatementIntoUsingBlock()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                System.Threading.Tasks.Task DoWorkAsync();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async System.Threading.Tasks.Task ProcessWorkAsync()
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                    await {|#0:service.DoWorkAsync()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public System.Threading.Tasks.Task DoWorkAsync() => System.Threading.Tasks.Task.CompletedTask;
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService
+            {
+                System.Threading.Tasks.Task DoWorkAsync();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async System.Threading.Tasks.Task ProcessWorkAsync()
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        await service.DoWorkAsync();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public System.Threading.Tasks.Task DoWorkAsync() => System.Threading.Tasks.Task.CompletedTask;
+            }
+            """;
+
+        await CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                    .WithLocation(0)
+                    .WithArguments("service"),
+                fixedSource,
+                "DI004_MoveUseIntoScope");
+    }
+
+    [Fact]
     public async Task MoveUseIntoScope_NotOfferedForEscapeAssignment()
     {
         var source = Usings + """

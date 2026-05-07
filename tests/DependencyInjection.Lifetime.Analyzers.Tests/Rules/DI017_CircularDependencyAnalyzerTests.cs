@@ -360,6 +360,41 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task CircularDependency_ThroughActivatorUtilitiesGetServiceOrCreateInstanceFactory_Reports()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA>(sp => ActivatorUtilities.GetServiceOrCreateInstance<ServiceA>(sp));
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(21, 9, 21, 105)
+                .WithArguments("IServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
     public async Task KeyedCircularDependency_WithInheritedKey_Reports()
     {
         var source = Usings + """
@@ -527,6 +562,42 @@ public class DI017_CircularDependencyAnalyzerTests
                     services.AddScoped<IServiceA>(sp => new ServiceA(sp.GetService<IServiceB>()!));
                     services.AddScoped<IServiceB, ServiceB>();
                 }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CircularDependency_WithOpaqueFactoryInvocation_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA>(sp =>
+                    {
+                        Audit();
+                        return ActivatorUtilities.CreateInstance<ServiceA>(sp);
+                    });
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+
+                private static void Audit() { }
             }
             """;
 

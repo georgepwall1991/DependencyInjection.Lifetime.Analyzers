@@ -385,6 +385,94 @@ public class DI008_DisposableTransientCodeFixTests
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToSingleton");
     }
 
+    [Fact]
+    public async Task CodeFix_ServiceDescriptorDescribe_ChangesLifetimeArgumentToScoped()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Describe(typeof(IMyService), typeof(DisposableService), ServiceLifetime.Transient));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Describe(typeof(IMyService), typeof(DisposableService), ServiceLifetime.Scoped));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(13, 9, 13, 123)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_ServiceDescriptorConstructor_ChangesLifetimeArgumentToSingleton()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(new ServiceDescriptor(typeof(IMyService), typeof(DisposableService), ServiceLifetime.Transient));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(new ServiceDescriptor(typeof(IMyService), typeof(DisposableService), ServiceLifetime.Singleton));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(13, 9, 13, 118)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToSingleton");
+    }
+
     #region Keyed Services (DI 8.0.0)
 
     [Fact]

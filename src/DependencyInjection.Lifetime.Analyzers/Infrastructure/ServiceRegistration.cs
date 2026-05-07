@@ -64,6 +64,17 @@ public sealed class ServiceRegistration
     public int Order { get; }
 
     /// <summary>
+    /// Gets whether this registration should be ignored when an earlier registration
+    /// for the same service/key already exists in source order.
+    /// </summary>
+    public bool SkipIfAlreadyRegistered { get; }
+
+    /// <summary>
+    /// Gets whether this registration came from a TryAdd* call.
+    /// </summary>
+    public bool IsTryAdd { get; }
+
+    /// <summary>
     /// Creates a new service registration.
     /// </summary>
     public ServiceRegistration(
@@ -77,7 +88,9 @@ public sealed class ServiceRegistration
         Location location,
         string? keyLiteral = null,
         string? flowKey = null,
-        int order = 0)
+        int order = 0,
+        bool skipIfAlreadyRegistered = false,
+        bool isTryAdd = false)
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
@@ -90,5 +103,7 @@ public sealed class ServiceRegistration
         Location = location;
         FlowKey = flowKey;
         Order = order;
+        SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
+        IsTryAdd = isTryAdd;
     }
 }

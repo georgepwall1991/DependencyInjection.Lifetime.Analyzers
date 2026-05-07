@@ -262,6 +262,54 @@ public class Program
     }
 
     [Fact]
+    public async Task Fixes_Using_In_SyncLambda_InsideAsyncMethod()
+    {
+        // The nearest enclosing callable is the synchronous lambda, not the outer async method.
+        var test = @"
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task Main()
+    {
+        Action setup = () =>
+        {
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+        };
+
+        await Task.Delay(100);
+    }
+}";
+
+        var fixtest = @"
+using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task Main()
+    {
+        Action setup = () =>
+        {
+            var services = new ServiceCollection();
+            using var provider = services.BuildServiceProvider();
+        };
+
+        await Task.Delay(100);
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(13, 28);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
+
+    [Fact]
     public async Task Fixes_Using_In_Local_Function()
     {
         var test = @"

@@ -36,7 +36,7 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         // Check if we can fix this:
         // 1. It must be assigned to a variable
         // 2. That variable must be a local declaration
-        
+
         if (invocation.Parent is EqualsValueClauseSyntax equalsValue &&
             equalsValue.Parent is VariableDeclaratorSyntax declarator &&
             declarator.Parent is VariableDeclarationSyntax declaration &&
@@ -63,7 +63,7 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
 
         // Capture leading trivia (indentation, comments) from the start of the statement
         var leadingTrivia = localDeclaration.GetLeadingTrivia();
-        
+
         // Remove leading trivia from the original statement so it doesn't end up after 'using'
         var declarationWithoutTrivia = localDeclaration.WithoutLeadingTrivia();
 
@@ -71,8 +71,8 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
 
         if (IsAsyncMethod(localDeclaration))
         {
-             // await using var ...
-             // Apply leading trivia to 'await'
+            // await using var ...
+            // Apply leading trivia to 'await'
             newLocalDeclaration = declarationWithoutTrivia
                 .WithAwaitKeyword(SyntaxFactory.Token(SyntaxKind.AwaitKeyword)
                     .WithLeadingTrivia(leadingTrivia)

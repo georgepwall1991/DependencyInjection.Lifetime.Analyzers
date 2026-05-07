@@ -620,6 +620,18 @@
       "approvedSecondaryDiagnostics": [
         {
           "filePathContains": "DI019/RootScopedResolutionExamples.cs",
+          "anchor": "provider.GetRequiredService<IScopedService>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI019/RootScopedResolutionExamples.cs",
+          "anchor": "provider.GetRequiredService<BadRootResolvedRunner>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI019/RootScopedResolutionExamples.cs",
           "anchor": "var service = scope.ServiceProvider.GetRequiredService<IScopedService>();",
           "ruleId": "DI007",
           "severity": "note"

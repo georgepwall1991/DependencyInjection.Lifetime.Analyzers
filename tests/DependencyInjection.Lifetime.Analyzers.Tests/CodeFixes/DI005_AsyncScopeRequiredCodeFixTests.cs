@@ -257,6 +257,47 @@ public class DI005_AsyncScopeRequiredCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_NotOffered_ForNestedCreateScopeInsideUsingDeclaration()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner : IDisposable
+            {
+                public ScopeOwner(IServiceScope scope)
+                {
+                }
+
+                public void Dispose()
+                {
+                }
+            }
+
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var owner = new ScopeOwner(_scopeFactory.CreateScope());
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(26, 42, 26, 69)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI005_UseCreateAsyncScope");
+    }
+
+    [Fact]
     public async Task CodeFix_ReplacesProviderCreateScopeWithCreateAsyncScope_UsingVarDeclaration()
     {
         var source = Usings + """

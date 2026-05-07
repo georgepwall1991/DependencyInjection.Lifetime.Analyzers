@@ -29,6 +29,33 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
 
         """;
 
+    private const string EfCoreStubs = """
+        namespace Microsoft.EntityFrameworkCore
+        {
+            public class DbContext { }
+            public class DbContextOptionsBuilder { }
+        }
+
+        namespace Microsoft.Extensions.DependencyInjection
+        {
+            public static class EntityFrameworkServiceCollectionExtensions
+            {
+                public static IServiceCollection AddDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder>? optionsAction = null,
+                    ServiceLifetime lifetime = ServiceLifetime.Singleton)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+
+                public static IServiceCollection AddPooledDbContextFactory<TContext>(
+                    this IServiceCollection services,
+                    System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder> optionsAction,
+                    int poolSize = 1024)
+                    where TContext : Microsoft.EntityFrameworkCore.DbContext => services;
+            }
+        }
+
+        """;
+
     #region Should Report Diagnostic - TryAdd After Add
 
     [Fact]
@@ -673,6 +700,44 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
                 public void ConfigureFallback(IServiceCollection services)
                 {
                     services.AddSingleton<IMyService, MyService2>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExplicitContextBeforeAddDbContextFactory_NoDuplicateDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyDbContext>();
+                    services.AddDbContextFactory<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExplicitContextBeforeAddPooledDbContextFactory_NoDuplicateDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public class MyDbContext : Microsoft.EntityFrameworkCore.DbContext { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyDbContext>();
+                    services.AddPooledDbContextFactory<MyDbContext>(_ => { });
                 }
             }
             """;

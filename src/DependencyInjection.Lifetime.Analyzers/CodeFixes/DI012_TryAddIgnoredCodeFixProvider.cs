@@ -40,7 +40,7 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
         var diagnostic = context.Diagnostics[0];
         var node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
         var invocation = node as InvocationExpressionSyntax ?? node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
-        if (!TryGetIgnoredRegistrationStatement(invocation, out var statement))
+        if (!TryGetIgnoredRegistrationRemovalTarget(invocation, out var removalTarget))
         {
             return;
         }
@@ -50,21 +50,33 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
                 title: Resources.DI012_FixTitle_RemoveIgnoredRegistration,
                 createChangedDocument: cancellationToken => RemoveIgnoredRegistrationAsync(
                     context.Document,
-                    statement,
+                    removalTarget,
                     cancellationToken),
                 equivalenceKey: RemoveIgnoredRegistrationEquivalenceKey),
             diagnostic);
     }
 
-    private static bool TryGetIgnoredRegistrationStatement(
+    private static bool TryGetIgnoredRegistrationRemovalTarget(
         InvocationExpressionSyntax? invocation,
-        out ExpressionStatementSyntax statement)
+        out SyntaxNode removalTarget)
     {
-        statement = null!;
+        removalTarget = null!;
 
         if (invocation?.Parent is not ExpressionStatementSyntax expressionStatement ||
             !ReferenceEquals(expressionStatement.Expression, invocation) ||
             invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        removalTarget = expressionStatement.Parent switch
+        {
+            BlockSyntax => expressionStatement,
+            GlobalStatementSyntax globalStatement => globalStatement,
+            _ => null!,
+        };
+
+        if (removalTarget is null)
         {
             return false;
         }
@@ -82,13 +94,12 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
             return false;
         }
 
-        statement = expressionStatement;
         return true;
     }
 
     private static async Task<Document> RemoveIgnoredRegistrationAsync(
         Document document,
-        ExpressionStatementSyntax statement,
+        SyntaxNode removalTarget,
         CancellationToken cancellationToken)
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
@@ -97,13 +108,19 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
             return document;
         }
 
-        if (statement.Parent is BlockSyntax containingBlock)
+        var newRoot = removalTarget switch
         {
-            var newBlock = containingBlock.WithStatements(containingBlock.Statements.Remove(statement));
-            return document.WithSyntaxRoot(root.ReplaceNode(containingBlock, newBlock));
-        }
+            ExpressionStatementSyntax { Parent: BlockSyntax containingBlock } expressionStatement =>
+                root.ReplaceNode(
+                    containingBlock,
+                    containingBlock.WithStatements(containingBlock.Statements.Remove(expressionStatement))),
+            GlobalStatementSyntax { Parent: CompilationUnitSyntax compilationUnit } globalStatement =>
+                root.ReplaceNode(
+                    compilationUnit,
+                    compilationUnit.WithMembers(compilationUnit.Members.Remove(globalStatement))),
+            _ => null,
+        };
 
-        var newRoot = root.RemoveNode(statement, SyntaxRemoveOptions.KeepNoTrivia);
         return newRoot is null ? document : document.WithSyntaxRoot(newRoot);
     }
 }

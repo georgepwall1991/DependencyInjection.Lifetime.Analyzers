@@ -135,6 +135,110 @@ public class DI015_UnresolvableDependencyCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_AddsTransientMissingSelfBinding_ForTryAddTransientRegistration()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddTransient<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddTransient<global::MissingDependency>();
+                    services.TryAddTransient<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithLocation(17, 9)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsMissingSelfBinding_BeforeAliasRegistration()
+    {
+        var source = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var appServices = services;
+                    appServices.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var appServices = services;
+                    appServices.AddSingleton<global::MissingDependency>();
+                    appServices.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithLocation(16, 9)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_ForFactoryInterfaceDependency()
     {
         var source = Usings + """

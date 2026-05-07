@@ -129,6 +129,19 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
             var currentHasOpaquePredecessor =
                 reachabilityAnalyzer?.HasOpaquePredecessor(current.Location) == true;
 
+            if (current.SkipIfAlreadyRegistered &&
+                firstAddRegistration is not null)
+            {
+                if (currentHasOpaquePredecessor &&
+                    reachabilityAnalyzer?.HasOpaquePredecessor(firstAddRegistration.Location) != true)
+                {
+                    firstAddRegistration = null;
+                    continue;
+                }
+
+                continue;
+            }
+
             if (!current.IsTryAdd)
             {
                 // This is an Add* registration

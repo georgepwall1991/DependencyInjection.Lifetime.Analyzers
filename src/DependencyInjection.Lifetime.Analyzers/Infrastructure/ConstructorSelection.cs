@@ -12,12 +12,12 @@ public static class ConstructorSelection
     /// <summary>
     /// Gets constructors to analyze for DI diagnostics.
     /// Prefers constructors marked with <c>[ActivatorUtilitiesConstructor]</c>;
-    /// otherwise analyzes all accessible constructors.
+    /// otherwise analyzes public instance constructors.
     /// </summary>
     public static IEnumerable<IMethodSymbol> GetConstructorsToAnalyze(INamedTypeSymbol implementationType)
     {
         var candidates = implementationType.Constructors
-            .Where(c => !c.IsStatic && c.DeclaredAccessibility != Accessibility.Private)
+            .Where(c => !c.IsStatic && c.DeclaredAccessibility == Accessibility.Public)
             .ToList();
 
         if (candidates.Count == 0)

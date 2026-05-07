@@ -201,6 +201,183 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 .WithArguments("MyService", "IKeyedServiceProvider"));
     }
 
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InNonMiddlewareInvokeClass_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task Invoke() => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<MyCommand>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(21, 9)
+                .WithArguments("MyCommand", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InGenericTaskInvokeClass_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
+
+            public sealed class Order { }
+
+            public class MyCommand
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyCommand(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task<Order> InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context) =>
+                    Task.FromResult(new Order());
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<MyCommand>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("MyCommand", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InFactoryNamedClassWithoutFactoryMember_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class CacheFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public CacheFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<CacheFactory>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("CacheFactory", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InFactoryNamedClassWithVoidCreateMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class CacheFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public CacheFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void CreateCache() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<CacheFactory>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("CacheFactory", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InFactoryNamedClassWithPlainTaskCreateMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public class CacheFactory
+            {
+                private readonly IServiceProvider _provider;
+
+                public CacheFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task CreateCacheAsync() => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<CacheFactory>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("CacheFactory", "IServiceProvider"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (Allowed Cases)
@@ -209,7 +386,12 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     public async Task FactoryClass_NoDiagnostic()
     {
         var source = Usings + """
-            public interface IMyServiceFactory { }
+            public interface IMyService { }
+            public interface IMyServiceFactory
+            {
+                IMyService CreateService();
+            }
+
             public class MyServiceFactory : IMyServiceFactory
             {
                 private readonly IServiceProvider _provider;
@@ -217,6 +399,8 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 {
                     _provider = provider;
                 }
+
+                public IMyService CreateService() => _provider.GetRequiredService<IMyService>();
             }
 
             public class Startup
@@ -236,7 +420,12 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     public async Task ClassWithFactorySuffix_NoDiagnostic()
     {
         var source = Usings + """
-            public interface IOrderFactory { }
+            public sealed class Order { }
+            public interface IOrderFactory
+            {
+                Order CreateOrder();
+            }
+
             public class OrderFactory : IOrderFactory
             {
                 private readonly IServiceProvider _provider;
@@ -244,6 +433,8 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 {
                     _provider = provider;
                 }
+
+                public Order CreateOrder() => _provider.GetRequiredService<Order>();
             }
 
             public class Startup
@@ -260,10 +451,83 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task FactoryInterface_WithAsyncFactoryMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public sealed class Order { }
+            public interface IOrderFactory
+            {
+                Task<Order> CreateOrderAsync();
+            }
+
+            public class OrderResolver : IOrderFactory
+            {
+                private readonly IServiceProvider _provider;
+                public OrderResolver(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public Task<Order> CreateOrderAsync() =>
+                    Task.FromResult(_provider.GetRequiredService<Order>());
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IOrderFactory, OrderResolver>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task FactoryClass_WithInheritedFactoryMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public abstract class FactoryBase
+            {
+                public IMyService CreateService() => throw new NotImplementedException();
+            }
+
+            public class MyServiceFactory : FactoryBase
+            {
+                private readonly IServiceProvider _provider;
+                public MyServiceFactory(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<MyServiceFactory>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task MiddlewareClass_WithInvokeMethod_NoDiagnostic()
     {
         var source = Usings + """
             using System.Threading.Tasks;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
 
             public class MyMiddleware
             {
@@ -273,7 +537,7 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                     _provider = provider;
                 }
 
-                public Task Invoke() => Task.CompletedTask;
+                public Task Invoke(Microsoft.AspNetCore.Http.HttpContext context) => Task.CompletedTask;
             }
 
             public class Startup
@@ -285,7 +549,7 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
             }
             """;
 
-        // Middleware classes are allowed (has Invoke method)
+        // Middleware classes are allowed when they match the ASP.NET Core middleware shape.
         await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
@@ -295,6 +559,11 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
         var source = Usings + """
             using System.Threading.Tasks;
 
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+            }
+
             public class MyMiddleware
             {
                 private readonly IServiceProvider _provider;
@@ -303,7 +572,7 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                     _provider = provider;
                 }
 
-                public Task InvokeAsync() => Task.CompletedTask;
+                public Task InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context) => Task.CompletedTask;
             }
 
             public class Startup
@@ -315,7 +584,7 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
             }
             """;
 
-        // Middleware classes are allowed (has InvokeAsync method)
+        // Middleware classes are allowed when they match the ASP.NET Core middleware shape.
         await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
@@ -353,6 +622,55 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 public void ConfigureServices(IServiceCollection services)
                 {
                     services.AddSingleton<Worker>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Singleton_WithIServiceScopeFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class ScopedWorker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public ScopedWorker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<ScopedWorker>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Constructor_WithIServiceProvider_InProtectedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                public MyService() { }
+
+                protected MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<MyService>();
                 }
             }
             """;

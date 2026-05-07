@@ -408,16 +408,17 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
     {
         var methodName = methodDecl.Identifier.Text;
 
-        // Allow in middleware Invoke/InvokeAsync methods (convention-based middleware as well as IMiddleware impls)
+        // Allow real ASP.NET Core middleware Invoke/InvokeAsync methods.
         if (methodName == "Invoke" || methodName == "InvokeAsync")
         {
-            return true;
+            return IsMiddlewareInvokeMethod(methodDecl, semanticModel);
         }
 
-        // Allow in methods named Create* or Build* (factory pattern)
+        // Allow factory-shaped Create*/Build* methods, but do not let side-effect methods
+        // suppress service-locator diagnostics by name alone.
         if (methodName.StartsWith("Create") || methodName.StartsWith("Build"))
         {
-            return true;
+            return IsFactoryLikeMethod(methodDecl, semanticModel);
         }
 
         // Allow in hosting entry points: BackgroundService.ExecuteAsync override and IHostedService.StartAsync/StopAsync
@@ -440,6 +441,57 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsFactoryLikeMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
+        if (symbol is null || symbol.ReturnsVoid)
+        {
+            return false;
+        }
+
+        if (symbol.ReturnType is INamedTypeSymbol namedType &&
+            IsNonGenericTaskLikeType(namedType))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsNonGenericTaskLikeType(INamedTypeSymbol type)
+    {
+        return !type.IsGenericType &&
+               type.Name is "Task" or "ValueTask" &&
+               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+    }
+
+    private static bool IsMiddlewareInvokeMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
+        if (symbol?.ContainingType is not INamedTypeSymbol)
+        {
+            return false;
+        }
+
+        return symbol.DeclaredAccessibility == Accessibility.Public &&
+               IsTaskType(symbol.ReturnType) &&
+               symbol.Parameters.Length > 0 &&
+               IsAspNetCoreHttpContext(symbol.Parameters[0].Type);
+    }
+
+    private static bool IsTaskType(ITypeSymbol type)
+    {
+        return type is INamedTypeSymbol { IsGenericType: false } &&
+               type.Name == "Task" &&
+               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+    }
+
+    private static bool IsAspNetCoreHttpContext(ITypeSymbol type)
+    {
+        return type.Name == "HttpContext" &&
+               type.ContainingNamespace?.ToDisplayString() == "Microsoft.AspNetCore.Http";
     }
 
     private static bool IsHostingMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
