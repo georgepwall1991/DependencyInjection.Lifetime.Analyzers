@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, delegate-factory guards, and DI014 ownership-flow precision)
+**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
 **Version:** 2.8.16
-**Test result:** 1135/1135 passing.
+**Test result:** 1157/1157 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -10,7 +10,7 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 31 | 12 | 9.5 | 8.8 | Hardened: conditional ownership proofs, non-null disposal guards, reassignment and unsafe await-using guardrails |
+| DI001 | Scope Disposal | Warn | 53 | 12 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails |
 | DI002 | Scope Escape | Warn | 33 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage |
 | DI003 | Captive Dependency | Warn | 107 | 12 | 9.8 | 8.8 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, and fixer shape coverage |
 | DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
@@ -50,9 +50,9 @@
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 9.5/10** | Tests: 31 | **Fixer: 8.8/10** | Fix Tests: 12
+**Analyzer: 9.6/10** | Tests: 53 | **Fixer: 8.8/10** | Fix Tests: 12
 
-Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, or catch blocks, while continuing to accept straight-line and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement and now offers `await using` only when the nearest callable can legally await it, so synchronous `CreateAsyncScope()` fixes stay on plain `using`.
+Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, catch blocks, or after branch exits that can bypass shared cleanup, while continuing to accept straight-line, same-branch pre-exit, mutually exclusive branch-exit, and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement and now offers `await using` only when the nearest callable can legally await it, so synchronous `CreateAsyncScope()` fixes stay on plain `using`.
 
 ### DI002 -- Scope Escape (Warning)
 
@@ -204,8 +204,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1090 |
-| Analyzer tests | 844 |
+| Total tests | 1157 |
+| Analyzer tests | 911 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +220,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI001 accepted later shared scope disposal even when a branch-level `return` or straight-line early `return` after creation could bypass the cleanup | Medium | DI001 |
 | Current | DI008 reported descriptor-based disposable transients in `ServiceDescriptor.Describe(...)` and `new ServiceDescriptor(...)` but did not offer the same scoped/singleton lifetime rewrite available for direct and `ServiceDescriptor.Transient(...)` registrations | Low | DI008 |
 | Current | DI007 treated any method named `Create*` or `Build*` as a factory boundary, suppressing service-locator diagnostics in `void` or plain-`Task` side-effect methods | Low | DI007 |
 | Current | DI011 treated any `*Factory` type or interface name as a provider-injection exception, suppressing diagnostics in name-only factory markers and side-effect-only classes | Low | DI011 |
