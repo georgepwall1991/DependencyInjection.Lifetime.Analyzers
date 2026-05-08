@@ -85,17 +85,20 @@ public class DI019_RootScopedResolutionAnalyzerTests
     public async Task AppServicesResolvingScoped_ReportsDiagnostic()
     {
         var source = Usings + """
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public sealed class WebApplication
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
             public interface IScopedService { }
             public class ScopedService : IScopedService { }
 
-            public sealed class FakeApp
-            {
-                public IServiceProvider Services { get; init; } = null!;
-            }
-
             public class Startup
             {
-                public void Configure(IServiceCollection services, FakeApp app)
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Builder.WebApplication app)
                 {
                     services.AddScoped<IScopedService, ScopedService>();
                     {|#0:app.Services.GetRequiredService<IScopedService>()|};
@@ -115,20 +118,197 @@ public class DI019_RootScopedResolutionAnalyzerTests
     public async Task HostServicesResolvingScopedWithTypeof_ReportsDiagnostic()
     {
         var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHost
+                {
+                    IServiceProvider Services { get; }
+                }
+            }
+
             public interface IScopedService { }
             public class ScopedService : IScopedService { }
 
-            public sealed class FakeHost
-            {
-                public IServiceProvider Services { get; init; } = null!;
-            }
-
             public class Startup
             {
-                public void Configure(IServiceCollection services, FakeHost host)
+                public void Configure(IServiceCollection services, Microsoft.Extensions.Hosting.IHost host)
                 {
                     services.AddScoped<IScopedService, ScopedService>();
                     {|#0:host.Services.GetService(typeof(IScopedService))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task GenericHostServicesResolvingScopedThroughHostConstraint_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHost
+                {
+                    IServiceProvider Services { get; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure<THost>(IServiceCollection services, THost host)
+                    where THost : Microsoft.Extensions.Hosting.IHost
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:host.Services.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task WebApplicationFactoryServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Mvc.Testing
+            {
+                public class WebApplicationFactory<TEntryPoint>
+                    where TEntryPoint : class
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public sealed class Program { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> factory)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:factory.Services.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task DerivedWebApplicationFactoryServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Mvc.Testing
+            {
+                public class WebApplicationFactory<TEntryPoint>
+                    where TEntryPoint : class
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public sealed class Program { }
+            public sealed class CustomFactory : Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, CustomFactory factory)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:factory.Services.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task GenericFactoryServicesResolvingScopedThroughFactoryConstraint_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Mvc.Testing
+            {
+                public class WebApplicationFactory<TEntryPoint>
+                    where TEntryPoint : class
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public sealed class Program { }
+
+            public class Startup
+            {
+                public void Configure<TFactory>(IServiceCollection services, TFactory factory)
+                    where TFactory : Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:factory.Services.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task TestServerServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.TestHost
+            {
+                public sealed class TestServer
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.TestHost.TestServer server)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:server.Services.GetRequiredService<IScopedService>()|};
                 }
             }
             """;
@@ -1065,6 +1245,31 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 {
                     services.AddScoped<IScopedService, ScopedService>();
                     holder.ServiceProvider.GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task UnrelatedServicesPropertyResolvingScoped_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public sealed class ScopedProviderHolder
+            {
+                public IServiceProvider Services { get; init; } = null!;
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, ScopedProviderHolder holder)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    holder.Services.GetRequiredService<IScopedService>();
                 }
             }
             """;

@@ -102,7 +102,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -609,6 +609,7 @@ dotnet_code_quality.DI015.assume_framework_services_registered = false
 DI015 is intentionally conservative to keep false positives low:
 
 - Source-visible `IServiceCollection` wrappers are expanded before DI015 reports missing registrations.
+- Stable local delegate factories are inspected, including inherited keyed factory parameters, later definite simple reassignments, exhaustive local-function branch rewrites, and method-group delegate aliases to local functions that rewrite the factory, while unrelated assignment left-hand-side uses and opaque delegate-local writes such as direct delegate calls, delegate `.Invoke()` calls, and `ref`/`out` writes stay conservative.
 - `[ServiceKey]` parameters and `IEnumerable<T>` are treated as container-provided.
 - Parameterless `[FromKeyedServices]` inherits the containing keyed registration key when that key is known.
 - `KeyedService.AnyKey` keyed registrations satisfy exact keyed dependency requests.
@@ -733,7 +734,7 @@ services.AddSingleton<IMyService, GoodConcreteService>();
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as `app.Services`, `host.Services`, or a provider returned by `BuildServiceProvider()`.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, or a provider returned by `BuildServiceProvider()`.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 

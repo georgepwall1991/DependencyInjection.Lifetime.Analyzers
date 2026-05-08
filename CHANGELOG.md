@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.15] - 2026-05-08
+
+### Changed
+
+- **DI019 root-provider precision**: DI019 now treats `Services` properties as root providers only on known ASP.NET Core / Generic Host root types such as `WebApplication`, `WebApplicationFactory<TEntryPoint>` including derived or generic-constrained custom factories, `TestServer`, `IHost`, and `IWebHost`, avoiding false positives for arbitrary holder types whose scoped provider property happens to be named `Services`.
+- **Stable local delegate factory coverage**: DI003 and DI015 now inspect stable local delegate factories passed to registrations, including later definite simple reassignments, predeclared delegates assigned after declaration, same-declaration delegate reassignments, recursive local delegate aliases, exhaustive local-function branch rewrites, method-group delegate aliases to local functions that rewrite the factory, and synchronous writes before the first `await` in unawaited async local functions, catching scoped captures or missing dependencies hidden behind `Func<IServiceProvider, T>` variables while keeping guard-clause / throwing exits, nested branches that return before registration, overwritten branch-local helper rewrites, branch-local helper rewrites on the only completing path, local-function guard returns, iterator local-function rewrites, no-op, mixed-value, and intervening-write alias cycles, reassigned helper delegate aliases, unrelated assignment left-hand-side uses including invoked anonymous delegates, short-circuit, switch-arm, `for` incrementor, and conditional-expression writes, conditional returns, unreachable `ref`/`out` writes, duplicate method-group branch requests, and opaque delegate-local writes such as direct delegate calls, delegate `.Invoke()` calls, or reachable `ref`/`out` reassignments conservative.
+- **DI015 delegate branch de-duplication**: DI015 no longer reports duplicate missing-dependency diagnostics when an exhaustive `if` / `else if` / `else` local delegate factory branch contributes the same factory request during stable local factory analysis.
+
 ## [2.8.14] - 2026-05-07
 
 ### Changed

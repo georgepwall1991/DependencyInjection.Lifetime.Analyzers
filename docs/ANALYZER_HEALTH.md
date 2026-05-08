@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-07 (release hardening and EF helper precision)
-**Version:** 2.8.14
-**Test result:** 980/980 passing.
+**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, and delegate-factory predeclared/same-declaration/iterator/alias-snapshot/non-definite-expression/opaque-write guards)
+**Version:** 2.8.15
+**Test result:** 1090/1090 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -12,7 +12,7 @@
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 31 | 12 | 9.5 | 8.8 | Hardened: conditional ownership proofs, non-null disposal guards, reassignment and unsafe await-using guardrails |
 | DI002 | Scope Escape | Warn | 33 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage |
-| DI003 | Captive Dependency | Warn | 54 | 12 | 9.8 | 8.8 | Hardened: known framework scoped lifetimes, EF factory/pooled contexts, and fixer shape coverage |
+| DI003 | Captive Dependency | Warn | 107 | 12 | 9.8 | 8.8 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, and fixer shape coverage |
 | DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
 | DI005 | Async Disposal | Warn | 22 | 11 | 9 | 8.8 | Hardened: top-level async statements, nested async guardrails, direct-resource fixer gating |
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
@@ -24,11 +24,11 @@
 | DI012 | Conditional Registration | Info | 32 | 7 | 9.2 | 8.8 | Complex flow, ignored keyed/non-keyed TryAdd fixer, embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
 | DI014 | Root Provider Not Disposed | Warn | 18 | 10 | 9 | 9 | Hardened: reliable local disposal proofs, reassignment leaks, nearest-callable fixer guardrails |
-| DI015 | Unresolvable Dependency | Warn | 71 | 14 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware |
+| DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
-| DI019 | Root Scoped Resolution | Warn | 35 | -- | 9.5 | -- | Root/scoped provider classification, transitive scoped graph, known framework scoped services |
+| DI019 | Root Scoped Resolution | Warn | 41 | -- | 9.6 | -- | Root/scoped provider classification, known root-provider surface filtering, transitive scoped graph, known framework scoped services |
 
 `--` = no code fix exists for this rule.
 
@@ -64,9 +64,9 @@ The fixer intentionally offers pragma suppression only, because moving scoped se
 
 ### DI003 -- Captive Dependency (Warning)
 
-**Analyzer: 9.8/10** | Tests: 54 | **Fixer: 8.8/10** | Fix Tests: 12
+**Analyzer: 9.8/10** | Tests: 107 | **Fixer: 8.8/10** | Fix Tests: 12
 
-Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs, and known scoped framework services such as `IOptionsSnapshot<T>` plus EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` now participate in lifetime checks, including guarded `AddDbContext<TService,TImplementation>(...)` and `AddDbContextPool<TService,TImplementation>(...)` implementation self-registrations. Existing explicit EF context/options/factory registrations keep their original lifetime when later EF helpers use `TryAdd`-style registrations, with scoped options/factory guardrails across factory and pooled helpers. Factory-created `IDbContextFactory<TContext>` and singleton `DbContextOptions<TContext>` dependencies stay quiet, while `AddDbContextFactory(..., ServiceLifetime.Transient)` reports the context dependency as transient rather than scoped. Fixer adjusts local explicit registration lifetimes with coverage across direct, keyed, `TryAdd*`, inline-factory, `typeof(...)`, `ServiceDescriptor.Describe(...)` including named lifetime arguments, `new ServiceDescriptor(...)`, and descriptor factory forms.
+Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs, and known scoped framework services such as `IOptionsSnapshot<T>` plus EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` now participate in lifetime checks, including guarded `AddDbContext<TService,TImplementation>(...)` and `AddDbContextPool<TService,TImplementation>(...)` implementation self-registrations. Stable same-block local delegate factories are inspected, including later definite simple reassignments, predeclared delegates assigned after declaration, same-declaration delegate reassignments, recursive local delegate aliases, exhaustive `if`/`else` branch reassignments, exhaustive local-function branch rewrites, definite directly invoked block-bodied and expression-bodied local-function reassignments, method-group delegate aliases to local functions that rewrite the factory, synchronous writes before the first `await` in unawaited async local functions, and inherited keyed factory parameters across conditional delegate branches; conditional, short-circuit, switch-arm, `for` incrementor, or early-return-bypassed local-function writes stay possible instead of replacing the prior delegate, iterator local-function bodies are not treated as executed at invocation time, no-op, mixed-value, and intervening-write alias cycles preserve reachable factory snapshots, guard-clause and throwing branch exits do not keep stale factory values reachable, overwritten branch-local helper rewrites do not leak stale diagnostics, branch-local helper rewrites on the only completing path clear stale initializer values, local-function guard returns keep prior factory values reachable, nested branch writes that return before registration stay unreachable, reassigned helper delegate aliases are resolved at the invocation site, unrelated assignment left-hand-side uses including invoked anonymous delegates do not count as factory writes, unreachable `ref`/`out` writes do not make a reachable initializer opaque, conditional nested returns do not clear reachable factory values, and opaque writes including direct delegate calls, delegate `.Invoke()` calls, and reachable ref/out writes stay conservative. Existing explicit EF context/options/factory registrations keep their original lifetime when later EF helpers use `TryAdd`-style registrations, with scoped options/factory guardrails across factory and pooled helpers. Factory-created `IDbContextFactory<TContext>` and singleton `DbContextOptions<TContext>` dependencies stay quiet, while `AddDbContextFactory(..., ServiceLifetime.Transient)` reports the context dependency as transient rather than scoped. Fixer adjusts local explicit registration lifetimes with coverage across direct, keyed, `TryAdd*`, inline-factory, `typeof(...)`, `ServiceDescriptor.Describe(...)` including named lifetime arguments, `new ServiceDescriptor(...)`, and descriptor factory forms.
 
 ### DI004 -- Use After Dispose (Warning)
 
@@ -88,7 +88,7 @@ Symbol-level rule with low ambiguity. Coverage now spans direct provider types, 
 
 ### DI007 -- Service Locator Anti-Pattern (Info)
 
-**Analyzer: 9.6/10** | Tests: 37
+**Analyzer: 9.6/10** | Tests: 38
 
 Informational by design, now context-aware via symbol checks rather than method-name spelling alone. Allowed contexts cover factory registrations, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods with `HttpContext` as the first parameter, value-returning `Create*`/`Build*` factory methods including `Task<T>` / `ValueTask<T>` async factories, exact hosting entry points (`BackgroundService.ExecuteAsync` overrides, `IHostedService.StartAsync`/`StopAsync`, and `IHostedLifecycleService` lifecycle methods), exact options implementations (`IConfigureOptions<T>.Configure`, `IConfigureNamedOptions<T>`, `IPostConfigureOptions<T>.PostConfigure`, `IValidateOptions<T>.Validate`), and provider-aware DI/options factory delegates only when the lambda is an argument to a recognized factory boundary. Guardrails keep arbitrary `Invoke` methods, `void` or plain-`Task` `Create*`/`Build*` side-effect methods, local `Func<IServiceProvider, T>` delegates, and helper methods inside hosted/options types reportable. No code fix -- service locator elimination requires architectural decisions.
 
@@ -112,7 +112,7 @@ Strongest info-level rule. Follows likely public activation constructors, covers
 
 ### DI011 -- Service Provider Injection (Info)
 
-**Analyzer: 9.5/10** | Tests: 27
+**Analyzer: 9.5/10** | Tests: 28
 
 Uses likely-public-activation-constructor logic with good allowance coverage for factory-shaped classes, hosted services, endpoint filter factories, singleton `IServiceScopeFactory` bridge patterns, and real ASP.NET Core middleware classes whose public `Invoke`/`InvokeAsync` method returns `Task` and accepts `HttpContext` first. Factory exemptions now require a value-returning factory member on the `*Factory` type or interface, including inherited and `Task<T>` / `ValueTask<T>` async factory members; name-only factory markers, `void` factories, and plain-`Task` side-effect methods remain reportable. Provider parameters on protected/internal constructors stay quiet because the container cannot activate those constructors. Arbitrary invoker-style classes remain reportable. Stays quiet for valid implementation-instance registrations. No code fix -- alternatives depend on architectural context.
 
@@ -138,9 +138,9 @@ Latest pass tightened local ownership proofs: conditional and catch-only `Dispos
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
-**Analyzer: 9.8/10** | Tests: 71 | **Fixer: 9/10** | Fix Tests: 14
+**Analyzer: 9.8/10** | Tests: 121 | **Fixer: 9/10** | Fix Tests: 15
 
-One of the strongest overall rules. Broad support for keyed, inherited-key, `AnyKey`, factory, wrapper, open-generic, strict-mode, implementation-instance, definite registration-mutation scenarios, and EF Core `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` registrations with synthetic `DbContextOptions<TContext>`, `IDbContextFactory<TContext>`, and service/implementation overload self-registration support. Full dependency resolution engine with reachability tracking. Recognized high-confidence factory requests still report when the same factory body also contains unrelated helper calls, preserving runtime-dangerous missing-dependency coverage. Fixer adds safe unkeyed and keyed concrete self-bindings, including direct constructor-rooted, direct factory-rooted, `TryAdd*`, and local-alias registration sites while keeping abstract/interface, multi-missing, transitive-only, opaque, and unsafe descriptor paths no-fix.
+One of the strongest overall rules. Broad support for keyed, inherited-key, `AnyKey`, factory, wrapper, open-generic, strict-mode, implementation-instance, definite registration-mutation scenarios, and EF Core `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` registrations with synthetic `DbContextOptions<TContext>`, `IDbContextFactory<TContext>`, and service/implementation overload self-registration support. Full dependency resolution engine with reachability tracking. Recognized high-confidence factory requests, including stable local delegate factories with inherited keyed parameters across conditional delegate branches, still report when the same factory body also contains unrelated helper calls, preserving runtime-dangerous missing-dependency coverage. Local delegate factories follow later definite simple reassignments, predeclared delegates assigned after declaration, same-declaration delegate reassignments, recursive local delegate aliases, exhaustive `if`/`else` branch reassignments, exhaustive local-function branch rewrites, definite block-bodied or expression-bodied local-function reassignments, method-group delegate aliases to local functions that rewrite the factory, and synchronous writes before the first `await` in unawaited async local functions; conditional, short-circuit, switch-arm, `for` incrementor, or early-return-bypassed local-function writes remain possible, iterator local-function bodies are not treated as executed at invocation time, no-op, mixed-value, and intervening-write alias cycles preserve reachable factory snapshots, guard-clause and throwing branch exits do not keep stale factory values reachable, overwritten branch-local helper rewrites do not leak stale diagnostics, branch-local helper rewrites on the only completing path clear stale initializer values, local-function guard returns keep prior factory values reachable, nested branch writes that return before registration stay unreachable, reassigned helper delegate aliases are resolved at the invocation site, duplicate method-group branch requests are de-duplicated, unrelated assignment left-hand-side uses including invoked anonymous delegates do not count as factory writes, unreachable `ref`/`out` writes do not make a reachable initializer opaque, conditional nested returns do not clear reachable factory values, and opaque writes including direct delegate calls, delegate `.Invoke()` calls, and reachable ref/out writes stay conservative. Fixer adds safe unkeyed and keyed concrete self-bindings, including direct constructor-rooted, direct factory-rooted, `TryAdd*`, and local-alias registration sites while keeping abstract/interface, multi-missing, transitive-only, opaque, and unsafe descriptor paths no-fix.
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
@@ -162,9 +162,9 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 ### DI019 -- Root Scoped Resolution (Warning)
 
-**Analyzer: 9.5/10** | Tests: 35
+**Analyzer: 9.6/10** | Tests: 41
 
-Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers `app.Services`, `host.Services`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
+Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers known ASP.NET Core, ASP.NET test-host, and Generic Host `Services` properties, `ApplicationServices`, endpoint-route `ServiceProvider`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, arbitrary holder properties named `Services`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
 
 ## Code Fix Health
 
@@ -181,7 +181,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI012 (Ignored TryAdd) | 7 | 8.8 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal with embedded-statement guardrails |
 | DI013 (Implementation Mismatch) | 13 | 8.8 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, and embedded rewrites are covered, removal is standalone-only, FixAll disabled |
 | DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, reassignment guardrails, nearest-callable async/sync fixer boundaries, and chained builders covered |
-| DI015 (Unresolvable Dependency) | 14 | 9 | Low -- keyed, factory, TryAdd, and local-alias self-binding generation is tightly gated |
+| DI015 (Unresolvable Dependency) | 15 | 9 | Low -- keyed, factory, TryAdd, and local-alias self-binding generation is tightly gated; FixAll remains disabled |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI019. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
@@ -204,9 +204,9 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 980 |
-| Analyzer tests | 735 |
-| Code fix tests | 130 |
+| Total tests | 1090 |
+| Analyzer tests | 844 |
+| Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
@@ -231,6 +231,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | Current | DI012/DI013 standalone-removal fixers initially protected embedded single-line bodies by requiring `BlockSyntax`, which accidentally dropped safe top-level `Program.cs` removals | Low | DI012/DI013 |
 | Current | Synthetic EF helper registrations overwrote earlier explicit context/options/factory registrations even though EF Core uses `TryAdd` for those services, risking DI003/DI019 false positives | Medium | DI003/DI019 |
 | Current | EF Core `AddDbContext<TService,TImplementation>(...)` and `AddDbContextPool<TService,TImplementation>(...)` implementation self-registrations were invisible, so direct `TImplementation` dependencies could evade DI003/DI019 or be reported missing by DI015 | Medium | DI003/DI019/DI015 |
+| Current | Predeclared local delegate factories assigned after declaration were ignored, hiding scoped captures or missing dependencies from DI003 and DI015 | Medium | DI003/DI015 |
+| Current | Same-declaration local delegate reassignments were ignored, leaving stale initializer values reachable or dropping first assignments from later declarators | Medium | DI003/DI015 |
 | #32 | DI017 constructor selection treated scalar params as resolvable, suppressing real cycles | Medium | DI017 |
 | #32 | DI009 fixer emitted bare identifier for SimpleNameSyntax lifetime, producing uncompilable code | Medium | DI009 |
 | #32 | DI017 keyed cycle dedup collapsed keys with same string representation (int `1` vs string `"1"`) | Medium | DI017 |
@@ -240,6 +242,50 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | Current | DI003 missed captive scoped dependencies captured through `IEnumerable<T>` / `GetServices<T>()` | Medium | DI003 |
 | Current | DI004 move fix could be offered for an unrelated immediately preceding `using` block or for an escape assignment | Medium | DI004 |
 | Current | DI002 missed scoped services captured by delegates that escaped through later return, field, property, or ref/out sinks | Medium | DI002 |
+| Current | DI003 missed scoped captures hidden behind stable local delegate factory variables passed to singleton registrations | Medium | DI003 |
+| Current | Stable local delegate factory analysis still used the original delegate after a directly invoked local function reassigned it before registration | Low | DI003/DI015 |
+| Current | Stable local delegate factory analysis suppressed diagnostics for later definite unsafe delegate reassignments before registration | Medium | DI003/DI015 |
+| Current | Stable local delegate factory analysis treated conditional local-function reassignments as definite replacement, suppressing unsafe initializer diagnostics | Medium | DI003/DI015 |
+| Current | Conditional keyed local delegate factories lost inherited registration-key binding because key-context analysis only accepted a single possible factory expression | Medium | DI003/DI015 |
+| Current | Expression-bodied local-function delegate reassignments were treated as conditional writes, causing stale initializer false positives | Low | DI003/DI015 |
+| Current | Early-returning local-function delegate reassignments were treated as definite writes, suppressing reachable unsafe initializer diagnostics | Medium | DI003/DI015 |
+| Current | Exhaustive `if`/`else` delegate reassignments kept stale initializer values reachable, causing false positives after every branch replaced the factory | Low | DI003/DI015 |
+| Current | Nested exhaustive `if`/`else` delegate reassignments cleared stale initializer values even when an outer condition could skip the replacement | Medium | DI003/DI015 |
+| Current | Local delegate usage inside an unrelated assignment left-hand side was treated as a delegate write, hiding stable factory diagnostics | Medium | DI003/DI015 |
+| Current | Invoked anonymous delegates treated unrelated assignment left-hand-side uses such as `metadata[factory] = ...` as opaque factory writes, hiding stable factory diagnostics | Medium | DI003/DI015 |
+| Current | Branch delegate values from paths that returned before registration were still considered reachable at the registration site | Low | DI003/DI015 |
+| Current | Unawaited async local-function delegate reassignments were treated as synchronous replacement before the following registration | Medium | DI003/DI015 |
+| Current | Local delegate reassignments before a later conditional `return` were skipped even though the non-returning path still reached the registration | Medium | DI003/DI015 |
+| Current | Stable local delegate factory analysis kept an unsafe initializer reachable when every path that reached registration first replaced the delegate and the other branch returned | Medium | DI003/DI015 |
+| Current | Delegate reassignment exit checks looked past the registration site, so common extension methods that `return services;` after registration could hide reachable unsafe factories | Medium | DI003/DI015 |
+| Current | Exhaustive `if` / `else if` / `else` delegate reassignments were not recognized, leaving stale initializer false positives after every completing branch replaced the factory | Low | DI003/DI015 |
+| Current | Local-function delegate reassignments inside branches that returned before registration were still treated as reachable factory values | Low | DI003/DI015 |
+| Current | Returned registrations such as `return services.AddScoped(..., factory)` were mistaken for exits before the factory use, hiding reachable delegate reassignments | Medium | DI003/DI015 |
+| Current | Local functions with both a direct delegate assignment and a ref/out delegate write were treated as stable, hiding opaque factory writes | Medium | DI003/DI015 |
+| Current | Delegate branch analysis treated block returns too broadly, allowing conditional nested returns to clear reachable factory values | Medium | DI003/DI015 |
+| Current | Exhaustive `if` / `else if` / `else` local factory branches were walked twice, producing duplicate DI015 diagnostics for the same missing dependency request | Medium | DI015 |
+| Current | Guard-clause branch exits before a definite delegate replacement kept stale initializer factories reachable, causing false positives | Low | DI003/DI015 |
+| Current | Unawaited async local-function delegate writes before the first await were ignored, hiding synchronous factory replacements | Medium | DI003/DI015 |
+| Current | Invoked anonymous delegates that reassigned local factories were ignored, keeping stale initializer factories reachable | Low | DI003/DI015 |
+| Current | Anonymous delegate reassignments invoked through `.Invoke()` were ignored, keeping stale initializer factories reachable | Low | DI003/DI015 |
+| Current | Delegate locals initialized from local-function method groups were ignored when invoked, keeping stale initializer factories reachable or hiding unsafe replacements | Medium | DI003/DI015 |
+| Current | Throwing delegate branches were not treated as exits, keeping stale initializer factories reachable after all completing paths replaced them | Low | DI003/DI015 |
+| Current | Directly invoked local functions with exhaustive branch delegate rewrites were abandoned, hiding unsafe branch factories | Medium | DI003/DI015 |
+| Current | Exhaustive branch analysis treated unrelated assignment left-hand-side uses such as `metadata[factory] = ...` as factory writes, keeping stale initializer values reachable | Low | DI003/DI015 |
+| Current | Nested branch delegate rewrites inside a branch that returned before registration were treated as reachable factory values | Medium | DI003/DI015 |
+| Current | Identical method-group factory values from exhaustive branches could duplicate DI015 missing-dependency diagnostics | Low | DI015 |
+| Current | Local-function branch returns after delegate reassignment were treated as exits before the caller's later registration, hiding reachable unsafe factory values | Medium | DI003/DI015 |
+| Current | Reassigned helper delegate aliases were analyzed from their original initializer, hiding reachable unsafe or missing local factory initializers | Medium | DI003/DI015 |
+| Current | Local-function guard returns inside exhaustive branch rewrites were treated as definite caller exits, hiding reachable prior factory values | Medium | DI003/DI015 |
+| Current | Branch-local helper rewrites overwritten by a later direct factory assignment stayed reachable and produced stale DI003/DI015 diagnostics | Medium | DI003/DI015 |
+| Current | Simple local delegate aliases such as `factory = inner` were not resolved recursively, hiding scoped captures or missing dependencies | Medium | DI003/DI015 |
+| Current | Iterator local-function delegate rewrites were treated as executing at invocation time, hiding reachable scoped captures or missing dependencies left in the initializer | Medium | DI003/DI015 |
+| Current | Branch-local helper rewrites on the only completing path failed to clear stale initializer values, causing false positives after every path reaching registration replaced the factory | Low | DI003/DI015 |
+| Current | Unreachable `ref`/`out` delegate writes behind exits before registration made reachable initializer analysis opaque, hiding scoped captures or missing dependencies | Medium | DI003/DI015 |
+| Current | No-op local delegate alias cycles such as `alias = factory; factory = alias` dropped the original reachable factory value, hiding scoped captures or missing dependencies | Medium | DI003/DI015 |
+| Current | Short-circuit expression assignments such as `useSafe && ((factory = safe) != null)` were treated as definite replacements, hiding reachable unsafe or missing initializer factories | Medium | DI003/DI015 |
+| Current | Switch-arm and `for` incrementor delegate assignments were treated as definite replacements, hiding reachable unsafe or missing initializer factories | Medium | DI003/DI015 |
+| Current | Alias cycles after intervening factory writes used the current factory value instead of the alias snapshot, hiding unsafe snapshots or reporting stale missing values | Medium | DI003/DI015 |
 | Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
 | Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
 | Current | DI001 treated conditionally assigned nullable scope locals as leaked when later conditional-access or non-null-guarded cleanup closed ownership | Low | DI001 |
