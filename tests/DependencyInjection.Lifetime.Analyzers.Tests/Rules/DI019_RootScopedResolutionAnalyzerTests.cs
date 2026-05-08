@@ -115,6 +115,39 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task NullableAppServicesSuppressedResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public sealed class WebApplication
+                {
+                    public IServiceProvider? Services { get; init; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Builder.WebApplication app)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:app.Services!.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
     public async Task HostServicesResolvingScopedWithTypeof_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -334,6 +367,32 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 {
                     services.AddScoped<IScopedService, ScopedService>();
                     {|#0:services.BuildServiceProvider().GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task NullableBuildServiceProviderSuppressedThenResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    IServiceProvider? provider = services.BuildServiceProvider();
+                    {|#0:provider!.GetRequiredService<IScopedService>()|};
                 }
             }
             """;
