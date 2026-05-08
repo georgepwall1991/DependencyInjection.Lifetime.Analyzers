@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, and delegate-factory predeclared/same-declaration/iterator/alias-snapshot/non-definite-expression/opaque-write guards)
-**Version:** 2.8.15
-**Test result:** 1090/1090 passing.
+**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, delegate-factory guards, and DI014 ownership-flow precision)
+**Version:** 2.8.16
+**Test result:** 1135/1135 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -23,7 +23,7 @@
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
 | DI012 | Conditional Registration | Info | 32 | 7 | 9.2 | 8.8 | Complex flow, ignored keyed/non-keyed TryAdd fixer, embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
-| DI014 | Root Provider Not Disposed | Warn | 18 | 10 | 9 | 9 | Hardened: reliable local disposal proofs, reassignment leaks, nearest-callable fixer guardrails |
+| DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
@@ -130,11 +130,11 @@ Most comprehensive test file in the repo. Covers variance-aware closed generic a
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
-**Analyzer: 9/10** | Tests: 18 | **Fixer: 9/10** | Fix Tests: 10
+**Analyzer: 9.2/10** | Tests: 63 | **Fixer: 9/10** | Fix Tests: 10
 
 Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered, including synchronous lambdas inside async methods where plain `using` is required. Added tests for async local function inside sync method, sync lambda inside async method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
 
-Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
+Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, mutually exclusive `if`/`else` assignments to the same outer provider are accepted when a later dispose covers the selected branch, branches with direct or nested `return`/`throw` exits before shared cleanup stay reportable unless same-block/branch-block `Dispose()` or awaited `DisposeAsync()` cleanup or a containing `finally` disposes the provider, repeated loop assignments disposed only after the loop stay reportable, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
@@ -180,7 +180,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 7 | 8.8 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal with embedded-statement guardrails |
 | DI013 (Implementation Mismatch) | 13 | 8.8 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, and embedded rewrites are covered, removal is standalone-only, FixAll disabled |
-| DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, reassignment guardrails, nearest-callable async/sync fixer boundaries, and chained builders covered |
+| DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, and chained builders covered |
 | DI015 (Unresolvable Dependency) | 15 | 9 | Low -- keyed, factory, TryAdd, and local-alias self-binding generation is tightly gated; FixAll remains disabled |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI019. These rules detect problems whose resolution requires architectural or context-dependent decisions.
@@ -287,7 +287,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | Current | Switch-arm and `for` incrementor delegate assignments were treated as definite replacements, hiding reachable unsafe or missing initializer factories | Medium | DI003/DI015 |
 | Current | Alias cycles after intervening factory writes used the current factory value instead of the alias snapshot, hiding unsafe snapshots or reporting stale missing values | Medium | DI003/DI015 |
 | Current | DI001 accepted conditional or catch-only dispose calls as disposal proofs, suppressing real scope leaks | Medium | DI001 |
-| Current | DI014 accepted conditional, catch-only, or post-reassignment root-provider disposal as reliable disposal proof | Medium | DI014 |
+| Current | DI014 accepted conditional, catch-only, post-reassignment, repeated-loop, or branch-exit root-provider disposal as reliable disposal proof | Medium | DI014 |
 | Current | DI001 treated conditionally assigned nullable scope locals as leaked when later conditional-access or non-null-guarded cleanup closed ownership | Low | DI001 |
 | Current | DI005 missed `CreateScope()` in top-level programs that use `await`, leaving async disposal guidance silent in common minimal-hosting and console entry points | Medium | DI005 |
 | Current | DI008 read non-generic `typeof` overload arguments by source order, missing out-of-order named `implementationType:` calls and risking keyed factory false positives | Medium | DI008 |
