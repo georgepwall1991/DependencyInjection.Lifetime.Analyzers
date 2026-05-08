@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.16] - 2026-05-08
+
+### Changed
+
+- **DI014 ownership-flow precision**: DI014 now treats `if`/`else` root-provider assignments to the same outer local as mutually exclusive when a later dispose covers the selected provider, while still reporting providers created repeatedly inside loops, disposed only after the loop, or created in branches with direct or nested `return`/`throw` exits before shared cleanup. Direct same-block or branch-block `Dispose()` / awaited `DisposeAsync()` before an exit, `finally` cleanup from `try` or `catch`, filtered catch exits, and switch `goto case` target matching remain recognized.
+
 ## [2.8.15] - 2026-05-08
 
 ### Changed
