@@ -538,7 +538,7 @@ services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 
 ## DI014: Root Service Provider Not Disposed
 
-**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop.
+**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, or null-forgiven.
 
 **Why it matters:** singleton disposables at root scope may never be cleaned up.
 

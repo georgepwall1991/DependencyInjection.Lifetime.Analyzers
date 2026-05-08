@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
+**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow and wrapped-result disposal precision, and DI001 branch-exit disposal proof)
 **Version:** 2.8.17
-**Test result:** 1159/1159 passing.
+**Test result:** 1169/1169 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -23,7 +23,7 @@
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
 | DI012 | Conditional Registration | Info | 32 | 7 | 9.2 | 8.8 | Complex flow, ignored keyed/non-keyed TryAdd fixer, embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
-| DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
+| DI014 | Root Provider Not Disposed | Warn | 73 | 10 | 9.3 | 9 | Hardened: reliable local disposal proofs, wrapped-result assignments/returns, conversion-wrapper guardrails, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
@@ -130,11 +130,11 @@ Most comprehensive test file in the repo. Covers variance-aware closed generic a
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
-**Analyzer: 9.2/10** | Tests: 63 | **Fixer: 9/10** | Fix Tests: 10
+**Analyzer: 9.3/10** | Tests: 73 | **Fixer: 9/10** | Fix Tests: 10
 
 Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered, including synchronous lambdas inside async methods where plain `using` is required. Added tests for async local function inside sync method, sync lambda inside async method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
 
-Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, mutually exclusive `if`/`else` assignments to the same outer provider are accepted when a later dispose covers the selected branch, branches with direct or nested `return`/`throw` exits before shared cleanup stay reportable unless same-block/branch-block `Dispose()` or awaited `DisposeAsync()` cleanup or a containing `finally` disposes the provider, repeated loop assignments disposed only after the loop stay reportable, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
+Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, mutually exclusive `if`/`else` assignments to the same outer provider are accepted when a later dispose covers the selected branch, parenthesized, same-instance cast, and null-forgiving `BuildServiceProvider()` results assigned to locals are still tracked when a later explicit dispose covers them, the same safe wrappers are accepted for caller-owned return flows, user-defined conversion wrappers stay reportable because disposing or returning the wrapper does not prove the root provider was disposed, branches with direct or nested `return`/`throw` exits before shared cleanup stay reportable unless same-block/branch-block `Dispose()` or awaited `DisposeAsync()` cleanup or a containing `finally` disposes the provider, repeated loop assignments disposed only after the loop stay reportable, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
 
 ### DI015 -- Unresolvable Dependency (Warning)
 
@@ -204,8 +204,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1159 |
-| Analyzer tests | 913 |
+| Total tests | 1169 |
+| Analyzer tests | 923 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +220,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI014 missed explicit disposal and caller-owned return proofs when the `BuildServiceProvider()` result was safely wrapped, such as `(services.BuildServiceProvider())`, a same-instance cast, or `services.BuildServiceProvider()!`, while cast handling needed a guardrail for user-defined conversion wrappers | Low | DI014 |
 | Current | DI019 missed scoped resolutions from nullable known root-provider properties when the receiver used the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()` | Low | DI019 |
 | Current | DI001 accepted later shared scope disposal even when a branch-level `return` or straight-line early `return` after creation could bypass the cleanup | Medium | DI001 |
 | Current | DI008 reported descriptor-based disposable transients in `ServiceDescriptor.Describe(...)` and `new ServiceDescriptor(...)` but did not offer the same scoped/singleton lifetime rewrite available for direct and `ServiceDescriptor.Transient(...)` registrations | Low | DI008 |
