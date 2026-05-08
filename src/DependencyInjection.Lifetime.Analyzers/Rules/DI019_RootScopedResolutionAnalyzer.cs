@@ -785,6 +785,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 case CastExpressionSyntax castExpression:
                     expression = castExpression.Expression;
                     continue;
+                case PostfixUnaryExpressionSyntax postfixUnaryExpression
+                    when postfixUnaryExpression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    expression = postfixUnaryExpression.Operand;
+                    continue;
                 default:
                     return expression;
             }

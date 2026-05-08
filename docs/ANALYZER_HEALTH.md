@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
+**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
 **Version:** 2.8.17
-**Test result:** 1157/1157 passing.
+**Test result:** 1159/1159 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -28,7 +28,7 @@
 | DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
-| DI019 | Root Scoped Resolution | Warn | 41 | -- | 9.6 | -- | Root/scoped provider classification, known root-provider surface filtering, transitive scoped graph, known framework scoped services |
+| DI019 | Root Scoped Resolution | Warn | 43 | -- | 9.6 | -- | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services |
 
 `--` = no code fix exists for this rule.
 
@@ -162,9 +162,9 @@ Open-generic constructor checks use the generic definition. Direct coverage span
 
 ### DI019 -- Root Scoped Resolution (Warning)
 
-**Analyzer: 9.6/10** | Tests: 41
+**Analyzer: 9.6/10** | Tests: 43
 
-Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers known ASP.NET Core, ASP.NET test-host, and Generic Host `Services` properties, `ApplicationServices`, endpoint-route `ServiceProvider`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, arbitrary holder properties named `Services`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
+Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers known ASP.NET Core, ASP.NET test-host, and Generic Host `Services` properties including nullable `Services!` use, `ApplicationServices`, endpoint-route `ServiceProvider`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, arbitrary holder properties named `Services`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
 
 ## Code Fix Health
 
@@ -204,8 +204,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1157 |
-| Analyzer tests | 911 |
+| Total tests | 1159 |
+| Analyzer tests | 913 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +220,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI019 missed scoped resolutions from nullable known root-provider properties when the receiver used the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()` | Low | DI019 |
 | Current | DI001 accepted later shared scope disposal even when a branch-level `return` or straight-line early `return` after creation could bypass the cleanup | Medium | DI001 |
 | Current | DI008 reported descriptor-based disposable transients in `ServiceDescriptor.Describe(...)` and `new ServiceDescriptor(...)` but did not offer the same scoped/singleton lifetime rewrite available for direct and `ServiceDescriptor.Transient(...)` registrations | Low | DI008 |
 | Current | DI007 treated any method named `Create*` or `Build*` as a factory boundary, suppressing service-locator diagnostics in `void` or plain-`Task` side-effect methods | Low | DI007 |

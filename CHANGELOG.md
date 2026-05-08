@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI019 nullable root-provider precision**: DI019 now recognizes nullable-known root provider surfaces used through the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()`, so nullable annotations do not hide scoped root-resolution diagnostics.
+
 ## [2.8.17] - 2026-05-08
 
 ### Changed
