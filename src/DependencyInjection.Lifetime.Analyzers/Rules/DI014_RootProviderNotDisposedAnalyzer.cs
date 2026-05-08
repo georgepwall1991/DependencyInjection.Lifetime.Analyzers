@@ -78,7 +78,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         }
 
         // Case 2: Result is returned from the method (caller responsibility)
-        if (IsReturned(invocation))
+        if (IsReturned(invocation, semanticModel))
         {
             return true;
         }
@@ -174,8 +174,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return current;
     }
 
-    private static bool IsReturned(IInvocationOperation invocation)
+    private static bool IsReturned(
+        IInvocationOperation invocation,
+        SemanticModel semanticModel)
     {
+        var returnedExpression = GetSameInstanceOuterExpression(
+            GetCreationExpression(invocation.Syntax),
+            semanticModel);
         var parent = invocation.Parent;
 
         if (parent is IReturnOperation)
@@ -183,13 +188,12 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        var creationExpression = GetCreationExpression(invocation.Syntax);
-        if (creationExpression.Parent is ReturnStatementSyntax)
+        if (returnedExpression.Parent is ReturnStatementSyntax)
         {
             return true;
         }
 
-        if (creationExpression.Parent is ArrowExpressionClauseSyntax)
+        if (returnedExpression.Parent is ArrowExpressionClauseSyntax)
         {
             return true;
         }
@@ -1378,7 +1382,9 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         SyntaxNode creationSyntax,
         SemanticModel semanticModel)
     {
-        if (creationSyntax.Parent is EqualsValueClauseSyntax equalsValue &&
+        var assignedExpression = GetSameInstanceOuterExpression(creationSyntax, semanticModel);
+
+        if (assignedExpression.Parent is EqualsValueClauseSyntax equalsValue &&
             equalsValue.Parent is VariableDeclaratorSyntax declarator)
         {
             var declaredSymbol = semanticModel.GetDeclaredSymbol(declarator);
@@ -1387,8 +1393,8 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 : (declaredSymbol, declarator.FirstAncestorOrSelf<TypeDeclarationSyntax>());
         }
 
-        if (creationSyntax.Parent is AssignmentExpressionSyntax assignment &&
-            assignment.Right == creationSyntax)
+        if (assignedExpression.Parent is AssignmentExpressionSyntax assignment &&
+            assignment.Right == assignedExpression)
         {
             var targetSymbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
             return targetSymbol is null
@@ -1397,6 +1403,69 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         }
 
         return null;
+    }
+
+    private static SyntaxNode GetSameInstanceOuterExpression(
+        SyntaxNode creationSyntax,
+        SemanticModel semanticModel)
+    {
+        var current = creationSyntax;
+        while (current.Parent is ExpressionSyntax parentExpression)
+        {
+            if (parentExpression is ParenthesizedExpressionSyntax parenthesizedExpression &&
+                parenthesizedExpression.Expression == current)
+            {
+                current = parentExpression;
+                continue;
+            }
+
+            if (parentExpression is CastExpressionSyntax castExpression &&
+                castExpression.Expression == current &&
+                IsSameInstanceCast(castExpression, semanticModel))
+            {
+                current = parentExpression;
+                continue;
+            }
+
+            if (parentExpression is PostfixUnaryExpressionSyntax postfixUnaryExpression &&
+                postfixUnaryExpression.IsKind(SyntaxKind.SuppressNullableWarningExpression) &&
+                postfixUnaryExpression.Operand == current)
+            {
+                current = parentExpression;
+                continue;
+            }
+
+            break;
+        }
+
+        return current;
+    }
+
+    private static bool IsSameInstanceCast(
+        CastExpressionSyntax castExpression,
+        SemanticModel semanticModel)
+    {
+        var sourceType = semanticModel.GetTypeInfo(castExpression.Expression).Type;
+        var targetType = semanticModel.GetTypeInfo(castExpression.Type).Type;
+        if (sourceType is null || targetType is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(sourceType, targetType))
+        {
+            return true;
+        }
+
+        if (!sourceType.IsReferenceType || !targetType.IsReferenceType)
+        {
+            return false;
+        }
+
+        return TypeDerivesFromOrEquals(sourceType, targetType) ||
+               TypeDerivesFromOrEquals(targetType, sourceType) ||
+               sourceType.AllInterfaces.Any(iface => SymbolEqualityComparer.Default.Equals(iface, targetType)) ||
+               targetType.AllInterfaces.Any(iface => SymbolEqualityComparer.Default.Equals(iface, sourceType));
     }
 
     private static bool TryGetDisposedTargetSymbol(
