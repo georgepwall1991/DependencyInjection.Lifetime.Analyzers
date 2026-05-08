@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -261,7 +262,12 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (CreationMayRunRepeatedlyBeforeDispose(creationSyntax, invocationSyntax))
+            if (!CreationCanReachDispose(creationSyntax, invocationSyntax, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            if (CreationMayRunRepeatedlyBeforeDispose(creationSyntax, invocationSyntax, semanticModel))
             {
                 continue;
             }
@@ -322,7 +328,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (AreInMutuallyExclusiveBranches(creationSyntax, assignment))
+            if (AreInMutuallyExclusiveBranches(creationSyntax, assignment, semanticModel))
             {
                 continue;
             }
@@ -334,6 +340,321 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool CreationCanReachDispose(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        if (DisposeRunsFromFinallyForCreation(creationSyntax, disposeSyntax, variableSymbol, semanticModel))
+        {
+            return true;
+        }
+
+        return !HasBlockingExitBetween(creationSyntax, disposeSyntax, variableSymbol, semanticModel);
+    }
+
+    private static bool HasBlockingExitBetween(
+        SyntaxNode startSyntax,
+        SyntaxNode endSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in startSyntax.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(startSyntax.Span.End, endSyntax.SpanStart)))
+        {
+            if (descendant is not ReturnStatementSyntax and not ThrowStatementSyntax and not ThrowExpressionSyntax and not GotoStatementSyntax)
+            {
+                continue;
+            }
+
+            if (!SharesExecutableBoundary(descendant, startSyntax))
+            {
+                continue;
+            }
+
+            if (descendant is ThrowStatementSyntax throwStatement &&
+                IsHandledThrowBeforeDispose(throwStatement, startSyntax, endSyntax, semanticModel))
+            {
+                continue;
+            }
+
+            if (descendant is ThrowExpressionSyntax throwExpression &&
+                IsHandledThrowBeforeDispose(throwExpression, startSyntax, endSyntax, semanticModel))
+            {
+                continue;
+            }
+
+            if (descendant is GotoStatementSyntax gotoStatement &&
+                !GotoMayBypassDispose(gotoStatement, startSyntax, endSyntax, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            if (AreInMutuallyExclusiveBranches(startSyntax, descendant, semanticModel))
+            {
+                continue;
+            }
+
+            if (IsNullGuardExit(descendant, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            if (HasDisposeBeforeExit(startSyntax, descendant, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasDisposeBeforeExit(
+        SyntaxNode startSyntax,
+        SyntaxNode exitSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in startSyntax.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(startSyntax.Span.End, exitSyntax.SpanStart)))
+        {
+            if (descendant is not InvocationExpressionSyntax invocationSyntax ||
+                !IsDisposeInvocation(invocationSyntax) ||
+                !SharesExecutableBoundary(invocationSyntax, startSyntax) ||
+                AreInMutuallyExclusiveBranches(invocationSyntax, exitSyntax, semanticModel) ||
+                !DisposeRunsOnSamePathBeforeExit(invocationSyntax, exitSyntax, semanticModel))
+            {
+                continue;
+            }
+
+            var targetSymbol = GetDisposeTargetSymbol(invocationSyntax, semanticModel);
+            if (!SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+            {
+                continue;
+            }
+
+            if (HasInterveningReassignment(startSyntax, invocationSyntax, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool DisposeRunsOnSamePathBeforeExit(
+        InvocationExpressionSyntax disposeSyntax,
+        SyntaxNode exitSyntax,
+        SemanticModel semanticModel)
+    {
+        var boundary = GetExecutableBoundary(disposeSyntax);
+        var current = disposeSyntax.Parent;
+        while (current is not null && current != boundary)
+        {
+            if (current is IfStatementSyntax ifStatement &&
+                !AreInSameIfBranch(disposeSyntax, exitSyntax, ifStatement))
+            {
+                return false;
+            }
+
+            if (current is ElseClauseSyntax &&
+                current.Parent is IfStatementSyntax parentIf &&
+                !AreInSameIfBranch(disposeSyntax, exitSyntax, parentIf))
+            {
+                return false;
+            }
+
+            if (current is TryStatementSyntax tryStatement)
+            {
+                return tryStatement.Block.Span.Contains(disposeSyntax.Span) &&
+                       tryStatement.Block.Span.Contains(exitSyntax.Span) ||
+                       tryStatement.Catches.Any(catchClause =>
+                           catchClause.Block.Span.Contains(disposeSyntax.Span) &&
+                           catchClause.Block.Span.Contains(exitSyntax.Span)) ||
+                       tryStatement.Finally?.Block.Span.Contains(disposeSyntax.Span) == true &&
+                       tryStatement.Finally.Block.Span.Contains(exitSyntax.Span);
+            }
+
+            if (current is SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                if (current.Span.Contains(exitSyntax.Span))
+                {
+                    return true;
+                }
+
+                if (current is SwitchSectionSyntax sourceSection &&
+                    exitSyntax.AncestorsAndSelf().OfType<SwitchSectionSyntax>().FirstOrDefault() is { } targetSection &&
+                    sourceSection.Parent == targetSection.Parent &&
+                    sourceSection.Parent is SwitchStatementSyntax switchStatement &&
+                    SwitchSectionCanReachSection(sourceSection, targetSection, switchStatement, disposeSyntax.Span.End, semanticModel))
+                {
+                    return true;
+                }
+
+                return false;
+            }
+
+            current = current.Parent;
+        }
+
+        return true;
+    }
+
+    private static bool IsHandledThrowBeforeDispose(
+        ThrowStatementSyntax throwStatement,
+        SyntaxNode startSyntax,
+        SyntaxNode disposeSyntax,
+        SemanticModel semanticModel)
+    {
+        return IsHandledThrowBeforeDispose(
+            throwStatement,
+            throwStatement.Expression,
+            startSyntax,
+            disposeSyntax,
+            semanticModel);
+    }
+
+    private static bool IsHandledThrowBeforeDispose(
+        ThrowExpressionSyntax throwExpression,
+        SyntaxNode startSyntax,
+        SyntaxNode disposeSyntax,
+        SemanticModel semanticModel)
+    {
+        return IsHandledThrowBeforeDispose(
+            throwExpression,
+            throwExpression.Expression,
+            startSyntax,
+            disposeSyntax,
+            semanticModel);
+    }
+
+    private static bool IsHandledThrowBeforeDispose(
+        SyntaxNode throwSyntax,
+        ExpressionSyntax? thrownExpression,
+        SyntaxNode startSyntax,
+        SyntaxNode disposeSyntax,
+        SemanticModel semanticModel)
+    {
+        var tryStatement = throwSyntax.Ancestors()
+            .OfType<TryStatementSyntax>()
+            .FirstOrDefault(candidate => candidate.Block.Span.Contains(throwSyntax.Span));
+
+        return tryStatement is not null &&
+               (tryStatement.SpanStart > startSyntax.SpanStart ||
+                tryStatement.Block.Span.Contains(startSyntax.Span)) &&
+               !tryStatement.Span.Contains(disposeSyntax.Span) &&
+               SharesExecutableBoundary(tryStatement, startSyntax) &&
+               tryStatement.Catches.Any(catchClause => CatchCanHandleThrow(catchClause, thrownExpression, semanticModel));
+    }
+
+    private static bool CatchCanHandleThrow(
+        CatchClauseSyntax catchClause,
+        ExpressionSyntax? thrownExpression,
+        SemanticModel semanticModel)
+    {
+        if (catchClause.Filter is not null)
+        {
+            return false;
+        }
+
+        if (catchClause.Declaration is null)
+        {
+            return true;
+        }
+
+        if (thrownExpression is null)
+        {
+            return false;
+        }
+
+        var thrownType = semanticModel.GetTypeInfo(thrownExpression).ConvertedType ??
+                         semanticModel.GetTypeInfo(thrownExpression).Type;
+        var catchType = semanticModel.GetTypeInfo(catchClause.Declaration.Type).Type;
+
+        if (thrownType is not null &&
+            catchType is not null &&
+            TypeDerivesFromOrEquals(thrownType, catchType))
+        {
+            return true;
+        }
+
+        return thrownExpression is ObjectCreationExpressionSyntax objectCreation &&
+               catchClause.Declaration.Type.ToString() == objectCreation.Type.ToString();
+    }
+
+    private static bool TypeDerivesFromOrEquals(ITypeSymbol type, ITypeSymbol candidateBaseType)
+    {
+        var current = type;
+        while (current is not null)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, candidateBaseType))
+            {
+                return true;
+            }
+
+            current = current.BaseType;
+        }
+
+        return false;
+    }
+
+    private static bool DisposeRunsFromFinallyForCreation(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        var finallyClause = disposeSyntax.Ancestors().OfType<FinallyClauseSyntax>().FirstOrDefault();
+        if (finallyClause?.Parent is not TryStatementSyntax tryStatement)
+        {
+            return false;
+        }
+
+        if (tryStatement.Block.Span.Contains(creationSyntax.Span) ||
+            tryStatement.Catches.Any(catchClause => catchClause.Block.Span.Contains(creationSyntax.Span)))
+        {
+            return true;
+        }
+
+        return creationSyntax.SpanStart < tryStatement.SpanStart &&
+               SharesExecutableBoundary(tryStatement, creationSyntax) &&
+               !HasBlockingExitBetween(creationSyntax, tryStatement, variableSymbol, semanticModel);
+    }
+
+    private static bool IsNullGuardExit(
+        SyntaxNode exitSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        if (exitSyntax.Parent is IfStatementSyntax directIfStatement &&
+            directIfStatement.Statement == exitSyntax)
+        {
+            return IsNullGuardForTarget(directIfStatement.Condition, variableSymbol, semanticModel);
+        }
+
+        if (exitSyntax.Parent is not BlockSyntax block ||
+            block.Parent is not IfStatementSyntax ifStatement ||
+            ifStatement.Statement != block)
+        {
+            return false;
+        }
+
+        return IsNullGuardForTarget(ifStatement.Condition, variableSymbol, semanticModel);
     }
 
     private static bool IsReliableDisposeProof(
@@ -348,13 +669,29 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         {
             if (current is IfStatementSyntax ifStatement)
             {
+                if (AreInSameIfBranch(creationSyntax, disposeSyntax, ifStatement))
+                {
+                    current = current.Parent;
+                    continue;
+                }
+
                 if (!IsNonNullGuardForTarget(ifStatement.Condition, variableSymbol, semanticModel))
                 {
                     return false;
                 }
             }
-            else if (current is ElseClauseSyntax or
-                     SwitchStatementSyntax or
+            else if (current is ElseClauseSyntax elseClause)
+            {
+                if (elseClause.Parent is IfStatementSyntax parentIf &&
+                    AreInSameIfBranch(creationSyntax, disposeSyntax, parentIf))
+                {
+                    current = current.Parent;
+                    continue;
+                }
+
+                return false;
+            }
+            else if (current is SwitchStatementSyntax or
                      SwitchSectionSyntax or
                      ConditionalExpressionSyntax or
                      ForStatementSyntax or
@@ -373,7 +710,35 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         return true;
     }
 
-    private static bool CreationMayRunRepeatedlyBeforeDispose(SyntaxNode creationSyntax, SyntaxNode disposeSyntax)
+    private static bool AreInSameIfBranch(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        IfStatementSyntax ifStatement)
+    {
+        var creationBranch = GetIfBranchContainingSyntax(ifStatement, creationSyntax);
+        return creationBranch is not null &&
+               creationBranch == GetIfBranchContainingSyntax(ifStatement, disposeSyntax);
+    }
+
+    private static SyntaxNode? GetIfBranchContainingSyntax(IfStatementSyntax ifStatement, SyntaxNode syntax)
+    {
+        if (ifStatement.Statement.Span.Contains(syntax.Span))
+        {
+            return ifStatement.Statement;
+        }
+
+        if (ifStatement.Else?.Statement.Span.Contains(syntax.Span) == true)
+        {
+            return ifStatement.Else.Statement;
+        }
+
+        return null;
+    }
+
+    private static bool CreationMayRunRepeatedlyBeforeDispose(
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        SemanticModel semanticModel)
     {
         var boundary = GetExecutableBoundary(creationSyntax);
         var current = creationSyntax.Parent;
@@ -391,10 +756,46 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             current = current.Parent;
         }
 
+        foreach (var gotoStatement in creationSyntax.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(creationSyntax.Span.End, disposeSyntax.SpanStart))
+            .OfType<GotoStatementSyntax>())
+        {
+            if (!SharesExecutableBoundary(gotoStatement, creationSyntax))
+            {
+                continue;
+            }
+
+            if (gotoStatement.Expression is IdentifierNameSyntax labelName)
+            {
+                var targetLabel = gotoStatement.SyntaxTree.GetRoot()
+                    .DescendantNodes()
+                    .OfType<LabeledStatementSyntax>()
+                    .FirstOrDefault(label =>
+                        label.Identifier.ValueText == labelName.Identifier.ValueText &&
+                        SharesExecutableBoundary(label, gotoStatement));
+
+                if (targetLabel is not null && targetLabel.SpanStart <= creationSyntax.SpanStart)
+                {
+                    return true;
+                }
+            }
+
+            var creationSection = creationSyntax.AncestorsAndSelf().OfType<SwitchSectionSyntax>().FirstOrDefault();
+            if (creationSection?.Parent is SwitchStatementSyntax switchStatement &&
+                gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault() == switchStatement &&
+                GotoTargetsSwitchSection(gotoStatement, creationSection, semanticModel))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
-    private static bool AreInMutuallyExclusiveBranches(SyntaxNode firstSyntax, SyntaxNode secondSyntax)
+    private static bool AreInMutuallyExclusiveBranches(
+        SyntaxNode firstSyntax,
+        SyntaxNode secondSyntax,
+        SemanticModel semanticModel)
     {
         foreach (var ifStatement in firstSyntax.Ancestors().OfType<IfStatementSyntax>())
         {
@@ -412,6 +813,274 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             {
                 return true;
             }
+        }
+
+        var firstSwitchSection = firstSyntax.AncestorsAndSelf().OfType<SwitchSectionSyntax>().FirstOrDefault();
+        var secondSwitchSection = secondSyntax.AncestorsAndSelf().OfType<SwitchSectionSyntax>().FirstOrDefault();
+        var switchStatement = firstSwitchSection?.Parent;
+        if (firstSwitchSection is not null &&
+            secondSwitchSection is not null &&
+            firstSwitchSection != secondSwitchSection &&
+            switchStatement == secondSwitchSection.Parent &&
+            switchStatement is SwitchStatementSyntax owningSwitchStatement &&
+            !SwitchSectionCanReachSection(firstSwitchSection, secondSwitchSection, owningSwitchStatement, firstSyntax.Span.End, semanticModel))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool GotoMayBypassDispose(
+        GotoStatementSyntax gotoStatement,
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        if (gotoStatement.Expression is IdentifierNameSyntax labelName)
+        {
+            var targetLabel = gotoStatement.SyntaxTree.GetRoot()
+                .DescendantNodes()
+                .OfType<LabeledStatementSyntax>()
+                .FirstOrDefault(label =>
+                    label.Identifier.ValueText == labelName.Identifier.ValueText &&
+                    SharesExecutableBoundary(label, gotoStatement));
+
+            return targetLabel is null ||
+                   targetLabel.SpanStart <= creationSyntax.SpanStart ||
+                   targetLabel.SpanStart >= disposeSyntax.SpanStart;
+        }
+
+        if (gotoStatement.IsKind(SyntaxKind.GotoCaseStatement) ||
+            gotoStatement.IsKind(SyntaxKind.GotoDefaultStatement))
+        {
+            return SwitchGotoMayBypassDispose(
+                gotoStatement,
+                creationSyntax,
+                disposeSyntax,
+                variableSymbol,
+                semanticModel);
+        }
+
+        return true;
+    }
+
+    private static bool SwitchGotoMayBypassDispose(
+        GotoStatementSyntax gotoStatement,
+        SyntaxNode creationSyntax,
+        SyntaxNode disposeSyntax,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        var switchStatement = gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault();
+        if (switchStatement is null)
+        {
+            return true;
+        }
+
+        var pending = new Queue<SwitchSectionSyntax>();
+        foreach (var targetSection in switchStatement.Sections)
+        {
+            if (GotoTargetsSwitchSection(gotoStatement, targetSection, semanticModel))
+            {
+                pending.Enqueue(targetSection);
+            }
+        }
+
+        if (pending.Count == 0)
+        {
+            return true;
+        }
+
+        var visited = new HashSet<SwitchSectionSyntax>();
+        while (pending.Count > 0)
+        {
+            var currentSection = pending.Dequeue();
+            if (!visited.Add(currentSection))
+            {
+                continue;
+            }
+
+            foreach (var descendant in currentSection.DescendantNodes())
+            {
+                if (descendant.SpanStart >= disposeSyntax.SpanStart ||
+                    !SharesExecutableBoundary(descendant, creationSyntax))
+                {
+                    continue;
+                }
+
+                if (descendant is ThrowStatementSyntax throwStatement &&
+                    IsHandledThrowBeforeDispose(throwStatement, creationSyntax, disposeSyntax, semanticModel))
+                {
+                    continue;
+                }
+
+                if (descendant is ThrowExpressionSyntax throwExpression &&
+                    IsHandledThrowBeforeDispose(throwExpression, creationSyntax, disposeSyntax, semanticModel))
+                {
+                    continue;
+                }
+
+                if (descendant is ReturnStatementSyntax or ThrowStatementSyntax or ThrowExpressionSyntax)
+                {
+                    if (IsNullGuardExit(descendant, variableSymbol, semanticModel) ||
+                        HasDisposeBeforeExit(creationSyntax, descendant, variableSymbol, semanticModel))
+                    {
+                        continue;
+                    }
+
+                    return true;
+                }
+
+                if (descendant is not GotoStatementSyntax nestedGoto)
+                {
+                    continue;
+                }
+
+                if (nestedGoto.IsKind(SyntaxKind.GotoCaseStatement) ||
+                    nestedGoto.IsKind(SyntaxKind.GotoDefaultStatement))
+                {
+                    foreach (var targetSection in switchStatement.Sections)
+                    {
+                        if (GotoTargetsSwitchSection(nestedGoto, targetSection, semanticModel))
+                        {
+                            pending.Enqueue(targetSection);
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (GotoMayBypassDispose(nestedGoto, creationSyntax, disposeSyntax, variableSymbol, semanticModel))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SwitchSectionCanReachSection(
+        SwitchSectionSyntax sourceSection,
+        SwitchSectionSyntax targetSection,
+        SwitchStatementSyntax switchStatement,
+        int sourceStart,
+        SemanticModel semanticModel)
+    {
+        var visited = new HashSet<SwitchSectionSyntax>();
+        var pending = new Queue<SwitchSectionSyntax>();
+        pending.Enqueue(sourceSection);
+
+        while (pending.Count > 0)
+        {
+            var currentSection = pending.Dequeue();
+            if (!visited.Add(currentSection))
+            {
+                continue;
+            }
+
+            var minimumGotoStart = currentSection == sourceSection ? sourceStart : currentSection.SpanStart;
+            foreach (var nextSection in GetGotoTargetSwitchSections(currentSection, switchStatement, minimumGotoStart, semanticModel))
+            {
+                if (nextSection == targetSection)
+                {
+                    return true;
+                }
+
+                pending.Enqueue(nextSection);
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<SwitchSectionSyntax> GetGotoTargetSwitchSections(
+        SwitchSectionSyntax sourceSection,
+        SwitchStatementSyntax switchStatement,
+        int minimumGotoStart,
+        SemanticModel semanticModel)
+    {
+        foreach (var gotoStatement in sourceSection.DescendantNodes().OfType<GotoStatementSyntax>())
+        {
+            if (gotoStatement.SpanStart < minimumGotoStart ||
+                !SharesExecutableBoundary(gotoStatement, sourceSection) ||
+                gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault() != switchStatement)
+            {
+                continue;
+            }
+
+            foreach (var targetSection in switchStatement.Sections)
+            {
+                if (GotoTargetsSwitchSection(gotoStatement, targetSection, semanticModel))
+                {
+                    yield return targetSection;
+                }
+            }
+        }
+    }
+
+    private static bool GotoTargetsSwitchSection(
+        GotoStatementSyntax gotoStatement,
+        SwitchSectionSyntax targetSection,
+        SemanticModel semanticModel)
+    {
+        if (gotoStatement.IsKind(SyntaxKind.GotoDefaultStatement))
+        {
+            return targetSection.Labels.OfType<DefaultSwitchLabelSyntax>().Any();
+        }
+
+        if (gotoStatement.IsKind(SyntaxKind.GotoCaseStatement))
+        {
+            if (gotoStatement.Expression is null)
+            {
+                return false;
+            }
+
+            var targetCase = semanticModel.GetConstantValue(gotoStatement.Expression);
+            return targetSection.Labels
+                .OfType<CaseSwitchLabelSyntax>()
+                .Any(label =>
+                {
+                    var labelValue = semanticModel.GetConstantValue(label.Value);
+                    return targetCase.HasValue &&
+                           labelValue.HasValue &&
+                           Equals(targetCase.Value, labelValue.Value) ||
+                           label.Value.ToString() == gotoStatement.Expression.ToString();
+                });
+        }
+
+        if (gotoStatement.Expression is IdentifierNameSyntax labelName)
+        {
+            return targetSection.DescendantNodes()
+                .OfType<LabeledStatementSyntax>()
+                .Any(label => label.Identifier.ValueText == labelName.Identifier.ValueText);
+        }
+
+        return false;
+    }
+
+    private static bool IsNullGuardForTarget(
+        ExpressionSyntax condition,
+        ILocalSymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        condition = UnwrapParentheses(condition);
+
+        if (condition is BinaryExpressionSyntax binary &&
+            binary.IsKind(SyntaxKind.EqualsExpression))
+        {
+            return IsNullLiteral(binary.Left) && ExpressionTargetsSymbol(binary.Right, variableSymbol, semanticModel) ||
+                   IsNullLiteral(binary.Right) && ExpressionTargetsSymbol(binary.Left, variableSymbol, semanticModel);
+        }
+
+        if (condition is IsPatternExpressionSyntax isPattern &&
+            ExpressionTargetsSymbol(isPattern.Expression, variableSymbol, semanticModel) &&
+            isPattern.Pattern is ConstantPatternSyntax constantPattern &&
+            IsNullLiteral(constantPattern.Expression))
+        {
+            return true;
         }
 
         return false;
