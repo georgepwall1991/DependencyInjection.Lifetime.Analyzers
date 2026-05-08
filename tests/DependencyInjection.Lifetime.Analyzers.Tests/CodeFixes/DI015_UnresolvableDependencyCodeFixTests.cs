@@ -595,4 +595,11 @@ public class DI015_UnresolvableDependencyCodeFixTests
         await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
     }
+
+    [Fact]
+    public void FixAllProvider_IsDisabled()
+    {
+        var provider = new DI015_UnresolvableDependencyCodeFixProvider();
+        Assert.Null(provider.GetFixAllProvider());
+    }
 }

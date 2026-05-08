@@ -990,6 +990,248 @@ public class DI015_UnresolvableDependencyAnalyzerTests
                 .WithArguments("IMyService", "IMyDependency (key: blue)"));
     }
 
+    [Fact]
+    public async Task KeyedLocalDelegateFactory_WithRegistrationKeyParameterMissingDependency_ReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, object?, IMyService> factory =
+                        (sp, key) => new MyService(sp.GetRequiredKeyedService<IMyDependency>(key));
+
+                    services.AddKeyedScoped<IMyService>("blue", factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(71, 40)
+                .WithArguments("IMyService", "IMyDependency (key: blue)"));
+    }
+
+    [Fact]
+    public async Task LocalDelegateFactoryUsedInUnrelatedAssignmentLeftHandSide_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    var metadata = new Dictionary<Func<IServiceProvider, IMyService>, int>();
+
+                    metadata[factory] = 1;
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task AliasedLocalDelegateFactory_WithMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> inner =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    Func<IServiceProvider, IMyService> factory = inner;
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task AliasCycleLocalDelegateFactory_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    Func<IServiceProvider, IMyService> alias = factory;
+
+                    factory = alias;
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task MixedAliasCycleLocalDelegateFactory_KeepsMissingAliasReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+                public MyService() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useMissing)
+                {
+                    Func<IServiceProvider, IMyService> factory = sp => new MyService();
+                    Func<IServiceProvider, IMyService> alias = factory;
+
+                    if (useMissing)
+                    {
+                        alias = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    }
+
+                    factory = alias;
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task AliasSnapshotLocalDelegateFactory_RestoresSafeSnapshot_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory = sp => new SafeService();
+                    Func<IServiceProvider, IMyService> alias = factory;
+
+                    factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    factory = alias;
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalKeyedLocalDelegateFactory_WithRegistrationKeyParameterMissingDependency_ReportsDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface IMyDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMyDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useMissingDependencyFactory)
+                {
+                    Func<IServiceProvider, object?, IMyService> factory =
+                        (sp, key) => new SafeService();
+
+                    if (useMissingDependencyFactory)
+                    {
+                        factory = (sp, key) => new MyService({|#0:sp.GetRequiredKeyedService<IMyDependency>(key)|});
+                    }
+
+                    services.AddKeyedScoped<IMyService>("blue", factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMyDependency (key: blue)"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -1403,6 +1645,1718 @@ public class DI015_UnresolvableDependencyAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task LocalFunctionReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task IteratorLocalFunctionReassignedLocalDelegateFactory_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    System.Collections.Generic.IEnumerable<int> ReplaceFactory()
+                    {
+                        factory = sp => new SafeService();
+                        yield break;
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ExhaustiveLocalFunctionReassignedLocalDelegateFactory_WithMissingBranch_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useMissingFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        if (useMissingFactory)
+                        {
+                            factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                        }
+                        else
+                        {
+                            factory = sp => new SafeService();
+                        }
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task LocalFunctionWithOutReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                        UseOutFactory(out factory);
+                    }
+                }
+
+                private static void UseOutFactory(out Func<IServiceProvider, IMyService> factory)
+                {
+                    factory = sp => new SafeService();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalLocalFunctionReassignedLocalDelegateFactory_WithMissingInitializer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useSafeFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        if (useSafeFactory)
+                        {
+                            factory = sp => new SafeService();
+                        }
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task EarlyReturningLocalFunctionReassignedLocalDelegateFactory_WithMissingInitializer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool keepOriginal)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        if (keepOriginal)
+                        {
+                            return;
+                        }
+
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReturningLocalFunctionBranchAfterMissingReassignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useMissingFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        if (useMissingFactory)
+                        {
+                            factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                            return;
+                        }
+                        else
+                        {
+                            factory = sp => new SafeService();
+                        }
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ExpressionBodiedLocalFunctionReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory() => factory = sp => new SafeService();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExhaustiveBranchReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useFirstFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (useFirstFactory)
+                    {
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExhaustiveBranchWithUnrelatedLeftHandSideUseReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useFirstFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    var metadata = new Dictionary<Func<IServiceProvider, IMyService>, int>();
+
+                    if (useFirstFactory)
+                    {
+                        metadata[factory] = 1;
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        metadata[factory] = 2;
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExhaustiveElseIfBranchReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useFirstFactory, bool useSecondFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (useFirstFactory)
+                    {
+                        factory = sp => new SafeService();
+                    }
+                    else if (useSecondFactory)
+                    {
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExhaustiveBranchReassignedLocalDelegateFactory_ToSameMissingMethodGroupReportsOnce()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useFirstFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (useFirstFactory)
+                    {
+                        factory = Create;
+                    }
+                    else
+                    {
+                        factory = Create;
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+
+                private static IMyService Create(IServiceProvider sp)
+                {
+                    return new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ExhaustiveElseIfBranchReassignedLocalDelegateFactory_WithMissingBranchReportsOnce()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool usePrimaryFactory, bool useFallbackFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (usePrimaryFactory)
+                    {
+                        factory = sp => new SafeService();
+                    }
+                    else if (useFallbackFactory)
+                    {
+                        factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task NestedExhaustiveBranchReassignedLocalDelegateFactory_WithMissingInitializer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replaceFactory, bool useFirstFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    if (replaceFactory)
+                    {
+                        if (useFirstFactory)
+                        {
+                            factory = sp => new SafeService();
+                        }
+                        else
+                        {
+                            factory = sp => new SafeService();
+                        }
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task BranchReassignedLocalDelegateFactory_ExitsBeforeRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (exitBeforeRegistration)
+                    {
+                        factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                        return;
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchLocalFunctionReassignedLocalDelegateFactory_ExitsBeforeRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (exitBeforeRegistration)
+                    {
+                        ReplaceFactory();
+                        return;
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NestedBranchReassignedLocalDelegateFactory_ExitsBeforeRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration, bool useMissingFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (exitBeforeRegistration)
+                    {
+                        if (useMissingFactory)
+                        {
+                            factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                        }
+                        else
+                        {
+                            factory = sp => new SafeService();
+                        }
+
+                        return;
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchReassignedLocalDelegateFactory_ReplacesBeforeOnlyCompletingBranch_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (exitBeforeRegistration)
+                    {
+                        factory = sp => new SafeService();
+                        return;
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchLocalFunctionReassignedLocalDelegateFactory_ReplacesBeforeOnlyCompletingBranch_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (exitBeforeRegistration)
+                    {
+                        return;
+                    }
+                    else
+                    {
+                        ReplaceFactory();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RefOutLocalDelegateFactoryWrite_ExitsBeforeRegistration_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool exitBeforeRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    if (exitBeforeRegistration)
+                    {
+                        ReplaceFactory(out factory);
+                        return;
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+
+                private static void ReplaceFactory(out Func<IServiceProvider, IMyService> factory)
+                {
+                    factory = sp => null!;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task BranchReassignedLocalDelegateFactory_AfterGuardReturn_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replaceFactory, bool skipRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (replaceFactory)
+                    {
+                        if (skipRegistration)
+                        {
+                            return;
+                        }
+
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchLocalFunctionRewriteOverwrittenByDirectAssignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useBranch)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (useBranch)
+                    {
+                        ReplaceWithMissingFactory();
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceWithMissingFactory()
+                    {
+                        factory = sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchReassignedLocalDelegateFactory_WithThrowingBranch_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useSafeFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+
+                    if (useSafeFactory)
+                    {
+                        factory = sp => new SafeService();
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InvokedDelegateReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    Action replace = () => factory = sp => new SafeService();
+
+                    replace();
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InvokedDelegateWithUnrelatedAssignmentLeftHandSide_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    var metadata = new System.Collections.Generic.Dictionary<Func<IServiceProvider, IMyService>, int>();
+                    Action tag = () => metadata[factory] = 1;
+
+                    tag();
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task InvokedDelegateViaInvokeReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    Action replace = () => factory = sp => new SafeService();
+
+                    replace.Invoke();
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MethodGroupDelegateReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService(sp.GetRequiredService<IMissingDependency>());
+                    Action replace = ReplaceFactory;
+
+                    replace();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MethodGroupDelegateReassignedLocalDelegateFactory_WithMissingReplacement_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+                    Action replace = ReplaceFactory;
+
+                    replace();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReassignedMethodGroupDelegateAlias_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    Action replace = ReplaceFactory;
+
+                    replace = () => { };
+                    replace();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ConditionalReturnBranchWithoutDelegateReplacement_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replaceFactory, bool skipRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    if (replaceFactory)
+                    {
+                        if (skipRegistration)
+                        {
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        factory = sp => new SafeService();
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task LocalFunctionBranchGuardReturn_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replaceFactory, bool keepOriginal)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    void ReplaceFactory()
+                    {
+                        if (replaceFactory)
+                        {
+                            if (keepOriginal)
+                            {
+                                return;
+                            }
+
+                            factory = sp => new SafeService();
+                        }
+                        else
+                        {
+                            factory = sp => new SafeService();
+                        }
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReassignedLocalDelegateFactory_BeforeConditionalExit_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool skipRegistration)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    if (skipRegistration)
+                    {
+                        return;
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReassignedLocalDelegateFactory_BeforeReturnAfterRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public IServiceCollection ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    services.AddScoped<IMyService>(factory);
+                    return services;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReassignedLocalDelegateFactory_BeforeReturnedRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public IServiceCollection ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    return services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task UnawaitedAsyncLocalFunctionReassignedLocalDelegateFactory_WithMissingInitializer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    async void ReplaceFactory()
+                    {
+                        await System.Threading.Tasks.Task.Yield();
+                        factory = sp => new SafeService();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task UnawaitedAsyncLocalFunctionReassignedLocalDelegateFactory_BeforeAwaitReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    ReplaceFactory();
+                    services.AddScoped<IMyService>(factory);
+
+                    async void ReplaceFactory()
+                    {
+                        factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                        await System.Threading.Tasks.Task.Yield();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ReassignedLocalDelegateFactory_WithMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task PredeclaredLocalDelegateFactory_AssignedMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory;
+
+                    factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task SameDeclarationReassignedLocalDelegateFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                            sp => new MyService(sp.GetRequiredService<IMissingDependency>()),
+                        alias = factory = sp => new SafeService();
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SameDeclarationPredeclaredLocalDelegateFactory_WithMissingAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory,
+                        alias = factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ConditionalReassignedLocalDelegateFactory_WithMissingDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useMissingDependencyFactory)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new SafeService();
+
+                    if (useMissingDependencyFactory)
+                    {
+                        factory = sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ShortCircuitReassignedLocalDelegateFactory_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool useSafe)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    _ = useSafe && ((factory = sp => new SafeService()) != null);
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    [Fact]
+    public async Task ForIncrementorReassignedLocalDelegateFactory_KeepsMissingInitializerReachable_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Func<IServiceProvider, IMyService> factory =
+                        sp => new MyService({|#0:sp.GetRequiredService<IMissingDependency>()|});
+
+                    for (var i = 0; i < 0; i++, factory = sp => new SafeService())
+                    {
+                    }
+
+                    services.AddScoped<IMyService>(factory);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IMissingDependency"));
     }
 
     [Fact]

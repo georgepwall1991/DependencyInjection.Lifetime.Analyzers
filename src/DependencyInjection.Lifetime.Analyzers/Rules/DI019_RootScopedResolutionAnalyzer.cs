@@ -531,13 +531,6 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return isRootProvider;
         }
 
-        if (expression is MemberAccessExpressionSyntax memberAccess &&
-            memberAccess.Name.Identifier.Text == "Services" &&
-            wellKnownTypes.IsServiceProvider(semanticModel.GetTypeInfo(expression).Type))
-        {
-            return true;
-        }
-
         if (expression is MemberAccessExpressionSyntax rootProviderProperty &&
             IsKnownRootProviderProperty(rootProviderProperty, semanticModel, wellKnownTypes))
         {
@@ -560,6 +553,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         var ownerType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
         return memberAccess.Name.Identifier.Text switch
         {
+            "Services" => IsKnownRootServicesOwner(ownerType),
             "ApplicationServices" => IsNamedOrImplements(
                 ownerType,
                 "Microsoft.AspNetCore.Builder",
@@ -570,6 +564,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 "IEndpointRouteBuilder"),
             _ => false
         };
+    }
+
+    private static bool IsKnownRootServicesOwner(ITypeSymbol? ownerType)
+    {
+        if (ownerType is INamedTypeSymbol namedOwner)
+        {
+            return IsKnownTypeOrBaseType(namedOwner, "Microsoft.AspNetCore.Builder", "WebApplication") ||
+                   IsKnownTypeOrBaseType(namedOwner, "Microsoft.AspNetCore.Mvc.Testing", "WebApplicationFactory") ||
+                   IsKnownTypeOrBaseType(namedOwner, "Microsoft.AspNetCore.TestHost", "TestServer") ||
+                   IsNamedOrImplements(namedOwner, "Microsoft.Extensions.Hosting", "IHost") ||
+                   IsNamedOrImplements(namedOwner, "Microsoft.AspNetCore.Hosting", "IWebHost");
+        }
+
+        if (ownerType is ITypeParameterSymbol typeParameter)
+        {
+            return typeParameter.ConstraintTypes.Any(IsKnownRootServicesOwner);
+        }
+
+        return false;
     }
 
     private static bool IsNamedOrImplements(
@@ -592,6 +605,22 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         string typeName) =>
         type.Name == typeName &&
         type.ContainingNamespace.ToDisplayString() == namespaceName;
+
+    private static bool IsKnownTypeOrBaseType(
+        INamedTypeSymbol type,
+        string namespaceName,
+        string typeName)
+    {
+        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            if (IsKnownType(current, namespaceName, typeName))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsScopedProviderExpression(
         ExpressionSyntax expression,

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -11,6 +12,53 @@ namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 /// </summary>
 internal static class FactoryDependencyAnalysis
 {
+    private readonly struct DependencyRequestKey : System.IEquatable<DependencyRequestKey>
+    {
+        public DependencyRequestKey(DependencyRequest request)
+        {
+            Type = request.Type;
+            Key = request.Key;
+            IsKeyed = request.IsKeyed;
+            SourceKind = request.SourceKind;
+            SourceStart = request.SourceLocation.SourceSpan.Start;
+        }
+
+        public ITypeSymbol Type { get; }
+
+        public object? Key { get; }
+
+        public bool IsKeyed { get; }
+
+        public DependencySourceKind SourceKind { get; }
+
+        public int SourceStart { get; }
+
+        public bool Equals(DependencyRequestKey other)
+        {
+            return SymbolEqualityComparer.Default.Equals(Type, other.Type) &&
+                   Equals(Key, other.Key) &&
+                   IsKeyed == other.IsKeyed &&
+                   SourceKind == other.SourceKind &&
+                   SourceStart == other.SourceStart;
+        }
+
+        public override bool Equals(object? obj) =>
+            obj is DependencyRequestKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = SymbolEqualityComparer.Default.GetHashCode(Type);
+                hashCode = (hashCode * 397) ^ (Key?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
+                hashCode = (hashCode * 397) ^ SourceKind.GetHashCode();
+                hashCode = (hashCode * 397) ^ SourceStart;
+                return hashCode;
+            }
+        }
+    }
+
     public static ImmutableArray<DependencyRequest> GetDependencyRequests(
         ExpressionSyntax factoryExpression,
         SemanticModel semanticModel,
@@ -20,6 +68,7 @@ internal static class FactoryDependencyAnalysis
         string? inheritedKeyLiteral = null)
     {
         var requests = ImmutableArray.CreateBuilder<DependencyRequest>();
+        var seenRequests = new HashSet<DependencyRequestKey>();
         var keyContext = CreateFactoryKeyContext(
             factoryExpression,
             semanticModel,
@@ -32,7 +81,10 @@ internal static class FactoryDependencyAnalysis
             if (TryCreateRequiredServiceRequest(invocation, semanticModel, wellKnownTypes, keyContext, out var request) ||
                 TryCreateActivatorUtilitiesRequest(invocation, semanticModel, out request))
             {
-                requests.Add(request);
+                if (seenRequests.Add(new DependencyRequestKey(request)))
+                {
+                    requests.Add(request);
+                }
             }
         }
 
@@ -378,13 +430,22 @@ internal static class FactoryDependencyAnalysis
             return FactoryKeyContext.None;
         }
 
-        if (!TryGetFactoryKeyParameter(factoryExpression, semanticModel, out var keyParameter))
+        var keyParameters = ImmutableArray.CreateBuilder<IParameterSymbol>();
+        foreach (var possibleFactoryExpression in FactoryAnalysis.ResolveFactoryExpressions(factoryExpression, semanticModel))
+        {
+            if (TryGetFactoryKeyParameter(possibleFactoryExpression, semanticModel, out var keyParameter))
+            {
+                keyParameters.Add(keyParameter);
+            }
+        }
+
+        if (keyParameters.Count == 0)
         {
             return FactoryKeyContext.None;
         }
 
         return new FactoryKeyContext(
-            keyParameter,
+            keyParameters.ToImmutable(),
             inheritedKey,
             inheritedKeyLiteral);
     }
@@ -399,13 +460,13 @@ internal static class FactoryDependencyAnalysis
         key = null;
         keyLiteral = null;
 
-        if (keyContext.KeyParameter is null)
+        if (keyContext.KeyParameters.IsDefaultOrEmpty)
         {
             return false;
         }
 
         if (semanticModel.GetSymbolInfo(keyExpression).Symbol is not IParameterSymbol parameterSymbol ||
-            !SymbolEqualityComparer.Default.Equals(parameterSymbol, keyContext.KeyParameter))
+            !keyContext.KeyParameters.Any(keyParameter => SymbolEqualityComparer.Default.Equals(parameterSymbol, keyParameter)))
         {
             return false;
         }
@@ -511,21 +572,21 @@ internal static class FactoryDependencyAnalysis
     private sealed class FactoryKeyContext
     {
         public static readonly FactoryKeyContext None = new FactoryKeyContext(
-            keyParameter: null,
+            keyParameters: ImmutableArray<IParameterSymbol>.Empty,
             inheritedKey: null,
             inheritedKeyLiteral: null);
 
         public FactoryKeyContext(
-            IParameterSymbol? keyParameter,
+            ImmutableArray<IParameterSymbol> keyParameters,
             object? inheritedKey,
             string? inheritedKeyLiteral)
         {
-            KeyParameter = keyParameter;
+            KeyParameters = keyParameters;
             InheritedKey = inheritedKey;
             InheritedKeyLiteral = inheritedKeyLiteral;
         }
 
-        public IParameterSymbol? KeyParameter { get; }
+        public ImmutableArray<IParameterSymbol> KeyParameters { get; }
 
         public object? InheritedKey { get; }
 

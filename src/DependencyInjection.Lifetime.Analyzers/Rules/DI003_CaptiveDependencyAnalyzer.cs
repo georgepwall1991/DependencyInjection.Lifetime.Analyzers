@@ -64,18 +64,18 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
     private sealed class FactoryKeyContext
     {
         public static readonly FactoryKeyContext None = new(
-            keyParameter: null,
+            keyParameters: ImmutableArray<IParameterSymbol>.Empty,
             inheritedKey: null);
 
         public FactoryKeyContext(
-            IParameterSymbol? keyParameter,
+            ImmutableArray<IParameterSymbol> keyParameters,
             object? inheritedKey)
         {
-            KeyParameter = keyParameter;
+            KeyParameters = keyParameters;
             InheritedKey = inheritedKey;
         }
 
-        public IParameterSymbol? KeyParameter { get; }
+        public ImmutableArray<IParameterSymbol> KeyParameters { get; }
 
         public object? InheritedKey { get; }
     }
@@ -686,13 +686,23 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         ServiceRegistration registration)
     {
         if (!registration.IsKeyed ||
-            SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key) ||
-            !TryGetFactoryKeyParameter(factoryExpression, semanticModel, out var keyParameter))
+            SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key))
         {
             return FactoryKeyContext.None;
         }
 
-        return new FactoryKeyContext(keyParameter, registration.Key);
+        var keyParameters = ImmutableArray.CreateBuilder<IParameterSymbol>();
+        foreach (var possibleFactoryExpression in FactoryAnalysis.ResolveFactoryExpressions(factoryExpression, semanticModel))
+        {
+            if (TryGetFactoryKeyParameter(possibleFactoryExpression, semanticModel, out var keyParameter))
+            {
+                keyParameters.Add(keyParameter);
+            }
+        }
+
+        return keyParameters.Count == 0
+            ? FactoryKeyContext.None
+            : new FactoryKeyContext(keyParameters.ToImmutable(), registration.Key);
     }
 
     private static bool TryGetFactoryKeyParameter(
@@ -758,9 +768,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         out object? key)
     {
         key = null;
-        if (factoryKeyContext.KeyParameter is null ||
+        if (factoryKeyContext.KeyParameters.IsDefaultOrEmpty ||
             semanticModel.GetSymbolInfo(keyExpression).Symbol is not IParameterSymbol parameterSymbol ||
-            !SymbolEqualityComparer.Default.Equals(parameterSymbol, factoryKeyContext.KeyParameter))
+            !factoryKeyContext.KeyParameters.Any(keyParameter => SymbolEqualityComparer.Default.Equals(parameterSymbol, keyParameter)))
         {
             return false;
         }
