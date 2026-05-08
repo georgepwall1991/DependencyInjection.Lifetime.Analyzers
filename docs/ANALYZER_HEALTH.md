@@ -1,7 +1,7 @@
 # Analyzer Health Report
 
 **Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
-**Version:** 2.8.16
+**Version:** 2.8.17
 **Test result:** 1157/1157 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12

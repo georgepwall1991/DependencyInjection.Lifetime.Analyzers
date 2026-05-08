@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.17] - 2026-05-08
+
 ### Changed
 
 - **DI001 branch-exit precision**: DI001 now reports `IServiceScope` creations whose later shared `Dispose()` / `DisposeAsync()` cleanup can be bypassed by a `return` or `throw` after the scope is created, while still accepting direct same-branch disposal before the exit and mutually exclusive branch exits that cannot run after the creation.
