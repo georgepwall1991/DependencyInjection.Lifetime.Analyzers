@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, and DI018 delegate-type non-instantiable detection)
-**Version:** 2.8.19
-**Test result:** 1175/1175 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, and DI005 conditional-access receiver coverage)
+**Version:** 2.8.20
+**Test result:** 1177/1177 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -14,7 +14,7 @@
 | DI002 | Scope Escape | Warn | 33 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage |
 | DI003 | Captive Dependency | Warn | 107 | 12 | 9.8 | 8.8 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, and fixer shape coverage |
 | DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
-| DI005 | Async Disposal | Warn | 22 | 11 | 9 | 8.8 | Hardened: top-level async statements, nested async guardrails, direct-resource fixer gating |
+| DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
 | DI007 | Service Locator | Info | 38 | -- | 9.6 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
 | DI008 | Disposable Transient | Warn | 44 | 18 | 9.5 | 9.3 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, open generics, descriptor collections, factory guardrails, allowlist option, and descriptor lifetime fixes |
@@ -76,9 +76,9 @@ Strong after explicit-disposal and post-boundary state hardening. Covers constru
 
 ### DI005 -- Async Disposal (Warning)
 
-**Analyzer: 9/10** | Tests: 22 | **Fixer: 8.8/10** | Fix Tests: 11
+**Analyzer: 9.2/10** | Tests: 24 | **Fixer: 8.8/10** | Fix Tests: 11
 
-Narrow rule with a clear trigger: `CreateScope()` in async flows. Coverage now includes async methods, lambdas, local functions, anonymous methods, top-level programs that use `await`, and `IServiceProvider.CreateScope()`. Top-level detection ignores nested async local functions, lambdas, and anonymous methods so otherwise synchronous top-level scope creation stays quiet. Fixer replaces direct safe `using` declaration/statement resources with `CreateAsyncScope()` plus `await using`, including top-level using declarations, and now skips nested `CreateScope()` arguments inside other disposable resource initializers.
+Narrow rule with a clear trigger: `CreateScope()` in async flows. Coverage now includes async methods, lambdas, local functions, anonymous methods, top-level programs that use `await`, `IServiceProvider.CreateScope()`, and **conditional-access receivers** such as `_scopeFactory?.CreateScope()` and `_provider?.CreateScope()` whose invocation expression is a `MemberBindingExpressionSyntax` inside a `ConditionalAccessExpressionSyntax`. Top-level detection ignores nested async local functions, lambdas, and anonymous methods so otherwise synchronous top-level scope creation stays quiet. Fixer replaces direct safe `using` declaration/statement resources with `CreateAsyncScope()` plus `await using`, including top-level using declarations, and now skips nested `CreateScope()` arguments inside other disposable resource initializers.
 
 ### DI006 -- Static Provider Cache (Warning)
 
@@ -206,8 +206,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1175 |
-| Analyzer tests | 929 |
+| Total tests | 1177 |
+| Analyzer tests | 931 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -222,6 +222,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI005 missed `CreateScope()` calls whose invocation expression was a `MemberBindingExpressionSyntax` (the conditional-access form `provider?.CreateScope()` and `_scopeFactory?.CreateScope()`) because the fast-path filter only matched `MemberAccessExpressionSyntax` and `IdentifierNameSyntax` receivers | Medium | DI005 |
 | Current | DI018 silently accepted delegate-type registrations such as `services.AddSingleton<MyHandler>()` because delegates have implicit public `(object, IntPtr)` constructors that satisfy the public-constructor check, yet the default DI container cannot populate those parameters and the registration fails at activation | Low | DI018 |
 | Current | `RegistrationCollector` discarded one-`Type` non-generic self-binding registrations such as `services.AddSingleton(typeof(MyService))` because the operation-arguments extractor never set `implementationType`, leaving the registration invisible to DI018 (and other downstream rules) even though the DI extension self-binds | Low | Infrastructure (RegistrationCollector) |
 | Current | DI009 captive-dependency analysis consulted only user registrations for parameter lifetime, missing open-generic singleton captures of known scoped framework services such as `IOptionsSnapshot<T>` whose lifetime is provided by the framework Options registration helpers | Medium | DI009 |

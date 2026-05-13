@@ -372,6 +372,64 @@ public class DI005_AsyncDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_OnConditionalAccess_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory?.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(15, 35, 15, 49)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
+    public async Task CreateScope_OnConditionalAccessProvider_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider? _provider;
+
+                public MyService(IServiceProvider? provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _provider?.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(15, 31, 15, 45)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
     public async Task CreateScope_InTopLevelAwaitUsingStatements_ReportsDiagnostic()
     {
         var source = Usings + """
