@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.24] - 2026-05-13
+
 ### Changed
 
 - **DI013 fixer conditional-access removal**: The DI013 remove-invalid-registration code fix now also offers to remove `services?.AddSingleton(typeof(IService), typeof(WrongService))` and other conditional-access registrations when the invocation expression is a `MemberBindingExpressionSyntax` inside a `ConditionalAccessExpressionSyntax`. The fix still requires the enclosing statement to be a standalone block or top-level expression statement, so embedded single-line conditional-access bodies stay manual.
