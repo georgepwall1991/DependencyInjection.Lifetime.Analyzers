@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, and DI005 conditional-access receiver coverage)
-**Version:** 2.8.20
-**Test result:** 1177/1177 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, and DI016 conditional-access receiver hardening)
+**Version:** 2.8.21
+**Test result:** 1180/1180 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -25,7 +25,7 @@
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
 | DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
-| DI016 | BuildServiceProvider Misuse | Warn | 24 | -- | 9.2 | -- | Hardened: builder-flow precision plus null-forgiving and same-type `IServiceCollection` cast unwrap across receivers, helper returns, and local initializers |
+| DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 43 | -- | 9.6 | -- | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services |
@@ -144,9 +144,9 @@ One of the strongest overall rules. Broad support for keyed, inherited-key, `Any
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
-**Analyzer: 9.2/10** | Tests: 24
+**Analyzer: 9.4/10** | Tests: 27
 
-Strong after builder-flow hardening. Covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases, helper methods that forward builder-style flows, and provider-factory guardrails. Latest pass unwraps the null-forgiving operator (`builder.Services!`) and same-type `IServiceCollection` casts (`(IServiceCollection)builder.Services`) when resolving registration receivers, helper return expressions, and local-variable initializers, so nullable-assertive and explicitly cast builder flows no longer hide misuse; provider-factory methods that return `IServiceProvider` keep their guardrail. No code fix -- the correct alternative varies by context.
+Strong after builder-flow hardening. Covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases, helper methods that forward builder-style flows, and provider-factory guardrails. Receiver resolution unwraps the null-forgiving operator (`builder.Services!`) and same-type `IServiceCollection` casts (`(IServiceCollection)builder.Services`) when resolving registration receivers, helper return expressions, and local-variable initializers. Conditional-access invocations are now recognized too: `builder.Services?.BuildServiceProvider()` (where the invocation expression is a `MemberBindingExpressionSyntax` and `TryGetReceiverExpression` walks up to the enclosing `ConditionalAccessExpressionSyntax` for the real receiver) and `builder?.Services.BuildServiceProvider()` (where the receiver-side `.Services` is a `MemberBindingExpressionSyntax` recognized by `IsServicesPropertySource`). Provider-factory methods that return `IServiceProvider` keep their guardrail. No code fix -- the correct alternative varies by context.
 
 ### DI017 -- Circular Dependency (Warning)
 
@@ -206,8 +206,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1177 |
-| Analyzer tests | 931 |
+| Total tests | 1180 |
+| Analyzer tests | 934 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -222,6 +222,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI016 missed `BuildServiceProvider()` misuse when the receiver chain used conditional access (`builder.Services?.BuildServiceProvider()` or `builder?.Services.BuildServiceProvider()`), because `TryGetReceiverExpression` only matched `MemberAccessExpressionSyntax` and `IsServicesPropertySource` did not recognize `MemberBindingExpressionSyntax` as a Services source | Medium | DI016 |
 | Current | DI005 missed `CreateScope()` calls whose invocation expression was a `MemberBindingExpressionSyntax` (the conditional-access form `provider?.CreateScope()` and `_scopeFactory?.CreateScope()`) because the fast-path filter only matched `MemberAccessExpressionSyntax` and `IdentifierNameSyntax` receivers | Medium | DI005 |
 | Current | DI018 silently accepted delegate-type registrations such as `services.AddSingleton<MyHandler>()` because delegates have implicit public `(object, IntPtr)` constructors that satisfy the public-constructor check, yet the default DI container cannot populate those parameters and the registration fails at activation | Low | DI018 |
 | Current | `RegistrationCollector` discarded one-`Type` non-generic self-binding registrations such as `services.AddSingleton(typeof(MyService))` because the operation-arguments extractor never set `implementationType`, leaving the registration invisible to DI018 (and other downstream rules) even though the DI extension self-binds | Low | Infrastructure (RegistrationCollector) |
