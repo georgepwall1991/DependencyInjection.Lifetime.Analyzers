@@ -703,7 +703,7 @@ DI017 intentionally remains conservative:
 
 ## DI018: Non-Instantiable Implementation Type
 
-**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, or concrete classes with no public constructors.
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, delegate types registered without a factory, or concrete classes with no public constructors.
 
 **Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
 
@@ -721,7 +721,7 @@ public sealed class BadPrivateCtorService : IMyService
 services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
 
-DI018 also reports abstract classes, interfaces, and static classes used as implementation types.
+DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
 
 **Better pattern:**
 
@@ -729,6 +729,9 @@ DI018 also reports abstract classes, interfaces, and static classes used as impl
 public sealed class GoodConcreteService : IMyService { }
 
 services.AddSingleton<IMyService, GoodConcreteService>();
+
+// For delegate types, register with a factory expression:
+services.AddSingleton<MyHandler>(sp => (msg) => Console.WriteLine(msg));
 ```
 
 **Code Fix:** No.

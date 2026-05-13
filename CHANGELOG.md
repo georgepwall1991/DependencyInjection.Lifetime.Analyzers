@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI018 delegate-type non-instantiable detection**: DI018 now reports delegate types registered without a factory expression, such as `services.AddSingleton<MyHandler>()` or `services.AddSingleton(typeof(MyHandler))` where `MyHandler` is a `delegate`. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation. Factory registrations and explicit delegate-instance registrations stay quiet.
+- **RegistrationCollector one-Type self-binding**: the shared `RegistrationCollector` now self-binds the one-`Type` non-generic registration overloads (`services.AddSingleton(typeof(T))`, `AddScoped(typeof(T))`, `AddTransient(typeof(T))`, and the `TryAdd*` variants) by defaulting `implementationType` to `serviceType` in the operation-arguments extractor, matching the existing typeof-syntax fallback. The self-binding is gated to overload signatures that actually omit `implementationType` / `implementationFactory` / `implementationInstance`, so the two-`Type` overload with a non-extractable implementation argument such as `services.AddSingleton(typeof(IFoo), variableHoldingType)` keeps `implementationType = null` and no rule misreports a `IFoo -> IFoo` self-binding. This makes the previously-invisible one-`Type` registration shape participate in every downstream rule, not just DI018.
+
 ## [2.8.19] - 2026-05-13
 
 ### Changed

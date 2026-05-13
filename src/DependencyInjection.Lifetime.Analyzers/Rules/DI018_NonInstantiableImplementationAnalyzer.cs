@@ -100,6 +100,15 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
             return "type is abstract";
         }
 
+        // Delegates carry implicit public (object, IntPtr) constructors that the
+        // default DI container cannot populate, so a non-factory registration of
+        // a delegate type fails at activation. The user must register the delegate
+        // through a factory expression.
+        if (type.TypeKind == TypeKind.Delegate)
+        {
+            return "type is a delegate";
+        }
+
         // Structs always have an implicit parameterless constructor, so they
         // are always instantiable by the DI container — matches CanSelfBind.
         if (type.TypeKind == TypeKind.Struct)

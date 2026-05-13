@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, and DI009 known-scoped-framework captive coverage)
-**Version:** 2.8.18
-**Test result:** 1169/1169 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, and DI018 delegate-type non-instantiable detection)
+**Version:** 2.8.19
+**Test result:** 1175/1175 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -27,7 +27,7 @@
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
 | DI016 | BuildServiceProvider Misuse | Warn | 24 | -- | 9.2 | -- | Hardened: builder-flow precision plus null-forgiving and same-type `IServiceCollection` cast unwrap across receivers, helper returns, and local initializers |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
-| DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
+| DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 43 | -- | 9.6 | -- | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services |
 
 `--` = no code fix exists for this rule.
@@ -156,9 +156,11 @@ Major hardening pass applied. Cycle detection now uses reachable, flow-aware eff
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
-**Analyzer: 9/10** | Tests: 28
+**Analyzer: 9.2/10** | Tests: 34
 
-Open-generic constructor checks use the generic definition. Direct coverage spans keyed registrations, `TryAdd`, `ServiceDescriptor.Singleton`/`Describe`, factory and instance silence, constructor accessibility matrices. Correctly detects abstract classes, interfaces, static classes, and types with no accessible constructors.
+Open-generic constructor checks use the generic definition. Direct coverage spans keyed registrations, `TryAdd`, `ServiceDescriptor.Singleton`/`Describe`, factory and instance silence, constructor accessibility matrices. Correctly detects abstract classes, interfaces, static classes, types with no accessible constructors, and delegate types registered without a factory expression including the one-`Type` self-binding overload `services.AddSingleton(typeof(MyDelegate))` (delegates carry only implicit `(object, IntPtr)` / `(object, UIntPtr)` constructors that the default DI container cannot populate, so a non-factory delegate registration fails at activation). Factory registrations and explicit delegate-instance registrations stay quiet.
+
+The shared `RegistrationCollector` now mirrors Pattern 2's self-binding default in the operation-arguments path: when the **selected non-generic overload's signature** exposes only `serviceType` (no `implementationType`, `implementationFactory`, or `implementationInstance` parameter), `implementationType` defaults to `serviceType`. The two-`Type` overload with a non-extractable implementation argument (`services.AddSingleton(typeof(IFoo), variableHoldingType)`) keeps `implementationType = null` so DI018 stays silent rather than collapsing the registration to a false `IFoo -> IFoo` shape. This brings one-`Type` `AddSingleton(typeof(T))` / `AddScoped(typeof(T))` / `AddTransient(typeof(T))` and their `TryAdd*` variants into scope for every downstream rule, not just DI018.
 
 ### DI019 -- Root Scoped Resolution (Warning)
 
@@ -204,8 +206,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1169 |
-| Analyzer tests | 923 |
+| Total tests | 1175 |
+| Analyzer tests | 929 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +222,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI018 silently accepted delegate-type registrations such as `services.AddSingleton<MyHandler>()` because delegates have implicit public `(object, IntPtr)` constructors that satisfy the public-constructor check, yet the default DI container cannot populate those parameters and the registration fails at activation | Low | DI018 |
+| Current | `RegistrationCollector` discarded one-`Type` non-generic self-binding registrations such as `services.AddSingleton(typeof(MyService))` because the operation-arguments extractor never set `implementationType`, leaving the registration invisible to DI018 (and other downstream rules) even though the DI extension self-binds | Low | Infrastructure (RegistrationCollector) |
 | Current | DI009 captive-dependency analysis consulted only user registrations for parameter lifetime, missing open-generic singleton captures of known scoped framework services such as `IOptionsSnapshot<T>` whose lifetime is provided by the framework Options registration helpers | Medium | DI009 |
 | Current | DI016 missed `BuildServiceProvider()` misuse when builder `.Services` flows were wrapped in the null-forgiving operator (`builder.Services!`) or a same-type `IServiceCollection` cast (`(IServiceCollection)builder.Services`) at the call site, in helper return expressions, or in local-variable initializers | Low | DI016 |
 | Current | DI019 missed scoped resolutions from nullable known root-provider properties when the receiver used the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()` | Low | DI019 |
