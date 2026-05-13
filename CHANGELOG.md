@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.20] - 2026-05-13
+
 ### Changed
 
 - **DI018 delegate-type non-instantiable detection**: DI018 now reports delegate types registered without a factory expression, such as `services.AddSingleton<MyHandler>()` or `services.AddSingleton(typeof(MyHandler))` where `MyHandler` is a `delegate`. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation. Factory registrations and explicit delegate-instance registrations stay quiet.
