@@ -31,6 +31,49 @@ public class DI012_TryAddIgnoredCodeFixTests
         """;
 
     [Fact]
+    public async Task CodeFix_RemovesIgnoredTryAddOnConditionalAccess()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddSingleton<IMyService, MyService>();
+                    services?.TryAddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI012_ConditionalRegistrationMisuseAnalyzer, DI012_TryAddIgnoredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+            .WithLocation(12, 18)
+            .WithArguments("IMyService", "line 11");
+
+        await CodeFixVerifier<DI012_ConditionalRegistrationMisuseAnalyzer, DI012_TryAddIgnoredCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                expected,
+                fixedSource,
+                DI012_TryAddIgnoredCodeFixProvider.RemoveIgnoredRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task CodeFix_RemovesIgnoredTryAddSingletonStatement()
     {
         var source = Usings + """

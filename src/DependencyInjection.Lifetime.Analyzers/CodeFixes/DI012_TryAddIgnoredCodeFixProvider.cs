@@ -62,26 +62,26 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
     {
         removalTarget = null!;
 
-        if (invocation?.Parent is not ExpressionStatementSyntax expressionStatement ||
-            !ReferenceEquals(expressionStatement.Expression, invocation) ||
-            invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        if (invocation is null)
         {
             return false;
         }
 
-        removalTarget = expressionStatement.Parent switch
+        // Extract the method name from either a direct member access or a member-binding
+        // expression (the conditional-access form `services?.TryAddSingleton(...)`).
+        SimpleNameSyntax? methodNameSyntax = invocation.Expression switch
         {
-            BlockSyntax => expressionStatement,
-            GlobalStatementSyntax globalStatement => globalStatement,
-            _ => null!,
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Name,
+            MemberBindingExpressionSyntax memberBinding => memberBinding.Name,
+            _ => null,
         };
 
-        if (removalTarget is null)
+        if (methodNameSyntax is null)
         {
             return false;
         }
 
-        var methodName = memberAccess.Name switch
+        var methodName = methodNameSyntax switch
         {
             GenericNameSyntax genericName => genericName.Identifier.ValueText,
             IdentifierNameSyntax identifierName => identifierName.Identifier.ValueText,
@@ -94,7 +94,35 @@ public sealed class DI012_TryAddIgnoredCodeFixProvider : CodeFixProvider
             return false;
         }
 
-        return true;
+        // The expression statement is either the invocation's parent (direct call) or the
+        // enclosing conditional access's parent (`services?.TryAdd*(...)` form).
+        ExpressionSyntax statementExpression = invocation;
+        if (invocation.Parent is MemberBindingExpressionSyntax)
+        {
+            // Should not happen because we already handled the invocation.Expression branch,
+            // but be defensive in case of unexpected shapes.
+            return false;
+        }
+        if (invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull == invocation)
+        {
+            statementExpression = conditionalAccess;
+        }
+
+        if (statementExpression.Parent is not ExpressionStatementSyntax expressionStatement ||
+            !ReferenceEquals(expressionStatement.Expression, statementExpression))
+        {
+            return false;
+        }
+
+        removalTarget = expressionStatement.Parent switch
+        {
+            BlockSyntax => expressionStatement,
+            GlobalStatementSyntax globalStatement => globalStatement,
+            _ => null!,
+        };
+
+        return removalTarget is not null;
     }
 
     private static async Task<Document> RemoveIgnoredRegistrationAsync(

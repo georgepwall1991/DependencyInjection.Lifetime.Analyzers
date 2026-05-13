@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI012 fixer conditional-access support**: The DI012 code fix now also offers to remove ignored `services?.TryAdd*(...)` registrations when the invocation expression is a `MemberBindingExpressionSyntax` inside a `ConditionalAccessExpressionSyntax`. The fixer still requires the enclosing statement to be a standalone block or top-level expression statement, so embedded single-line conditional-access bodies stay manual.
+
 ## [2.8.22] - 2026-05-13
 
 ### Changed
