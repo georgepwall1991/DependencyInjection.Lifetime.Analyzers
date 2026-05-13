@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.22] - 2026-05-13
+
 ### Changed
 
-- **DI016 conditional-access receiver hardening**: DI016 now reports `BuildServiceProvider()` misuse when the call uses conditional access on the receiver chain, such as `builder.Services?.BuildServiceProvider()` (where the invocation's expression is a `MemberBindingExpressionSyntax` and the analyzer walks up to the enclosing `ConditionalAccessExpressionSyntax` to read the real receiver) and `builder?.Services.BuildServiceProvider()` (where the `.Services` member-binding expression is recognized as a Services source). Provider-factory methods that wrap the same shape stay quiet.
+- **DI016 conditional-access receiver hardening**: DI016 now reports `BuildServiceProvider()` misuse when the call uses conditional access on the receiver chain, such as `builder.Services?.BuildServiceProvider()` (where the invocation's expression is a `MemberBindingExpressionSyntax` and the analyzer walks up to the enclosing `ConditionalAccessExpressionSyntax` to read the real receiver), `builder?.Services.BuildServiceProvider()` (where the `.Services` member-binding expression is recognized as a Services source), and chained `builder?.Services?.BuildServiceProvider()`. Provider-factory methods that wrap the same shape stay quiet.
 
 ## [2.8.21] - 2026-05-13
 
