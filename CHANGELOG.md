@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI003 fixer conditional-access lifetime rewrite**: The DI003 lifetime-adjustment code fix now also rewrites conditional-access registration invocations such as `services?.AddSingleton<TFoo, TFooImpl>()` to `services?.AddScoped<TFoo, TFooImpl>()` (or the appropriate replacement lifetime) when the invocation expression is a `MemberBindingExpressionSyntax`. Both `TryRewriteServiceCollectionRegistrationInvocation` and `TryGetCurrentLifetime` recognise the conditional-access shape so the fix is discovered and applied. The rewrite preserves the trigger's null-safe receiver.
+
 ## [2.8.25] - 2026-05-13
 
 ### Changed

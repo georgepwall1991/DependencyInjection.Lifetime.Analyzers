@@ -18,6 +18,66 @@ public class DI003_CaptiveDependencyCodeFixTests
         """;
 
     [Fact]
+    public async Task CodeFix_ConditionalAccessSingletonCapturingScoped_ChangesToScoped()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                private readonly IScopedService _scoped;
+                public SingletonService(IScopedService scoped)
+                {
+                    _scoped = scoped;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddScoped<IScopedService, ScopedService>();
+                    services?.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                private readonly IScopedService _scoped;
+                public SingletonService(IScopedService scoped)
+                {
+                    _scoped = scoped;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddScoped<IScopedService, ScopedService>();
+                    services?.AddScoped<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithSpan(21, 18, 21, 70)
+            .WithArguments("SingletonService", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
     public async Task CodeFix_SingletonCapturingScoped_ChangesToScoped()
     {
         var source = Usings + """

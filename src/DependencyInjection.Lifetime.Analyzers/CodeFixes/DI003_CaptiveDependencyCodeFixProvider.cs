@@ -213,15 +213,25 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
     {
         rewrittenInvocation = invocation;
 
-        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
-            !TryGetLifetimeToken(memberAccess.Name, out _))
+        // Direct member access: `services.AddSingleton<...>(...)`.
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+            TryGetLifetimeToken(memberAccess.Name, out _))
         {
-            return false;
+            var newMethodName = ReplaceLifetimeToken(GetSimpleName(memberAccess.Name), newLifetime);
+            rewrittenInvocation = invocation.WithExpression(memberAccess.WithName(ReplaceSimpleName(memberAccess.Name, newMethodName)));
+            return true;
         }
 
-        var newMethodName = ReplaceLifetimeToken(GetSimpleName(memberAccess.Name), newLifetime);
-        rewrittenInvocation = invocation.WithExpression(memberAccess.WithName(ReplaceSimpleName(memberAccess.Name, newMethodName)));
-        return true;
+        // Conditional-access member binding: `services?.AddSingleton<...>(...)`.
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding &&
+            TryGetLifetimeToken(memberBinding.Name, out _))
+        {
+            var newMethodName = ReplaceLifetimeToken(GetSimpleName(memberBinding.Name), newLifetime);
+            rewrittenInvocation = invocation.WithExpression(memberBinding.WithName(ReplaceSimpleName(memberBinding.Name, newMethodName)));
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryRewriteServiceDescriptorRegistrationInvocation(
@@ -394,6 +404,15 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
 
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
             TryGetLifetimeToken(memberAccess.Name, out lifetime))
+        {
+            return true;
+        }
+
+        // Conditional-access form: `services?.AddSingleton<...>(...)` exposes the
+        // method name through a MemberBindingExpressionSyntax instead of a
+        // MemberAccessExpressionSyntax.
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding &&
+            TryGetLifetimeToken(memberBinding.Name, out lifetime))
         {
             return true;
         }
