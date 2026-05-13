@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI005 conditional-access receiver coverage**: DI005 now detects `CreateScope()` calls whose invocation expression is a `MemberBindingExpressionSyntax` (the conditional-access form `_scopeFactory?.CreateScope()` or `_provider?.CreateScope()`) inside async methods, lambdas, local functions, anonymous methods, and async top-level statements. Symbol verification still requires the receiver to be `IServiceScopeFactory` or `IServiceProvider`, so unrelated `?.CreateScope()` calls on other types stay quiet.
+
 ## [2.8.20] - 2026-05-13
 
 ### Changed

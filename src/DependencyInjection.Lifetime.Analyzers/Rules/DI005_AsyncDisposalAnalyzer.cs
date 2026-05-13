@@ -97,6 +97,15 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
             return memberAccess.Name.Identifier.Text == "CreateScope";
         }
 
+        // Check for pattern: xxx?.CreateScope() — the invocation's expression is a
+        // MemberBindingExpressionSyntax inside a ConditionalAccessExpressionSyntax
+        // (the conditional dereference produces a nested invocation whose expression
+        // is the member binding, not a regular member access).
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding)
+        {
+            return memberBinding.Name.Identifier.Text == "CreateScope";
+        }
+
         // Check for pattern: CreateScope() (unlikely but handle it)
         if (invocation.Expression is IdentifierNameSyntax identifier)
         {
