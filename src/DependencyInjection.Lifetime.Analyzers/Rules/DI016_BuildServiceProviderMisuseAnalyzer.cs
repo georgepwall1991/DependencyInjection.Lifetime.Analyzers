@@ -278,6 +278,33 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 semanticModelsByTree);
         }
 
+        if (expression is PostfixUnaryExpressionSyntax postfix &&
+            postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+        {
+            return IsServicesPropertySource(
+                postfix.Operand,
+                semanticModel,
+                iServiceCollectionType,
+                boundary,
+                depth + 1,
+                visitedSymbols,
+                semanticModelsByTree);
+        }
+
+        if (expression is CastExpressionSyntax cast &&
+            semanticModel.GetTypeInfo(cast.Type).Type is { } castType &&
+            IsAssignableToIServiceCollection(castType, iServiceCollectionType))
+        {
+            return IsServicesPropertySource(
+                cast.Expression,
+                semanticModel,
+                iServiceCollectionType,
+                boundary,
+                depth + 1,
+                visitedSymbols,
+                semanticModelsByTree);
+        }
+
         if (expression is MemberAccessExpressionSyntax memberAccess &&
             semanticModel.GetSymbolInfo(memberAccess).Symbol is IPropertySymbol propertySymbol &&
             propertySymbol.Name == "Services" &&

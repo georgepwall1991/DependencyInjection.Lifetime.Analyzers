@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-08 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, and DI001 branch-exit disposal proof)
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, and DI016 services-source unwrap)
 **Version:** 2.8.17
-**Test result:** 1159/1159 passing.
+**Test result:** 1164/1164 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -25,7 +25,7 @@
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
 | DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
-| DI016 | BuildServiceProvider Misuse | Warn | 19 | -- | 9 | -- | Builder-flow hardened |
+| DI016 | BuildServiceProvider Misuse | Warn | 24 | -- | 9.2 | -- | Hardened: builder-flow precision plus null-forgiving and same-type `IServiceCollection` cast unwrap across receivers, helper returns, and local initializers |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 28 | -- | 9 | -- | Open-generic constructor checks |
 | DI019 | Root Scoped Resolution | Warn | 43 | -- | 9.6 | -- | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services |
@@ -144,9 +144,9 @@ One of the strongest overall rules. Broad support for keyed, inherited-key, `Any
 
 ### DI016 -- BuildServiceProvider Misuse (Warning)
 
-**Analyzer: 9/10** | Tests: 19
+**Analyzer: 9.2/10** | Tests: 24
 
-Strong after builder-flow hardening. Covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases, helper methods that forward builder-style flows, and provider-factory guardrails. No code fix -- the correct alternative varies by context.
+Strong after builder-flow hardening. Covers assignable `IServiceCollection` abstractions, same-boundary `.Services` aliases, helper methods that forward builder-style flows, and provider-factory guardrails. Latest pass unwraps the null-forgiving operator (`builder.Services!`) and same-type `IServiceCollection` casts (`(IServiceCollection)builder.Services`) when resolving registration receivers, helper return expressions, and local-variable initializers, so nullable-assertive and explicitly cast builder flows no longer hide misuse; provider-factory methods that return `IServiceProvider` keep their guardrail. No code fix -- the correct alternative varies by context.
 
 ### DI017 -- Circular Dependency (Warning)
 
@@ -204,8 +204,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1159 |
-| Analyzer tests | 913 |
+| Total tests | 1164 |
+| Analyzer tests | 918 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +220,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI016 missed `BuildServiceProvider()` misuse when builder `.Services` flows were wrapped in the null-forgiving operator (`builder.Services!`) or a same-type `IServiceCollection` cast (`(IServiceCollection)builder.Services`) at the call site, in helper return expressions, or in local-variable initializers | Low | DI016 |
 | Current | DI019 missed scoped resolutions from nullable known root-provider properties when the receiver used the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()` | Low | DI019 |
 | Current | DI001 accepted later shared scope disposal even when a branch-level `return` or straight-line early `return` after creation could bypass the cleanup | Medium | DI001 |
 | Current | DI008 reported descriptor-based disposable transients in `ServiceDescriptor.Describe(...)` and `new ServiceDescriptor(...)` but did not offer the same scoped/singleton lifetime rewrite available for direct and `ServiceDescriptor.Transient(...)` registrations | Low | DI008 |

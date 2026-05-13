@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **DI019 nullable root-provider precision**: DI019 now recognizes nullable-known root provider surfaces used through the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()`, so nullable annotations do not hide scoped root-resolution diagnostics.
+- **DI016 services-source unwrap precision**: DI016 now unwraps the null-forgiving operator (`builder.Services!`) and same-type `IServiceCollection` casts (`(IServiceCollection)builder.Services`) when resolving the registration receiver, helper return expressions, and local-variable initializers, so builder-style flows that suppress nullable warnings or assert the interface no longer hide `BuildServiceProvider()` misuse. Provider-factory methods that return `IServiceProvider` remain silent.
 
 ## [2.8.17] - 2026-05-08
 
