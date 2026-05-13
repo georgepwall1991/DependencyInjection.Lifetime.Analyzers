@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DI009 known-scoped-framework captive coverage**: DI009 now consults the shared `KnownServiceLifetimeClassifier` alongside the registration collector when resolving open-generic constructor dependency lifetimes, so open-generic singletons that capture `IOptionsSnapshot<T>` are reported as scoped captures even when the application does not register Options manually. Explicit closed user registrations such as `services.AddSingleton<IOptionsSnapshot<MyOptions>, MySnapshot>()` keep their declared lifetime and override the framework default for direct captures, and `IEnumerable<T>` captures take the worst (shortest-lived) lifetime across the user registration and the framework classifier so an explicit closed singleton element does not hide an additional open-generic framework scoped element the container still includes. `IOptions<T>` and `IOptionsMonitor<T>` keep their singleton classification and stay quiet.
+
 ## [2.8.18] - 2026-05-13
 
 ### Changed

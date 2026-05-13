@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, and DI016 services-source unwrap)
-**Version:** 2.8.17
-**Test result:** 1164/1164 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, and DI009 known-scoped-framework captive coverage)
+**Version:** 2.8.18
+**Test result:** 1169/1169 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -18,7 +18,7 @@
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
 | DI007 | Service Locator | Info | 38 | -- | 9.6 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
 | DI008 | Disposable Transient | Warn | 44 | 18 | 9.5 | 9.3 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, open generics, descriptor collections, factory guardrails, allowlist option, and descriptor lifetime fixes |
-| DI009 | Open Generic Mismatch | Warn | 22 | 15 | 9 | 9 | Refactored with RegistrationKind/LifetimeKind, defensive SimpleNameSyntax fix |
+| DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.2 | 9 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
 | DI010 | Constructor Over-Injection | Info | 29 | -- | 9.7 | -- | Strongest info-level rule, public-constructor and factory-return precise |
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
 | DI012 | Conditional Registration | Info | 32 | 7 | 9.2 | 8.8 | Complex flow, ignored keyed/non-keyed TryAdd fixer, embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
@@ -100,9 +100,9 @@ Strong coverage across generic registrations, `typeof`, keyed registrations, ope
 
 ### DI009 -- Open Generic Lifetime Mismatch (Warning)
 
-**Analyzer: 9/10** | Tests: 22 | **Fixer: 9/10** | Fix Tests: 15
+**Analyzer: 9.2/10** | Tests: 27 | **Fixer: 9/10** | Fix Tests: 15
 
-Strong analyzer after constructor/collection hardening. Handles optional/default-value constructor selection, ambiguous equally-greedy constructor silence, and `IEnumerable<T>` captures. Code fix refactored with `RegistrationKind`/`LifetimeKind` enum extraction and comprehensive regression suite. Defensive fix: `CreateServiceLifetimeExpression` now emits `ServiceLifetime.X` member access (not bare identifier) for `SimpleNameSyntax`, preventing uncompilable output for const-backed lifetime identifiers.
+Strong analyzer after constructor/collection hardening. Handles optional/default-value constructor selection, ambiguous equally-greedy constructor silence, and `IEnumerable<T>` captures. The dependency-lifetime lookup now consults the closed-generic user registration first, then the open-generic user registration, and finally the shared `KnownServiceLifetimeClassifier`, so open-generic singletons that capture `IOptionsSnapshot<T>` are reported even when the application does not register Options manually, while `IOptions<T>` and `IOptionsMonitor<T>` stay silent because the classifier reports them as singletons. Explicit user registrations of a closed framework-shaped dependency such as `services.AddSingleton<IOptionsSnapshot<MyOptions>, MySnapshot>()` keep their declared lifetime and override the framework default. `IEnumerable<T>` captures combine the user registration and the framework classifier with the worst (shortest-lived) lifetime, so an explicit closed singleton element does not hide an additional open-generic framework scoped element the container still includes. Code fix refactored with `RegistrationKind`/`LifetimeKind` enum extraction and comprehensive regression suite. Defensive fix: `CreateServiceLifetimeExpression` now emits `ServiceLifetime.X` member access (not bare identifier) for `SimpleNameSyntax`, preventing uncompilable output for const-backed lifetime identifiers.
 
 ### DI010 -- Constructor Over-Injection (Info)
 
@@ -204,8 +204,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1164 |
-| Analyzer tests | 918 |
+| Total tests | 1169 |
+| Analyzer tests | 923 |
 | Code fix tests | 131 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -220,6 +220,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI009 captive-dependency analysis consulted only user registrations for parameter lifetime, missing open-generic singleton captures of known scoped framework services such as `IOptionsSnapshot<T>` whose lifetime is provided by the framework Options registration helpers | Medium | DI009 |
 | Current | DI016 missed `BuildServiceProvider()` misuse when builder `.Services` flows were wrapped in the null-forgiving operator (`builder.Services!`) or a same-type `IServiceCollection` cast (`(IServiceCollection)builder.Services`) at the call site, in helper return expressions, or in local-variable initializers | Low | DI016 |
 | Current | DI019 missed scoped resolutions from nullable known root-provider properties when the receiver used the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()` | Low | DI019 |
 | Current | DI001 accepted later shared scope disposal even when a branch-level `return` or straight-line early `return` after creation could bypass the cleanup | Medium | DI001 |

@@ -62,6 +62,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         WellKnownTypes wellKnownTypes)
     {
         var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
+        var knownLifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
 
         foreach (var registration in registrationCollector.AllRegistrations)
         {
@@ -106,6 +107,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                             parameter.Type,
                             GetServiceKey(parameter),
                             registrationCollector,
+                            knownLifetimeClassifier,
                             out var dependencyType,
                             out var dependencyLifetime) ||
                         dependencyLifetime is not { } dependencyLifetimeValue)
@@ -154,6 +156,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         ITypeSymbol parameterType,
         (object? key, bool isKeyed) serviceKey,
         RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier knownLifetimeClassifier,
         out INamedTypeSymbol dependencyType,
         out ServiceLifetime? dependencyLifetime)
     {
@@ -163,7 +166,16 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         if (TryGetEnumerableElementType(parameterType, out var elementType))
         {
             dependencyType = elementType;
-            dependencyLifetime = registrationCollector.GetLifetime(elementType, serviceKey.key, serviceKey.isKeyed);
+            var userElementLifetime = registrationCollector.GetLifetime(elementType, serviceKey.key, serviceKey.isKeyed);
+            var knownElementLifetime = knownLifetimeClassifier.TryGetLifetime(elementType, serviceKey.isKeyed, out var classifierLifetime)
+                ? (ServiceLifetime?)classifierLifetime
+                : null;
+
+            // IEnumerable<T> resolution concatenates every matching registration,
+            // so the captive risk is the worst (shortest-lived) among them. An
+            // explicit closed singleton does not hide an open-generic framework
+            // scoped element that the container still includes.
+            dependencyLifetime = WorstLifetime(userElementLifetime, knownElementLifetime);
             return dependencyLifetime is not null;
         }
 
@@ -174,8 +186,47 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         }
 
         dependencyType = nonGenericType;
+
+        // Closed-generic user registration wins over the open-generic lookup and the
+        // known-framework classifier, so an explicit
+        // `services.AddSingleton<IOptionsSnapshot<MyOptions>, MySnapshot>()`
+        // is respected instead of being overridden by the framework default.
+        if (parameterType is INamedTypeSymbol closedNamedType &&
+            closedNamedType.IsGenericType &&
+            !closedNamedType.IsUnboundGenericType &&
+            !SymbolEqualityComparer.Default.Equals(closedNamedType, nonGenericType))
+        {
+            var closedLifetime = registrationCollector.GetLifetime(closedNamedType, serviceKey.key, serviceKey.isKeyed);
+            if (closedLifetime is not null)
+            {
+                dependencyLifetime = closedLifetime;
+                return true;
+            }
+        }
+
         dependencyLifetime = registrationCollector.GetLifetime(nonGenericType, serviceKey.key, serviceKey.isKeyed);
+        if (dependencyLifetime is null &&
+            knownLifetimeClassifier.TryGetLifetime(parameterType, serviceKey.isKeyed, out var knownLifetime))
+        {
+            dependencyLifetime = knownLifetime;
+        }
         return dependencyLifetime is not null;
+    }
+
+    private static ServiceLifetime? WorstLifetime(ServiceLifetime? left, ServiceLifetime? right)
+    {
+        if (left is null)
+        {
+            return right;
+        }
+        if (right is null)
+        {
+            return left;
+        }
+
+        // ServiceLifetime ordering: Singleton (0) < Scoped (1) < Transient (2).
+        // The shortest-lived registration is the captive risk for a singleton consumer.
+        return (int)left.Value >= (int)right.Value ? left : right;
     }
 
     private static bool TryGetEnumerableElementType(
