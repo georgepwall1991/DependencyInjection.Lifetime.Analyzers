@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.25] - 2026-05-13
+
 ### Changed
 
 - **DI015 fixer conditional-access self-binding**: The DI015 add-missing-registration code fix now also offers to insert a self-binding registration before a `services?.AddXxx<TService, TImpl>()` trigger when the invocation expression is a `MemberBindingExpressionSyntax` inside a `ConditionalAccessExpressionSyntax`. The inserted statement mirrors the trigger's null-safe shape (`services?.AddSingleton<MissingType>();`), so the new line stays null-safe under the same receiver guarantees. The standalone-block requirement is preserved.
