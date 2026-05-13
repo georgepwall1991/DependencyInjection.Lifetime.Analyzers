@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, DI016 conditional-access receiver hardening, and DI012 fixer conditional-access support)
-**Version:** 2.8.22
-**Test result:** 1181/1181 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, DI016 conditional-access receiver hardening, DI012 fixer conditional-access support, and DI013 fixer conditional-access removal)
+**Version:** 2.8.23
+**Test result:** 1182/1182 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -22,7 +22,7 @@
 | DI010 | Constructor Over-Injection | Info | 29 | -- | 9.7 | -- | Strongest info-level rule, public-constructor and factory-return precise |
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
 | DI012 | Conditional Registration | Info | 32 | 8 | 9.2 | 9 | Complex flow, ignored keyed/non-keyed TryAdd fixer covers conditional-access (`services?.TryAdd*(...)`), embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
-| DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
+| DI013 | Implementation Mismatch | Error | 59 | 14 | 9.5 | 9 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal, embedded/top-level rewrite guardrails, and conditional-access (`services?.AddSingleton(...)`) standalone-removal support |
 | DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
@@ -124,9 +124,9 @@ Strong after flow/barrier hardening. Follows same-collection aliases, source-def
 
 ### DI013 -- Implementation Type Mismatch (Error)
 
-**Analyzer: 9.5/10** | Tests: 59 | **Fixer: 8.8/10** | Fix Tests: 13
+**Analyzer: 9.5/10** | Tests: 59 | **Fixer: 9/10** | Fix Tests: 14
 
-Most comprehensive test file in the repo. Covers variance-aware closed generic assignability, open-generic projection checks, collector-fed registration shapes, named direct overload arguments, instance-backed mismatches, all registration patterns (typeof, generic forms), interfaces, base classes, and abstract classes. The only Error-severity rule -- critical that it has no false positives. The fixer intentionally offers broad assists but keeps FixAll disabled because retargeting service/implementation types requires user judgment; coverage now spans invalid implementation-instance service-type retargeting, removal, top-level removals, and embedded single-line safe rewrites as well as `typeof(...)` implementation replacement and removal assists. The remove-registration assist is limited to standalone block or top-level statements while embedded single-line statement bodies require a manual edit or a symbol-backed type rewrite.
+Most comprehensive test file in the repo. Covers variance-aware closed generic assignability, open-generic projection checks, collector-fed registration shapes, named direct overload arguments, instance-backed mismatches, all registration patterns (typeof, generic forms), interfaces, base classes, and abstract classes. The only Error-severity rule -- critical that it has no false positives. The fixer intentionally offers broad assists but keeps FixAll disabled because retargeting service/implementation types requires user judgment; coverage now spans invalid implementation-instance service-type retargeting, removal, top-level removals, embedded single-line safe rewrites, `typeof(...)` implementation replacement and removal assists, and conditional-access (`services?.AddSingleton(...)`) standalone-removal. The remove-registration assist is limited to standalone block or top-level statements while embedded single-line statement bodies require a manual edit or a symbol-backed type rewrite.
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
@@ -181,7 +181,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI008 (Disposable Transient) | 18 | 9.3 | Low -- strong shape coverage, including named `typeof` overloads, `ServiceDescriptor.Transient(...)` method rewrites, and descriptor lifetime-argument replacement |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 8 | 9 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal (now including conditional-access `services?.TryAdd*(...)`) with embedded-statement guardrails |
-| DI013 (Implementation Mismatch) | 13 | 8.8 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, and embedded rewrites are covered, removal is standalone-only, FixAll disabled |
+| DI013 (Implementation Mismatch) | 14 | 9 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, embedded rewrites, and conditional-access standalone removal are covered; removal is standalone-only, FixAll disabled |
 | DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, and chained builders covered |
 | DI015 (Unresolvable Dependency) | 15 | 9 | Low -- keyed, factory, TryAdd, and local-alias self-binding generation is tightly gated; FixAll remains disabled |
 
@@ -206,9 +206,9 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1181 |
+| Total tests | 1182 |
 | Analyzer tests | 934 |
-| Code fix tests | 132 |
+| Code fix tests | 133 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |

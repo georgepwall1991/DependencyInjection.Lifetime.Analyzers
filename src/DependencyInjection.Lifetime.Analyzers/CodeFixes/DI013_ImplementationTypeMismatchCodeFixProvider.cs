@@ -269,8 +269,18 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
     {
         removalNode = null!;
 
-        if (registrationInvocation.Parent is not ExpressionStatementSyntax statement ||
-            !ReferenceEquals(statement.Expression, registrationInvocation))
+        // The statement expression is either the invocation itself (direct
+        // member-access registration) or the enclosing conditional access when
+        // the invocation comes from a `services?.AddSingleton(...)` form.
+        ExpressionSyntax statementExpression = registrationInvocation;
+        if (registrationInvocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull == registrationInvocation)
+        {
+            statementExpression = conditionalAccess;
+        }
+
+        if (statementExpression.Parent is not ExpressionStatementSyntax statement ||
+            !ReferenceEquals(statement.Expression, statementExpression))
         {
             return false;
         }
@@ -302,9 +312,24 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
 
         foreach (var invocation in GetCandidateInvocations(registrationInvocation))
         {
+            // The generic-name part lives on either a MemberAccessExpressionSyntax
+            // (`services.AddSingleton<...>(...)`) or a MemberBindingExpressionSyntax
+            // (`services?.AddSingleton<...>(...)`). The conditional-access form is
+            // rarely reachable in compilable C# for two-type-argument generic DI
+            // overloads because `where TImplementation : class, TService` typically
+            // blocks the mismatch at the compiler. Accept both shapes so the fix
+            // stays consistent with non-generic conditional-access removal even
+            // when only the analyzer-flagged compile-broken path applies.
+            GenericNameSyntax? genericName = invocation.Expression switch
+            {
+                MemberAccessExpressionSyntax { Name: GenericNameSyntax direct } => direct,
+                MemberBindingExpressionSyntax { Name: GenericNameSyntax bound } => bound,
+                _ => null,
+            };
+
             if (GetMethodSymbol(invocation, semanticModel) is not { IsGenericMethod: true } method ||
                 method.TypeArguments.Length < 2 ||
-                invocation.Expression is not MemberAccessExpressionSyntax { Name: GenericNameSyntax genericName } ||
+                genericName is null ||
                 genericName.TypeArgumentList.Arguments.Count < 2)
             {
                 continue;
