@@ -313,6 +313,16 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
             return true;
         }
 
+        // Conditional-access member binding: `builder?.Services.BuildServiceProvider()`
+        // surfaces the `.Services` access here as a MemberBindingExpressionSyntax.
+        if (expression is MemberBindingExpressionSyntax memberBinding &&
+            semanticModel.GetSymbolInfo(memberBinding).Symbol is IPropertySymbol bindingPropertySymbol &&
+            bindingPropertySymbol.Name == "Services" &&
+            IsAssignableToIServiceCollection(bindingPropertySymbol.Type, iServiceCollectionType))
+        {
+            return true;
+        }
+
         if (expression is IdentifierNameSyntax identifierName &&
             semanticModel.GetSymbolInfo(identifierName).Symbol is ILocalSymbol localSymbol)
         {
@@ -371,13 +381,35 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         IInvocationOperation invocation,
         out ExpressionSyntax receiverExpression)
     {
-        if (invocation.Syntax is InvocationExpressionSyntax
-            {
-                Expression: MemberAccessExpressionSyntax { Expression: var receiver },
-            })
+        if (invocation.Syntax is InvocationExpressionSyntax invocationSyntax)
         {
-            receiverExpression = receiver;
-            return true;
+            if (invocationSyntax.Expression is MemberAccessExpressionSyntax { Expression: var receiver })
+            {
+                receiverExpression = receiver;
+                return true;
+            }
+
+            // Conditional-access form: `expr?.BuildServiceProvider()` lowers to an
+            // InvocationExpression whose Expression is a MemberBindingExpression
+            // inside a ConditionalAccessExpression. The "real" receiver is the
+            // conditional access's Expression. Walk up the syntax tree to find it.
+            if (invocationSyntax.Expression is MemberBindingExpressionSyntax)
+            {
+                for (SyntaxNode? node = invocationSyntax.Parent; node is not null; node = node.Parent)
+                {
+                    if (node is ConditionalAccessExpressionSyntax conditionalAccess)
+                    {
+                        receiverExpression = conditionalAccess.Expression;
+                        return true;
+                    }
+
+                    // Stop walking once we leave the immediate access chain.
+                    if (node is StatementSyntax or MemberDeclarationSyntax)
+                    {
+                        break;
+                    }
+                }
+            }
         }
 
         receiverExpression = null!;

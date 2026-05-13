@@ -772,6 +772,7 @@ DI016 is intentionally conservative to reduce false positives:
 - It does not report provider-factory methods that intentionally return `IServiceProvider`.
 - It recognizes assignable `IServiceCollection` abstractions and same-boundary helper/alias flows from `.Services`, but it does not warn on standalone top-level `new ServiceCollection()` composition roots.
 - Builder `.Services` flows wrapped in the null-forgiving operator (`builder.Services!`) or a same-type cast (`(IServiceCollection)builder.Services`) at the call site, in helper return expressions, or in local-variable initializers are still recognized as registration contexts, while provider-factory methods that wrap the same expression stay silent because they return `IServiceProvider`.
+- Conditional-access invocations such as `builder.Services?.BuildServiceProvider()` and `builder?.Services.BuildServiceProvider()` are recognized through the enclosing `ConditionalAccessExpression` and the `MemberBindingExpression`-shaped `.Services` access, so null-safe builder flows participate in detection the same way as direct member access. Provider-factory methods wrapping the same shape stay quiet.
 
 ---
 
