@@ -692,5 +692,136 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
             AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.ReferenceAssembliesWithKeyedDi);
     }
 
+    [Fact]
+    public async Task DelegateType_RegisteredWithoutFactory_Reports()
+    {
+        var source = Usings + """
+            public delegate void MyHandler(string message);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyHandler>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(10, 9)
+                .WithArguments("MyHandler", "MyHandler", "type is a delegate"));
+    }
+
+    [Fact]
+    public async Task DelegateType_RegisteredViaTypeof_WithoutFactory_Reports()
+    {
+        var source = Usings + """
+            public delegate int Calculator(int a, int b);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(Calculator), typeof(Calculator));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(10, 9)
+                .WithArguments("Calculator", "Calculator", "type is a delegate"));
+    }
+
+    [Fact]
+    public async Task TwoTypeNonGenericOverload_ImplementationViaVariable_DoesNotFalseReport()
+    {
+        // Regression guard for the RegistrationCollector self-binding refinement: the
+        // two-argument non-generic overload must not be collapsed to a serviceType ->
+        // serviceType binding when the implementation argument is a runtime expression
+        // such as a typeof variable that the analyzer cannot extract statically.
+        var source = Usings + """
+            using System;
+
+            public interface IFoo { }
+            public sealed class Foo : IFoo { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    Type impl = typeof(Foo);
+                    services.AddSingleton(typeof(IFoo), impl);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateType_RegisteredViaSingleTypeofOverload_Reports()
+    {
+        var source = Usings + """
+            public delegate int Calculator(int a, int b);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(Calculator));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(10, 9)
+                .WithArguments("Calculator", "Calculator", "type is a delegate"));
+    }
+
+    [Fact]
+    public async Task DelegateType_RegisteredWithExplicitInstance_DoesNotReport()
+    {
+        var source = Usings + """
+            public delegate void MyHandler(string message);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyHandler>(new MyHandler(msg => { }));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateType_RegisteredWithFactory_DoesNotReport()
+    {
+        var source = Usings + """
+            public delegate void MyHandler(string message);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyHandler>(sp => (msg) => { });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }

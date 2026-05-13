@@ -1365,6 +1365,20 @@ public sealed class RegistrationCollector
 
         if (TryExtractNonGenericOperationArguments(invocation, semanticModel, isKeyed, out var operationServiceType, out var operationImplementationType, out var operationHasImplementationInstance, out var operationKey))
         {
+            // One-Type self-binding overloads such as AddSingleton(IServiceCollection, Type)
+            // bind implementation := service. Pattern 2 (the typeof-syntax fallback) already
+            // does this; mirror it here so the operation-arguments path stays consistent.
+            // Only apply when the bound method's signature actually omits the implementation /
+            // factory / instance parameters, otherwise a non-extractable implementation argument
+            // (e.g. AddSingleton(typeof(IFoo), variableHoldingType)) would be wrongly recorded
+            // as a service->service self-binding.
+            if (operationImplementationType is null &&
+                !operationHasImplementationInstance &&
+                factoryExpression is null &&
+                IsOneTypeSelfBindingOverload(method))
+            {
+                operationImplementationType = operationServiceType;
+            }
             return (operationServiceType, operationImplementationType, factoryExpression, operationHasImplementationInstance, operationKey);
         }
 
@@ -1419,6 +1433,27 @@ public sealed class RegistrationCollector
         }
 
         return (null, null, null, false, key);
+    }
+
+    private static bool IsOneTypeSelfBindingOverload(IMethodSymbol method)
+    {
+        var sourceMethod = method.ReducedFrom ?? method;
+        bool sawServiceType = false;
+        foreach (var parameter in sourceMethod.Parameters)
+        {
+            switch (parameter.Name)
+            {
+                case "serviceType":
+                    sawServiceType = true;
+                    break;
+                case "implementationType":
+                case "implementationInstance":
+                case "implementationFactory":
+                    return false;
+            }
+        }
+
+        return sawServiceType;
     }
 
     private static bool TryExtractNonGenericOperationArguments(
