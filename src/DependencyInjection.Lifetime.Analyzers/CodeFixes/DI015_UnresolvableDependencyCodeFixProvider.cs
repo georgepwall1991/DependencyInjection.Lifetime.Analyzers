@@ -191,24 +191,84 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
             .FirstOrDefault(candidate => IsSafeRegistrationSite(candidate, semanticModel));
     }
 
+    private readonly struct RegistrationCallShape
+    {
+        public RegistrationCallShape(
+            IdentifierNameSyntax receiver,
+            SimpleNameSyntax methodName,
+            bool isConditionalAccess)
+        {
+            Receiver = receiver;
+            MethodName = methodName;
+            IsConditionalAccess = isConditionalAccess;
+        }
+
+        public IdentifierNameSyntax Receiver { get; }
+
+        public SimpleNameSyntax MethodName { get; }
+
+        public bool IsConditionalAccess { get; }
+    }
+
+    private static bool TryGetRegistrationCallShape(
+        InvocationExpressionSyntax? invocation,
+        out RegistrationCallShape shape)
+    {
+        shape = default;
+
+        if (invocation is null)
+        {
+            return false;
+        }
+
+        // Direct: services.AddSingleton<...>(...)
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+            memberAccess.Expression is IdentifierNameSyntax directReceiver)
+        {
+            shape = new RegistrationCallShape(directReceiver, memberAccess.Name, isConditionalAccess: false);
+            return true;
+        }
+
+        // Conditional access: services?.AddSingleton<...>(...). The invocation's
+        // Expression is a MemberBindingExpressionSyntax and the receiver is the
+        // enclosing ConditionalAccessExpressionSyntax's Expression.
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding &&
+            invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull == invocation &&
+            conditionalAccess.Expression is IdentifierNameSyntax conditionalReceiver)
+        {
+            shape = new RegistrationCallShape(conditionalReceiver, memberBinding.Name, isConditionalAccess: true);
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool IsSafeRegistrationSite(
         InvocationExpressionSyntax? invocation,
         SemanticModel semanticModel)
     {
-        if (invocation?.Expression is not MemberAccessExpressionSyntax memberAccess ||
-            memberAccess.Expression is not IdentifierNameSyntax receiver ||
-            !TryGetSupportedRegistrationLifetime(memberAccess.Name, out _) ||
-            invocation.FirstAncestorOrSelf<ExpressionStatementSyntax>()?.Parent is not BlockSyntax)
+        if (!TryGetRegistrationCallShape(invocation, out var shape) ||
+            !TryGetSupportedRegistrationLifetime(shape.MethodName, out _))
         {
             return false;
         }
 
-        if (semanticModel.GetSymbolInfo(receiver).Symbol is not (ILocalSymbol or IParameterSymbol))
+        // For direct calls the registration statement is the invocation's enclosing
+        // expression statement; for conditional-access calls it's the conditional
+        // access's enclosing expression statement.
+        var registrationStatement = invocation!.FirstAncestorOrSelf<ExpressionStatementSyntax>();
+        if (registrationStatement?.Parent is not BlockSyntax)
         {
             return false;
         }
 
-        return ImplementsIServiceCollection(semanticModel.GetTypeInfo(receiver).Type);
+        if (semanticModel.GetSymbolInfo(shape.Receiver).Symbol is not (ILocalSymbol or IParameterSymbol))
+        {
+            return false;
+        }
+
+        return ImplementsIServiceCollection(semanticModel.GetTypeInfo(shape.Receiver).Type);
     }
 
     private static async Task<Document> AddMissingRegistrationAsync(
@@ -225,16 +285,15 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
 
         var node = root.FindNode(fixTarget.InvocationSpan, getInnermostNodeForTie: true);
         var invocation = node as InvocationExpressionSyntax ?? node.FirstAncestorOrSelf<InvocationExpressionSyntax>();
-        if (invocation?.Expression is not MemberAccessExpressionSyntax memberAccess ||
-            memberAccess.Expression is not IdentifierNameSyntax receiver ||
-            invocation.FirstAncestorOrSelf<ExpressionStatementSyntax>() is not ExpressionStatementSyntax registrationStatement ||
+        if (!TryGetRegistrationCallShape(invocation, out var shape) ||
+            invocation!.FirstAncestorOrSelf<ExpressionStatementSyntax>() is not ExpressionStatementSyntax registrationStatement ||
             registrationStatement.Parent is not BlockSyntax block ||
             !IsSafeRegistrationSite(invocation, semanticModel))
         {
             return document;
         }
 
-        var insertedStatement = CreateRegistrationStatement(receiver, fixTarget);
+        var insertedStatement = CreateRegistrationStatement(shape.Receiver, fixTarget, shape.IsConditionalAccess);
         var statementIndex = block.Statements.IndexOf(registrationStatement);
         if (statementIndex < 0)
         {
@@ -250,7 +309,8 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
 
     private static ExpressionStatementSyntax CreateRegistrationStatement(
         IdentifierNameSyntax receiver,
-        RegistrationFixTarget fixTarget)
+        RegistrationFixTarget fixTarget,
+        bool conditionalAccess)
     {
         var methodName = fixTarget.Lifetime switch
         {
@@ -261,22 +321,42 @@ public sealed class DI015_UnresolvableDependencyCodeFixProvider : CodeFixProvide
 
         var typeSyntax = SyntaxFactory.ParseTypeName(fixTarget.MissingDependencyTypeName)
             .WithAdditionalAnnotations(Formatter.Annotation);
-        var invocation = SyntaxFactory.InvocationExpression(
-            SyntaxFactory.MemberAccessExpression(
-                SyntaxKind.SimpleMemberAccessExpression,
-                SyntaxFactory.IdentifierName(receiver.Identifier),
-                SyntaxFactory.GenericName(
-                    SyntaxFactory.Identifier(methodName),
-                    SyntaxFactory.TypeArgumentList(
-                        SyntaxFactory.SingletonSeparatedList(typeSyntax)))),
-            fixTarget.IsKeyed
-                ? SyntaxFactory.ArgumentList(
-                    SyntaxFactory.SingletonSeparatedList(
-                        SyntaxFactory.Argument(
-                            SyntaxFactory.ParseExpression(fixTarget.KeyLiteral!))))
-                : SyntaxFactory.ArgumentList());
 
-        return SyntaxFactory.ExpressionStatement(invocation)
+        var genericName = SyntaxFactory.GenericName(
+            SyntaxFactory.Identifier(methodName),
+            SyntaxFactory.TypeArgumentList(
+                SyntaxFactory.SingletonSeparatedList(typeSyntax)));
+
+        var argumentList = fixTarget.IsKeyed
+            ? SyntaxFactory.ArgumentList(
+                SyntaxFactory.SingletonSeparatedList(
+                    SyntaxFactory.Argument(
+                        SyntaxFactory.ParseExpression(fixTarget.KeyLiteral!))))
+            : SyntaxFactory.ArgumentList();
+
+        ExpressionSyntax registrationExpression;
+        if (conditionalAccess)
+        {
+            // Mirror the trigger registration's `services?.AddXxx(...)` shape so the
+            // inserted statement stays null-safe under the same receiver guarantees.
+            var innerInvocation = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberBindingExpression(genericName),
+                argumentList);
+            registrationExpression = SyntaxFactory.ConditionalAccessExpression(
+                SyntaxFactory.IdentifierName(receiver.Identifier),
+                innerInvocation);
+        }
+        else
+        {
+            registrationExpression = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.IdentifierName(receiver.Identifier),
+                    genericName),
+                argumentList);
+        }
+
+        return SyntaxFactory.ExpressionStatement(registrationExpression)
             .WithAdditionalAnnotations(Formatter.Annotation);
     }
 
