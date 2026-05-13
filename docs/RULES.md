@@ -409,6 +409,8 @@ services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 
 DI009 follows the single likely activation constructor the container can actually use. Optional/default-value parameters are treated as activatable during that selection, and ambiguous equally-greedy constructor sets stay silent instead of guessing.
 
+Dependency lifetimes are looked up against user registrations first and then fall back to the shared known-framework classifier, so open-generic singletons that capture `IOptionsSnapshot<T>` are reported as scoped captures even when the application does not register Options manually. `IOptions<T>` and `IOptionsMonitor<T>` keep their singleton lifetime and stay quiet.
+
 **Code Fix:** Yes. Can adjust lifetime for open generic registrations.
 
 ---

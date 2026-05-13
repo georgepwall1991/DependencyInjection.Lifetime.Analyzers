@@ -13,6 +13,16 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
 
         """;
 
+    private const string OptionsStubs = """
+        namespace Microsoft.Extensions.Options
+        {
+            public interface IOptions<T> { }
+            public interface IOptionsSnapshot<T> { }
+            public interface IOptionsMonitor<T> { }
+        }
+
+        """;
+
     #region Should Report Diagnostic
 
     [Fact]
@@ -689,6 +699,149 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
         };
 
         await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_CapturesEnumerableOfOptionsSnapshotWithExplicitSingletonRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public sealed class CustomSnapshot : Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> { }
+
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(System.Collections.Generic.IEnumerable<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>> snapshots) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>, CustomSnapshot>();
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IOptionsSnapshot"));
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_CapturesClosedOptionsSnapshotWithExplicitSingletonRegistration_NoDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public sealed class CustomSnapshot : Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> { }
+
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> snapshot) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>, CustomSnapshot>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_CapturesOptions_NoDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(
+                    Microsoft.Extensions.Options.IOptions<T> options,
+                    Microsoft.Extensions.Options.IOptionsMonitor<T> monitor) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_CapturesOptionsSnapshot_ReportsDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(Microsoft.Extensions.Options.IOptionsSnapshot<T> snapshot) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IOptionsSnapshot"));
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_CapturesNonGenericOptionsSnapshotInstance_ReportsDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> snapshot) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IOptionsSnapshot"));
     }
 
     [Fact]
