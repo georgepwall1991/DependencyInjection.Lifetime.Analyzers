@@ -37,6 +37,55 @@ public class DI015_UnresolvableDependencyCodeFixTests
         """;
 
     [Fact]
+    public async Task CodeFix_AddsMissingSelfBinding_ForConditionalAccessRegistration()
+    {
+        var source = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public sealed class MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddSingleton<global::MissingDependency>();
+                    services?.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithSpan(15, 18, 15, 56)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task CodeFix_AddsMissingSelfBinding_ForDirectConstructorDependency()
     {
         var source = Usings + """
