@@ -14,6 +14,45 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
         """;
 
     [Fact]
+    public async Task RemoveInvalidRegistration_ConditionalAccessTypeofRegistration_RemovesStatement()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddSingleton(typeof(IService), typeof(WrongService));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithSpan(9, 18, 9, 71)
+                    .WithArguments("WrongService", "IService"),
+                fixedSource,
+                DI013_ImplementationTypeMismatchCodeFixProvider.RemoveInvalidRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task RemoveInvalidRegistration_TypeofRegistration_RemovesStatement()
     {
         var source = Usings + """
