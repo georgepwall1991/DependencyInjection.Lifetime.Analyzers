@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, and DI016 conditional-access receiver hardening)
-**Version:** 2.8.21
-**Test result:** 1180/1180 passing.
+**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, DI016 conditional-access receiver hardening, and DI012 fixer conditional-access support)
+**Version:** 2.8.22
+**Test result:** 1181/1181 passing.
 **Analyzers:** 19 (DI001-DI019)
 **Code fix providers:** 12
 
@@ -21,7 +21,7 @@
 | DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.2 | 9 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
 | DI010 | Constructor Over-Injection | Info | 29 | -- | 9.7 | -- | Strongest info-level rule, public-constructor and factory-return precise |
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
-| DI012 | Conditional Registration | Info | 32 | 7 | 9.2 | 8.8 | Complex flow, ignored keyed/non-keyed TryAdd fixer, embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
+| DI012 | Conditional Registration | Info | 32 | 8 | 9.2 | 9 | Complex flow, ignored keyed/non-keyed TryAdd fixer covers conditional-access (`services?.TryAdd*(...)`), embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 13 | 9.5 | 8.8 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal and embedded/top-level rewrite guardrails |
 | DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
 | DI015 | Unresolvable Dependency | Warn | 121 | 15 | 9.8 | 9 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered |
@@ -118,9 +118,9 @@ Uses likely-public-activation-constructor logic with good allowance coverage for
 
 ### DI012 -- Conditional Registration Misuse (Info)
 
-**Analyzer: 9.2/10** | Tests: 32 | **Fixer: 8.8/10** | Fix Tests: 7
+**Analyzer: 9.2/10** | Tests: 32 | **Fixer: 9/10** | Fix Tests: 8
 
-Strong after flow/barrier hardening. Follows same-collection aliases, source-defined helper/local-function wrappers, distinct object-created collection flows, keyed variants, ServiceDescriptor shapes, EF Core helper registrations that preserve earlier explicit context registrations, and opaque ordering barriers. Supports both DI012 (TryAdd ignored) and DI012b (duplicate registration) diagnostics. The fixer removes standalone block-contained or top-level ignored `TryAdd*` and `TryAddKeyed*` registrations while leaving duplicate override cases and embedded single-line statement bodies manual.
+Strong after flow/barrier hardening. Follows same-collection aliases, source-defined helper/local-function wrappers, distinct object-created collection flows, keyed variants, ServiceDescriptor shapes, EF Core helper registrations that preserve earlier explicit context registrations, and opaque ordering barriers. Supports both DI012 (TryAdd ignored) and DI012b (duplicate registration) diagnostics. The fixer removes standalone block-contained or top-level ignored `TryAdd*` and `TryAddKeyed*` registrations, including the conditional-access form `services?.TryAdd*(...)` whose invocation expression is a `MemberBindingExpressionSyntax` inside a `ConditionalAccessExpressionSyntax`. Duplicate override cases and embedded single-line statement bodies stay manual.
 
 ### DI013 -- Implementation Type Mismatch (Error)
 
@@ -180,7 +180,7 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI006 (Static Provider Cache) | 16 | 9.2 | Low -- direct and `Lazy<T>` cache shapes covered with conservative static-context fix gating |
 | DI008 (Disposable Transient) | 18 | 9.3 | Low -- strong shape coverage, including named `typeof` overloads, `ServiceDescriptor.Transient(...)` method rewrites, and descriptor lifetime-argument replacement |
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
-| DI012 (Ignored TryAdd) | 7 | 8.8 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal with embedded-statement guardrails |
+| DI012 (Ignored TryAdd) | 8 | 9 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal (now including conditional-access `services?.TryAdd*(...)`) with embedded-statement guardrails |
 | DI013 (Implementation Mismatch) | 13 | 8.8 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, and embedded rewrites are covered, removal is standalone-only, FixAll disabled |
 | DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, and chained builders covered |
 | DI015 (Unresolvable Dependency) | 15 | 9 | Low -- keyed, factory, TryAdd, and local-alias self-binding generation is tightly gated; FixAll remains disabled |
@@ -206,9 +206,9 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1180 |
+| Total tests | 1181 |
 | Analyzer tests | 934 |
-| Code fix tests | 131 |
+| Code fix tests | 132 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
