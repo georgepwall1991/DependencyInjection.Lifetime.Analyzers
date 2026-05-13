@@ -296,6 +296,114 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
         await test.RunAsync();
     }
 
+    [Fact]
+    public async Task BuilderParameterMethod_WithNullForgivingServicesReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    builder.Services!.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(12, 27));
+    }
+
+    [Fact]
+    public async Task BuilderParameterMethod_WithSameTypeCastServicesReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    ((IServiceCollection)builder.Services).BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(12, 48));
+    }
+
+    [Fact]
+    public async Task TopLevelStatements_WithNullForgivingServicesAccess_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            var builder = new FakeBuilder();
+            builder.Services!.BuildServiceProvider();
+
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI016_BuildServiceProviderMisuseAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = Microsoft.CodeAnalysis.Testing.ReferenceAssemblies.Net.Net60
+                .AddPackages([
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0"),
+                ]),
+        };
+        test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(4, 19));
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task HelperMethodReturningNullForgivingServices_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    GetServices(builder).BuildServiceProvider();
+                }
+
+                private static IServiceCollection GetServices(FakeBuilder builder) => builder.Services!;
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(12, 30));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -458,6 +566,27 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
         test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
 
         await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ProviderFactoryMethod_WithNullForgivingServicesReceiver_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class ProviderFactory
+            {
+                public static IServiceProvider Create(FakeBuilder builder)
+                {
+                    return builder.Services!.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     #endregion
