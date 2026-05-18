@@ -411,7 +411,7 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         // Allow real ASP.NET Core middleware Invoke/InvokeAsync methods.
         if (methodName == "Invoke" || methodName == "InvokeAsync")
         {
-            return IsMiddlewareInvokeMethod(methodDecl, semanticModel);
+            return MiddlewareDetection.IsMiddlewareInvokeMethod(methodDecl, semanticModel);
         }
 
         // Allow factory-shaped Create*/Build* methods, but do not let side-effect methods
@@ -465,33 +465,6 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         return !type.IsGenericType &&
                type.Name is "Task" or "ValueTask" &&
                type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
-    }
-
-    private static bool IsMiddlewareInvokeMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
-    {
-        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
-        if (symbol?.ContainingType is not INamedTypeSymbol)
-        {
-            return false;
-        }
-
-        return symbol.DeclaredAccessibility == Accessibility.Public &&
-               IsTaskType(symbol.ReturnType) &&
-               symbol.Parameters.Length > 0 &&
-               IsAspNetCoreHttpContext(symbol.Parameters[0].Type);
-    }
-
-    private static bool IsTaskType(ITypeSymbol type)
-    {
-        return type is INamedTypeSymbol { IsGenericType: false } &&
-               type.Name == "Task" &&
-               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
-    }
-
-    private static bool IsAspNetCoreHttpContext(ITypeSymbol type)
-    {
-        return type.Name == "HttpContext" &&
-               type.ContainingNamespace?.ToDisplayString() == "Microsoft.AspNetCore.Http";
     }
 
     private static bool IsHostingMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)

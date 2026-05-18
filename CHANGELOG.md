@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DI020 - Middleware Captive Dependency**: New analyzer that detects ASP.NET Core convention-based middleware (`RequestDelegate` constructor + `Invoke`/`InvokeAsync(HttpContext)` method) whose constructor captures a scoped or transient service. Middleware activated via `app.UseMiddleware<T>()` is constructed once and held for the application lifetime, so per-request services captured in the constructor become stale or disposed across requests. Factory-based middleware that implements `IMiddleware` is correctly excluded - its per-request activation makes scoped constructor capture safe. Ships with a `#pragma warning disable DI020` suppression code fix.
+- **Shared middleware detection helper** (`Infrastructure/MiddlewareDetection.cs`): Centralizes the convention-middleware shape recognition used by DI020 (strict, including `RequestDelegate` ctor and `IMiddleware` exclusion) and the looser exemption check used by DI007 and DI011 (just the `Invoke`/`InvokeAsync(HttpContext) -> Task` shape).
+
 ## [2.8.26] - 2026-05-13
 
 ### Changed

@@ -30,6 +30,7 @@ For the latest full rule content, see:
 | [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 | [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | No |
+| [DI020](#di020-middleware-captive-dependency) | Middleware captive dependency | Warning | Yes |
 
 ---
 
@@ -765,3 +766,66 @@ var db = scope.ServiceProvider.GetRequiredService<MyDbContext>();
 DI019 also reports singleton and hosted-service methods that resolve scoped services from an injected root provider.
 
 **Code Fix:** No. Creating the right scope can change control flow and disposal semantics, so the fix should be chosen deliberately.
+
+## DI020: Middleware Captive Dependency
+
+**What it catches:** ASP.NET Core convention-based middleware classes whose constructor takes a scoped or transient service. A class is recognized as convention middleware when it has a public `Invoke` or `InvokeAsync` method returning `Task` whose first parameter is `Microsoft.AspNetCore.Http.HttpContext`, *and* it has a public constructor that takes a `Microsoft.AspNetCore.Http.RequestDelegate` parameter, *and* it does not implement `Microsoft.AspNetCore.Http.IMiddleware`. The middleware instance is activated by `ActivatorUtilities` when `app.UseMiddleware<T>()` is called at startup and is held in the request pipeline for the lifetime of the application, so any per-request service captured in the constructor is pinned to that effective-singleton lifetime.
+
+**Why it matters:** the captured scoped or transient reference is reused across every subsequent request. This causes:
+
+- Stale per-request state - the values that belonged to whichever request happened to be active when the middleware was constructed are shared with every later request.
+- `ObjectDisposedException` on captured scoped services that hold resources (`DbContext`, transaction scopes, etc.) once the originating scope is disposed.
+- Silent leakage of request-specific data (user identity, tenant context, request-scoped caches) between unrelated requests.
+
+The bug is invisible during normal local development because the first request usually has a clean scope, but it ships to production where concurrent requests share the captured state.
+
+> **Explain Like I'm Ten:** A hall monitor stays in the hallway all day. If you hand them a lunchbox at first period, they keep that same lunchbox for everyone - even when each lunch should get a fresh one.
+
+**Problem:**
+
+```csharp
+public class TenantHeaderMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly IScopedTenantContext _tenant; // pinned for app lifetime
+
+    public TenantHeaderMiddleware(RequestDelegate next, IScopedTenantContext tenant)
+    {
+        _next = next;
+        _tenant = tenant;
+    }
+
+    public Task InvokeAsync(HttpContext context) => _next(context);
+}
+```
+
+**Better pattern:** move the per-request dependency to a parameter of `Invoke`/`InvokeAsync`. ASP.NET Core resolves those parameters per-request from `HttpContext.RequestServices`, so each invocation gets a fresh instance from the current request scope.
+
+```csharp
+public class TenantHeaderMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public TenantHeaderMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public Task InvokeAsync(HttpContext context, IScopedTenantContext tenant)
+    {
+        // 'tenant' is resolved per-request.
+        return _next(context);
+    }
+}
+```
+
+**Exclusions and exceptions:**
+
+- Factory-based middleware that implements `Microsoft.AspNetCore.Http.IMiddleware` is excluded. Those classes are activated per-request by `IMiddlewareFactory` and their lifetime matches their registration, so capturing scoped services in the constructor is correct.
+- `RequestDelegate`, `IServiceProvider`, `IServiceScopeFactory`, `IKeyedServiceProvider`, `ILogger`/`ILogger<T>`, and `IConfiguration` parameters are skipped. `IServiceProvider` injection is covered by [DI011](#di011-iserviceprovider-injection).
+- `IOptions<T>` (singleton) is not flagged. `IOptionsSnapshot<T>` (scoped) and `IOptionsMonitor<T>` patterns that resolve to a scoped lifetime are flagged - if you genuinely want the once-at-startup snapshot, suppress the diagnostic with `#pragma warning disable DI020` and document the intent in code.
+- If the parameter's service type cannot be resolved (not registered anywhere in the compilation and not a known framework abstraction), DI020 stays silent rather than guess - mirroring DI003's conservative behavior.
+
+**Limitations:** DI020 inherits DI003's per-compilation registration view. In multi-assembly solutions where registrations live in a different assembly than the middleware, the analyzer may not see the registration and therefore not infer the lifetime. Add a registration in the same assembly or open an issue if this affects your codebase.
+
+**Code Fix:** Yes. A `#pragma warning disable DI020` is offered around the constructor. The rewrite that moves the captured parameter onto `Invoke`/`InvokeAsync` is deferred to a follow-up.

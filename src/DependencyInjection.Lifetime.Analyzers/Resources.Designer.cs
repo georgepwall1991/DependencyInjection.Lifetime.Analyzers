@@ -182,4 +182,18 @@ internal static class Resources
     /// </summary>
     internal static string DI015_FixTitle_AddMissingRegistration =>
         ResourceManager.GetString("DI015_FixTitle_AddMissingRegistration", Culture) ?? "Add missing registration";
+
+    // DI020: Middleware Captive Dependency
+
+    /// <summary>
+    /// Looks up a localized string: Move dependency to '{0}' parameter
+    /// </summary>
+    internal static string DI020_FixTitle_MoveToInvokeParameter =>
+        ResourceManager.GetString("DI020_FixTitle_MoveToInvokeParameter", Culture) ?? "Move dependency to '{0}' parameter";
+
+    /// <summary>
+    /// Looks up a localized string: Suppress with #pragma
+    /// </summary>
+    internal static string DI020_FixTitle_Suppress =>
+        ResourceManager.GetString("DI020_FixTitle_Suppress", Culture) ?? "Suppress with #pragma";
 }

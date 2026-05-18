@@ -98,7 +98,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Problem Area | Example Rules |
 |--------------|---------------|
 | Scope disposal and leaks | `DI001`, `DI004`, `DI005`, `DI014` |
-| Lifetime mismatches | `DI003`, `DI009` |
+| Lifetime mismatches | `DI003`, `DI009`, `DI020` |
 | Service location and architectural drift | `DI006`, `DI007`, `DI011` |
 | Registration correctness and activation validity | `DI012`, `DI013`, `DI015`, `DI016`, `DI018` |
 | Dependency graph correctness | `DI017` |
@@ -132,6 +132,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI017: Circular Dependency](#di017-circular-dependency)
 - [DI018: Non-Instantiable Implementation Type](#di018-non-instantiable-implementation-type)
 - [DI019: Scoped Service Resolved From Root Provider](#di019-scoped-service-resolved-from-root-provider)
+- [DI020: Middleware Captive Dependency](#di020-middleware-captive-dependency)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -159,6 +160,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 | [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | No |
+| [DI020](#di020-middleware-captive-dependency) | Middleware captive dependency | Warning | Yes |
 
 ---
 
@@ -873,9 +875,63 @@ DI019 also reports singleton and hosted-service methods that resolve scoped serv
 
 ---
 
+## DI020: Middleware Captive Dependency
+
+**What it catches:** ASP.NET Core convention-based middleware classes (those with a public `Invoke` or `InvokeAsync` method that takes `HttpContext` and a constructor that takes `RequestDelegate`) whose constructor captures a scoped or transient service. Middleware activated through `app.UseMiddleware<T>()` is constructed once by `ActivatorUtilities` at startup and held in the request pipeline for the application's lifetime, so any per-request service captured in the constructor becomes pinned to that effective-singleton lifetime. Factory-based middleware that implements `IMiddleware` is excluded - it is activated per-request by `IMiddlewareFactory` and its lifetime matches its registration.
+
+**Why it matters:** the captured scoped service is shared across every request even though it was activated in the context of the first one. This leads to stale per-request state (user identity, tenant context, request-scoped caches), `ObjectDisposedException` on captured `DbContext` and other disposable scoped services, and silent data leakage between unrelated requests.
+
+> **Explain Like I'm Ten:** A hall monitor stays in the hallway all day. If you hand them a lunchbox at first period, they keep that same lunchbox for everyone — even when you need a fresh one each lunch.
+
+**Problem:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly IScopedService _scoped; // captured for app lifetime
+
+    public MyMiddleware(RequestDelegate next, IScopedService scoped)
+    {
+        _next = next;
+        _scoped = scoped;
+    }
+
+    public Task InvokeAsync(HttpContext context) => _next(context);
+}
+```
+
+**Better pattern:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public MyMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    // Per-request resolution: ASP.NET Core supplies the scoped service from
+    // HttpContext.RequestServices on every invocation.
+    public Task InvokeAsync(HttpContext context, IScopedService scoped)
+    {
+        // use 'scoped' here
+        return _next(context);
+    }
+}
+```
+
+DI020 ignores `IServiceProvider`, `IServiceScopeFactory`, `IKeyedServiceProvider`, `ILogger`/`ILogger<T>`, `IConfiguration`, and `IOptions<T>` parameters, all of which are singleton-safe or covered by other rules. `IOptionsSnapshot<T>` is flagged because it is scoped - if you genuinely want the once-at-startup snapshot, suppress the diagnostic and document the intent.
+
+**Code Fix:** Yes (suppression). A `#pragma warning disable DI020` is offered around the constructor for cases where the captive lifetime is intentional and reviewed.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI019`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI020`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

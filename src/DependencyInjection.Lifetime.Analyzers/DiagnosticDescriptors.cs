@@ -261,4 +261,17 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "Scoped services should be resolved from an IServiceScope, not from the root IServiceProvider. Create a scope with CreateScope or CreateAsyncScope before resolving scoped services.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI020: ASP.NET Core middleware constructor captures a scoped or transient dependency.
+    /// </summary>
+    public static readonly DiagnosticDescriptor MiddlewareCaptiveDependency = new(
+        id: DiagnosticIds.MiddlewareCaptiveDependency,
+        title: "Middleware captures scoped service in constructor",
+        messageFormat: "Middleware '{0}' captures {1} service '{2}' in its constructor. Move it to '{3}' parameters for per-request resolution.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "ASP.NET Core convention-based middleware is activated once and held for the lifetime of the application. Capturing a scoped or transient service in the constructor pins it to that effective-singleton lifetime, causing stale state or disposed dependencies across requests. Resolve per-request services as parameters of Invoke/InvokeAsync instead - the request pipeline supplies them from HttpContext.RequestServices.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

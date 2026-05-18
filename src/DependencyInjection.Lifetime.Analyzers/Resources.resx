@@ -144,4 +144,12 @@
     <value>Add missing registration</value>
   </data>
 
+  <!-- DI020: Middleware Captive Dependency -->
+  <data name="DI020_FixTitle_MoveToInvokeParameter" xml:space="preserve">
+    <value>Move dependency to '{0}' parameter</value>
+  </data>
+  <data name="DI020_FixTitle_Suppress" xml:space="preserve">
+    <value>Suppress with #pragma</value>
+  </data>
+
 </root>

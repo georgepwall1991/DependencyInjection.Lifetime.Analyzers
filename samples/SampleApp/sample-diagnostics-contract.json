@@ -637,6 +637,19 @@
           "severity": "note"
         }
       ]
+    },
+    {
+      "folder": "DI020",
+      "ruleId": "DI020",
+      "claims": [
+        {
+          "filePathContains": "DI020/MiddlewareCaptiveDependencyExamples.cs",
+          "anchor": "public BadCaptiveMiddleware(RequestDelegate next, IScopedService scoped)",
+          "ruleId": "DI020",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],
