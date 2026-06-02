@@ -97,4 +97,9 @@ public static class DiagnosticIds
     /// DI019: Scoped service resolved from root provider.
     /// </summary>
     public const string RootScopedResolution = "DI019";
+
+    /// <summary>
+    /// DI020: Middleware captures scoped dependency in constructor.
+    /// </summary>
+    public const string MiddlewareScopedService = "DI020";
 }

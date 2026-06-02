@@ -637,6 +637,19 @@
           "severity": "note"
         }
       ]
+    },
+    {
+      "folder": "DI020",
+      "ruleId": "DI020",
+      "claims": [
+        {
+          "filePathContains": "DI020/MiddlewareScopedServiceExamples.cs",
+          "anchor": "public Bad_MiddlewareConstructorCapture(RequestDelegate next, IScopedService scoped)",
+          "ruleId": "DI020",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

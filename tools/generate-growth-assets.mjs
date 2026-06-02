@@ -150,6 +150,13 @@ const ruleSampleConfig = {
       { label: "Sample app scoped-provider pattern", symbol: "GoodScopedResolutionExample" },
     ],
   },
+  DI020: {
+    samplePath: "samples/SampleApp/Diagnostics/DI020/MiddlewareScopedServiceExamples.cs",
+    highlights: [
+      { label: "Sample app middleware capture warning", symbol: "Bad_MiddlewareConstructorCapture" },
+      { label: "Sample app safe invoke pattern", symbol: "Good_MiddlewareInvokeResolution" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(

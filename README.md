@@ -20,7 +20,7 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, cir
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
 - Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 19 focused diagnostics, with code fixes where safe and unambiguous.
+- Ships 20 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.8.26
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.9.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.26">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.8.26" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.0" />
 ```
 
 Then reference it from the project file:
@@ -103,6 +103,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Registration correctness and activation validity | `DI012`, `DI013`, `DI015`, `DI016`, `DI018` |
 | Dependency graph correctness | `DI017` |
 | Root-provider lifetime validation | `DI019` |
+| Middleware lifetime validation | `DI020` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -132,6 +133,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI017: Circular Dependency](#di017-circular-dependency)
 - [DI018: Non-Instantiable Implementation Type](#di018-non-instantiable-implementation-type)
 - [DI019: Scoped Service Resolved From Root Provider](#di019-scoped-service-resolved-from-root-provider)
+- [DI020: Middleware Captures Scoped Service In Constructor](#di020-middleware-captures-scoped-service-in-constructor)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -158,7 +160,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
 | [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
-| [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | No |
+| [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | Yes |
+| [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 
 ---
 
@@ -869,13 +872,70 @@ var db = scope.ServiceProvider.GetRequiredService<MyDbContext>();
 
 DI019 also reports singleton and hosted-service methods that resolve scoped services from an injected root provider.
 
-**Code Fix:** No. Creating the right scope can change control flow and disposal semantics, so the fix should be chosen deliberately.
+**Shows the full resolution path.** When a scoped service is reached *indirectly*, DI019 names every hop on the way down, so you never have to trace the graph by hand to find out why an innocent-looking resolution is unsafe:
+
+```text
+DI019: Service 'OrderProcessor' resolves scoped dependency from the root provider:
+       OrderProcessor -> IInvoiceBuilder -> IRepository -> AppDbContext
+```
+
+That is strictly more actionable than the container's own `ValidateOnBuild` exception, which reports only the two endpoints and leaves the chain in between for you to reconstruct.
+
+**Code Fix:** Yes. Offers to wrap the resolution in a `using` declaration or block with a new scope.
+
+---
+
+## DI020: Middleware Captures Scoped Service In Constructor
+
+**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service).
+
+**Why it matters:** Conventional middleware (used via `app.UseMiddleware<T>()`) is instantiated once per application lifetime. Injecting a scoped service into the constructor will cause that specific scoped instance to be captured for the entire application lifetime, which often leads to "captive dependency" bugs or runtime errors (e.g., if the service is a DbContext).
+
+**Problem:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly IMyScopedService _scoped;
+
+    public MyMiddleware(RequestDelegate next, IMyScopedService scoped)
+    {
+        _next = next;
+        _scoped = scoped; // Scoped service captured in singleton middleware!
+    }
+
+    public Task InvokeAsync(HttpContext context) => _next(context);
+}
+```
+
+**Better pattern:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public MyMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    // Resolve scoped services from InvokeAsync parameters
+    public Task InvokeAsync(HttpContext context, IMyScopedService scoped)
+    {
+        return _next(context);
+    }
+}
+```
+
+**Code Fix:** No. Moving dependencies to the `InvokeAsync` method may require significant architectural changes.
 
 ---
 
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI019`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI020`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

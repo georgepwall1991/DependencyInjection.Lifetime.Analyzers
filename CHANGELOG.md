@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-06-01
+
+### Added
+
+- **DI020 — Middleware captures scoped dependency in constructor (new rule)**: Conventional middleware (registered via `app.UseMiddleware<T>()`) is instantiated once for the application lifetime, so a scoped service captured by its constructor is held for the whole process. DI020 flags constructor dependencies that reach a scoped service — both directly and transitively through the activation graph (reusing the same `ScopedDependencyGraph` walker as DI019) — and points to resolving them from the `Invoke`/`InvokeAsync` parameters instead. Warning severity.
+- **DI019 resolution-path diagnostics**: When a scoped service is reached *indirectly* from a root provider, DI019 now renders the full activation chain in the message — `Service 'OrderProcessor' resolves scoped dependency from the root provider: OrderProcessor -> IInvoiceBuilder -> IRepository -> AppDbContext` — instead of naming only the two endpoints. `ScopedDependencyGraph` reconstructs the path as its depth-first search unwinds (cache-safe, no detection-behavior change), and the chain is also exposed through a `ResolutionPath` diagnostic property. This is strictly more actionable than the container's own `ValidateOnBuild` exception, which reports only the endpoints.
+- **DI019 code fix**: DI019 now offers a code fix that wraps the offending resolution in a `using` scope (`CreateScope()` / `CreateAsyncScope()`) so scoped services are resolved from a child scope rather than the root provider.
+
 ## [2.8.26] - 2026-05-13
 
 ### Changed

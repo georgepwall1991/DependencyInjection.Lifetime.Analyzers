@@ -144,4 +144,9 @@
     <value>Add missing registration</value>
   </data>
 
+  <!-- DI019: Root Scoped Resolution -->
+  <data name="DI019_FixTitle_WrapInScope" xml:space="preserve">
+    <value>Wrap in 'CreateScope()'</value>
+  </data>
+
 </root>

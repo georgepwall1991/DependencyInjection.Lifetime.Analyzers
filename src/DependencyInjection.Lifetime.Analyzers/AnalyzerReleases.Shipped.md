@@ -57,6 +57,13 @@ Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI019 | DependencyInjection | Warning | Scoped service resolved from root provider
 
+## Release 2.9.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI020 | DependencyInjection | Warning | Middleware captures scoped dependency in constructor
+
 ## Release 2.1.2
 
 ### Changed Rules
