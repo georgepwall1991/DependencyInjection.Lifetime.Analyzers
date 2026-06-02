@@ -1,10 +1,10 @@
 # Analyzer Health Report
 
-**Date:** 2026-05-13 (release hardening, EF helper precision, DI019 root-surface and nullable-root filtering, delegate-factory guards, DI014 ownership-flow precision, DI001 branch-exit disposal proof, DI016 services-source unwrap, DI009 known-scoped-framework captive coverage, DI018 delegate-type non-instantiable detection, DI005 conditional-access receiver coverage, DI016 conditional-access receiver hardening, DI012 fixer conditional-access support, DI013 fixer conditional-access removal, DI015 fixer conditional-access self-binding, and DI003 fixer conditional-access lifetime rewrite)
-**Version:** 2.8.25
-**Test result:** 1184/1184 passing.
-**Analyzers:** 19 (DI001-DI019)
-**Code fix providers:** 12
+**Date:** 2026-06-01 (DI020 middleware scoped-capture rule, DI019 resolution-path diagnostics, and DI019 root-scoped-resolution code fix)
+**Version:** 2.9.0
+**Test result:** 1223/1223 passing.
+**Analyzers:** 20 (DI001-DI020)
+**Code fix providers:** 13
 
 ## Summary
 
@@ -28,7 +28,8 @@
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
-| DI019 | Root Scoped Resolution | Warn | 43 | -- | 9.6 | -- | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services |
+| DI019 | Root Scoped Resolution | Warn | 53 | 15 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, and async-aware (`CreateAsyncScope`/`await using`) |
+| DI020 | Middleware Scoped Service | Warn | 19 | -- | 9.3 | -- | New rule: conventional middleware constructors that capture scoped services (direct and transitive, via the shared `ScopedDependencyGraph`) for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance |
 
 `--` = no code fix exists for this rule.
 
@@ -206,14 +207,14 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1184 |
-| Analyzer tests | 934 |
-| Code fix tests | 135 |
+| Total tests | 1223 |
+| Analyzer tests | 958 |
+| Code fix tests | 150 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
-| Rules at 9+ | 19/19 (100%) |
-| Fixers at 8+ | 12/12 (100%) |
+| Rules at 9+ | 20/20 (100%) |
+| Fixers at 8+ | 13/13 (100%) |
 | Rules needing pass | 0 analyzers, 0 fixers |
 | TODO/FIXME in source | 0 |
 | Skipped tests | 0 |

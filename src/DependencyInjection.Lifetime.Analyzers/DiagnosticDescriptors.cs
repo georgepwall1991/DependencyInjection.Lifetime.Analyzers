@@ -255,10 +255,23 @@ public static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor RootScopedResolution = new(
         id: DiagnosticIds.RootScopedResolution,
         title: "Scoped service resolved from root provider",
-        messageFormat: "Service '{0}' resolves scoped dependency '{1}' from the root provider",
+        messageFormat: "Service '{0}' resolves scoped dependency from the root provider: {1}",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Scoped services should be resolved from an IServiceScope, not from the root IServiceProvider. Create a scope with CreateScope or CreateAsyncScope before resolving scoped services.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI020: Middleware captures scoped dependency in constructor.
+    /// </summary>
+    public static readonly DiagnosticDescriptor MiddlewareScopedService = new(
+        id: DiagnosticIds.MiddlewareScopedService,
+        title: "Middleware captures scoped dependency in constructor",
+        messageFormat: "Middleware '{0}' captures scoped dependency '{1}' in its constructor",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Middleware are typically instantiated once and live for the application lifetime. Injecting scoped services into the constructor will capture them for the entire application lifetime, which can lead to threading issues or stale data. Move scoped dependencies to the 'Invoke' or 'InvokeAsync' method instead.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

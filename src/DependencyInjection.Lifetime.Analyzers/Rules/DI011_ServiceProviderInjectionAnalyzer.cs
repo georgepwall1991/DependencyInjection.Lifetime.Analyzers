@@ -199,38 +199,12 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
 
     private static bool IsNonGenericTaskLikeType(INamedTypeSymbol type)
     {
-        return !type.IsGenericType &&
-               type.Name is "Task" or "ValueTask" &&
-               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+        return MiddlewareHelpers.IsNonGenericTaskLikeType(type);
     }
 
     private static bool IsMiddlewareClass(INamedTypeSymbol type)
     {
-        return type.GetMembers()
-            .OfType<IMethodSymbol>()
-            .Any(IsMiddlewareInvokeMethod);
-    }
-
-    private static bool IsMiddlewareInvokeMethod(IMethodSymbol method)
-    {
-        return method.Name is "Invoke" or "InvokeAsync" &&
-               method.DeclaredAccessibility == Accessibility.Public &&
-               IsTaskType(method.ReturnType) &&
-               method.Parameters.Length > 0 &&
-               IsAspNetCoreHttpContext(method.Parameters[0].Type);
-    }
-
-    private static bool IsTaskType(ITypeSymbol type)
-    {
-        return type is INamedTypeSymbol { IsGenericType: false } &&
-               type.Name == "Task" &&
-               type.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
-    }
-
-    private static bool IsAspNetCoreHttpContext(ITypeSymbol type)
-    {
-        return type.Name == "HttpContext" &&
-               type.ContainingNamespace?.ToDisplayString() == "Microsoft.AspNetCore.Http";
+        return MiddlewareHelpers.IsMiddlewareClass(type);
     }
 
     private static bool IsHostedServiceClass(INamedTypeSymbol type)

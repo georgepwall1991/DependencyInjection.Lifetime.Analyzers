@@ -17,6 +17,7 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 {
     internal const string ScopedDependencyTypeNamePropertyName = "ScopedDependencyTypeName";
+    internal const string ResolutionPathPropertyName = "ResolutionPath";
 
     private readonly struct InvocationObservation
     {
@@ -803,8 +804,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     {
         var requestedTypeName = requestedType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
         var scopedTypeName = scopedMatch.ScopedType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        var resolutionPath = FormatResolutionPath(scopedMatch);
         var properties = ImmutableDictionary<string, string?>.Empty
-            .Add(ScopedDependencyTypeNamePropertyName, scopedTypeName);
+            .Add(ScopedDependencyTypeNamePropertyName, scopedTypeName)
+            .Add(ResolutionPathPropertyName, resolutionPath);
 
         var diagnostic = Diagnostic.Create(
             DiagnosticDescriptors.RootScopedResolution,
@@ -812,8 +815,27 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             additionalLocations: null,
             properties: properties,
             requestedTypeName,
-            scopedTypeName);
+            resolutionPath);
 
         context.ReportDiagnostic(diagnostic);
+    }
+
+    /// <summary>
+    /// Renders the activation chain from the requested service to the captured scoped service as
+    /// <c>Requested -&gt; Intermediate -&gt; Scoped</c>. This turns an otherwise opaque transitive
+    /// warning into a precise map of exactly how the root provider reaches a scoped dependency.
+    /// </summary>
+    private static string FormatResolutionPath(
+        ScopedDependencyGraph.ScopedDependencyMatch scopedMatch)
+    {
+        var path = scopedMatch.Path;
+        if (path.IsDefaultOrEmpty)
+        {
+            return scopedMatch.ScopedType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        }
+
+        return string.Join(
+            " -> ",
+            path.Select(node => node.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
     }
 }

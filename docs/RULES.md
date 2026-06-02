@@ -29,7 +29,8 @@ For the latest full rule content, see:
 | [DI016](#di016-buildserviceprovider-misuse) | BuildServiceProvider misuse during registration | Warning | No |
 | [DI017](#di017-circular-dependency) | Circular dependency | Warning | No |
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
-| [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | No |
+| [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | Yes |
+| [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 
 ---
 
@@ -764,4 +765,61 @@ var db = scope.ServiceProvider.GetRequiredService<MyDbContext>();
 
 DI019 also reports singleton and hosted-service methods that resolve scoped services from an injected root provider.
 
-**Code Fix:** No. Creating the right scope can change control flow and disposal semantics, so the fix should be chosen deliberately.
+**Shows the full resolution path.** When a scoped service is reached *indirectly*, DI019 names every hop on the way down, so you never have to trace the graph by hand to find out why an innocent-looking resolution is unsafe:
+
+```text
+DI019: Service 'OrderProcessor' resolves scoped dependency from the root provider:
+       OrderProcessor -> IInvoiceBuilder -> IRepository -> AppDbContext
+```
+
+That is strictly more actionable than the container's own `ValidateOnBuild` exception, which reports only the two endpoints and leaves the chain in between for you to reconstruct.
+
+**Code Fix:** Yes. Offers to wrap the resolution in a `using` declaration or block with a new scope.
+
+---
+
+## DI020: Middleware Captures Scoped Service In Constructor
+
+**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service).
+
+**Why it matters:** Conventional middleware (used via `app.UseMiddleware<T>()`) is instantiated once per application lifetime. Injecting a scoped service into the constructor will cause that specific scoped instance to be captured for the entire application lifetime, which often leads to "captive dependency" bugs or runtime errors (e.g., if the service is a DbContext).
+
+**Problem:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly IMyScopedService _scoped;
+
+    public MyMiddleware(RequestDelegate next, IMyScopedService scoped)
+    {
+        _next = next;
+        _scoped = scoped; // Scoped service captured in singleton middleware!
+    }
+
+    public Task InvokeAsync(HttpContext context) => _next(context);
+}
+```
+
+**Better pattern:**
+
+```csharp
+public class MyMiddleware
+{
+    private readonly RequestDelegate _next;
+
+    public MyMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    // Resolve scoped services from InvokeAsync parameters
+    public Task InvokeAsync(HttpContext context, IMyScopedService scoped)
+    {
+        return _next(context);
+    }
+}
+```
+
+**Code Fix:** No. Moving dependencies to the `InvokeAsync` method may require significant architectural changes.

@@ -19,6 +19,54 @@ public class DI001_ScopeMustBeDisposedCodeFixTests
         """;
 
     [Fact]
+    public async Task CodeFix_AddsUsingStatement_ForConditionalAccessFactory()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    var scope = _scopeFactory?.CreateScope();
+                    var service = scope?.ServiceProvider.GetService<object>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void DoWork()
+                {
+                    using var scope = _scopeFactory?.CreateScope();
+                    var service = scope?.ServiceProvider.GetService<object>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 35, 15, 49)
+            .WithArguments("CreateScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddUsing");
+    }
+
+    [Fact]
     public async Task CodeFix_AddsUsingStatement_SyncMethod()
     {
         var source = Usings + """

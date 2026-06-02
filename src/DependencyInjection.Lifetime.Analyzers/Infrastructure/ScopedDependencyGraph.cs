@@ -52,11 +52,22 @@ internal sealed class ScopedDependencyGraph
     public readonly struct ScopedDependencyMatch
     {
         public ScopedDependencyMatch(ITypeSymbol requestedType, ITypeSymbol scopedType, object? key, bool isKeyed)
+            : this(requestedType, scopedType, key, isKeyed, ImmutableArray<ITypeSymbol>.Empty)
+        {
+        }
+
+        private ScopedDependencyMatch(
+            ITypeSymbol requestedType,
+            ITypeSymbol scopedType,
+            object? key,
+            bool isKeyed,
+            ImmutableArray<ITypeSymbol> path)
         {
             RequestedType = requestedType;
             ScopedType = scopedType;
             Key = key;
             IsKeyed = isKeyed;
+            Path = path.IsDefault ? ImmutableArray<ITypeSymbol>.Empty : path;
         }
 
         public ITypeSymbol RequestedType { get; }
@@ -66,6 +77,21 @@ internal sealed class ScopedDependencyGraph
         public object? Key { get; }
 
         public bool IsKeyed { get; }
+
+        /// <summary>
+        /// The activation path from the requested service to the scoped service, ordered
+        /// root-first (requested service) to leaf-last (the scoped service). Each node is a
+        /// service type the container resolves on the way to the captured scoped dependency.
+        /// </summary>
+        public ImmutableArray<ITypeSymbol> Path { get; }
+
+        /// <summary>
+        /// Returns a copy of this match with <paramref name="node"/> prepended to the resolution
+        /// path. As the depth-first search unwinds, each enclosing requested type prepends itself,
+        /// reconstructing the full root-to-scoped chain without threading extra state through the walk.
+        /// </summary>
+        internal ScopedDependencyMatch PrependToPath(ITypeSymbol node) =>
+            new(RequestedType, ScopedType, Key, IsKeyed, Path.Insert(0, node));
     }
 
     private readonly RegistrationCollector _registrationCollector;
@@ -121,6 +147,7 @@ internal sealed class ScopedDependencyGraph
     {
         if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
         {
+            match = match.PrependToPath(requestedType);
             return true;
         }
 
@@ -132,6 +159,7 @@ internal sealed class ScopedDependencyGraph
                     visited,
                     out match))
             {
+                match = match.PrependToPath(requestedType);
                 return true;
             }
         }
@@ -149,12 +177,15 @@ internal sealed class ScopedDependencyGraph
     {
         if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
         {
+            match = match.PrependToPath(requestedType);
             return true;
         }
 
         var lookupKey = new ServiceLookupKey(requestedType, key, isKeyed);
         if (_cache.TryGetValue(lookupKey, out var cached))
         {
+            // Cached matches already include their own node at the head of the path, so the
+            // suffix is reusable regardless of which ancestor route reached this node.
             match = cached.GetValueOrDefault();
             return cached.HasValue;
         }
@@ -174,6 +205,7 @@ internal sealed class ScopedDependencyGraph
                     out match))
             {
                 visited.Remove(lookupKey);
+                match = match.PrependToPath(requestedType);
                 _cache[lookupKey] = match;
                 return true;
             }

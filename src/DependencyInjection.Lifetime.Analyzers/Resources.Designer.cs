@@ -182,4 +182,12 @@ internal static class Resources
     /// </summary>
     internal static string DI015_FixTitle_AddMissingRegistration =>
         ResourceManager.GetString("DI015_FixTitle_AddMissingRegistration", Culture) ?? "Add missing registration";
+
+    // DI019: Root Scoped Resolution
+
+    /// <summary>
+    /// Looks up a localized string: Wrap in 'CreateScope()'
+    /// </summary>
+    internal static string DI019_FixTitle_WrapInScope =>
+        ResourceManager.GetString("DI019_FixTitle_WrapInScope", Culture) ?? "Wrap in 'CreateScope()'";
 }

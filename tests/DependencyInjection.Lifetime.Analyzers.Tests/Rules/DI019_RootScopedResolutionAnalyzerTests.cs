@@ -957,7 +957,7 @@ public class DI019_RootScopedResolutionAnalyzerTests
             AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
                 .WithLocation(0)
-                .WithArguments("IJobRunner", "IScopedService"));
+                .WithArguments("IJobRunner", "IJobRunner -> IScopedService"));
     }
 
     [Fact]
@@ -1520,5 +1520,118 @@ public class DI019_RootScopedResolutionAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DeepTransitiveScopedDependency_ReportsResolutionPath()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public interface IRepository { }
+            public class Repository : IRepository
+            {
+                public Repository(IScopedService scoped) { }
+            }
+            public interface IInvoiceBuilder { }
+            public class InvoiceBuilder : IInvoiceBuilder
+            {
+                public InvoiceBuilder(IRepository repository) { }
+            }
+            public interface IOrderProcessor { }
+            public class OrderProcessor : IOrderProcessor
+            {
+                public OrderProcessor(IInvoiceBuilder builder) { }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddTransient<IRepository, Repository>();
+                    services.AddTransient<IInvoiceBuilder, InvoiceBuilder>();
+                    services.AddTransient<IOrderProcessor, OrderProcessor>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IOrderProcessor>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments(
+                    "IOrderProcessor",
+                    "IOrderProcessor -> IInvoiceBuilder -> IRepository -> IScopedService"));
+    }
+
+    [Fact]
+    public async Task TransitiveScopedDependencyThroughFactory_ReportsResolutionPath()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public interface IRepository { }
+            public class Repository : IRepository
+            {
+                public Repository(IScopedService scoped) { }
+            }
+            public interface IUnitOfWork { }
+            public class UnitOfWork : IUnitOfWork
+            {
+                public UnitOfWork(IRepository repository) { }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddTransient<IRepository, Repository>();
+                    services.AddTransient<IUnitOfWork>(sp =>
+                        new UnitOfWork(sp.GetRequiredService<IRepository>()));
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IUnitOfWork>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments(
+                    "IUnitOfWork",
+                    "IUnitOfWork -> IRepository -> IScopedService"));
+    }
+
+    [Fact]
+    public async Task DirectScopedResolution_ReportsSingleNodePath()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
     }
 }
