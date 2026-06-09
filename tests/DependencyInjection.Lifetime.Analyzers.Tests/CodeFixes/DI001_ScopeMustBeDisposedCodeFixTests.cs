@@ -165,6 +165,90 @@ public class DI001_ScopeMustBeDisposedCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_ConditionalAccessCreation_AsyncMethod_DoesNotOfferAwaitUsing()
+    {
+        // `_scopeFactory?.CreateAsyncScope()` would produce a nullable AsyncServiceScope
+        // (Nullable<AsyncServiceScope> has no DisposeAsync), so the await-using rewrite cannot
+        // compile for conditional-access creations. Only the plain using fix is offered.
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory?.CreateScope();
+                    var service = scope?.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 35, 15, 49)
+            .WithArguments("CreateScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI001_AddAwaitUsing");
+    }
+
+    [Fact]
+    public async Task CodeFix_AddsUsingStatement_ConditionalAccessCreation_AsyncMethod()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory?.CreateScope();
+                    var service = scope?.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyService(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _scopeFactory?.CreateScope();
+                    var service = scope?.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 35, 15, 49)
+            .WithArguments("CreateScope");
+
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddUsing");
+    }
+
+    [Fact]
     public async Task CodeFix_AddsUsingStatement_AsyncMethodWithUsingOption()
     {
         // Even in async methods, we should still offer the "using" option

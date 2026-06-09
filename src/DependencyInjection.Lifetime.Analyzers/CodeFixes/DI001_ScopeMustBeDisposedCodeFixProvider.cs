@@ -68,8 +68,12 @@ public sealed class DI001_ScopeMustBeDisposedCodeFixProvider : CodeFixProvider
                 equivalenceKey: AddUsingEquivalenceKey),
             diagnostic);
 
-        // Offer "Add 'await using' statement" only when the nearest callable can await it.
-        if (isAsyncContext)
+        // Offer "Add 'await using' statement" only when the nearest callable can await it, and the
+        // creation is not a conditional access: `factory?.CreateAsyncScope()` produces a nullable
+        // AsyncServiceScope (a Nullable<T> with no DisposeAsync), so the await-using rewrite cannot
+        // compile for that shape. The plain using fix above stays valid because the scope local is a
+        // nullable reference type there.
+        if (isAsyncContext && invocation.Expression is not MemberBindingExpressionSyntax)
         {
             context.RegisterCodeFix(
                 CodeAction.Create(

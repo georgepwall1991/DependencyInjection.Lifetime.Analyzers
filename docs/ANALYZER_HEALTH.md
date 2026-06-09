@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-09 (DI019 conditional-access receiver classification and code-fix guardrail)
-**Version:** 2.9.1
-**Test result:** 1229/1229 passing.
+**Date:** 2026-06-09 (DI019 conditional-access receiver classification; DI001 conditional-access disposal proofs and await-using fixer guardrail)
+**Version:** 2.9.2
+**Test result:** 1237/1237 passing.
 **Analyzers:** 20 (DI001-DI020)
 **Code fix providers:** 13
 
@@ -10,7 +10,7 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 53 | 12 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails |
+| DI001 | Scope Disposal | Warn | 59 | 14 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
 | DI002 | Scope Escape | Warn | 33 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage |
 | DI003 | Captive Dependency | Warn | 107 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
 | DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
@@ -51,9 +51,9 @@
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 9.6/10** | Tests: 53 | **Fixer: 8.8/10** | Fix Tests: 12
+**Analyzer: 9.6/10** | Tests: 59 | **Fixer: 8.8/10** | Fix Tests: 14
 
-Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, catch blocks, or after branch exits that can bypass shared cleanup, while continuing to accept straight-line, same-branch pre-exit, mutually exclusive branch-exit, and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement and now offers `await using` only when the nearest callable can legally await it, so synchronous `CreateAsyncScope()` fixes stay on plain `using`.
+Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Conditional-access creations (`_provider?.CreateScope()`) participate in the consumption-shape proofs: the analyzer resolves the enclosing `ConditionalAccessExpressionSyntax` before matching initializer, assignment, return-statement, and arrow-body parents, so explicitly disposed (`scope?.Dispose()` including `finally` cleanup and predeclared reassignment), returned, and arrow-returned conditional creations stay quiet while undisposed ones still report. The await-using fix is suppressed for conditional-access creations because `factory?.CreateAsyncScope()` yields a nullable `AsyncServiceScope` with no `DisposeAsync`; the plain using fix remains offered for that shape. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, catch blocks, or after branch exits that can bypass shared cleanup, while continuing to accept straight-line, same-branch pre-exit, mutually exclusive branch-exit, and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement and now offers `await using` only when the nearest callable can legally await it, so synchronous `CreateAsyncScope()` fixes stay on plain `using`.
 
 ### DI002 -- Scope Escape (Warning)
 
@@ -175,7 +175,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | Fixer | Fix Tests | Score | Risk Assessment |
 |-------|-----------|-------|-----------------|
-| DI001 (Scope Disposal) | 12 | 8.8 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates, unsafe await-using suppression) |
+| DI001 (Scope Disposal) | 14 | 8.8 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates, unsafe await-using suppression, conditional-access creation using/await-using gating) |
 | DI002 (Scope Escape) | 8 | 8.5 | Low -- pragma-only suppression now covers direct, nested-boundary, alias, ref/out, property, and captured-delegate diagnostics |
 | DI003 (Captive Dependency) | 13 | 9 | Low -- direct, keyed, TryAdd, inline-factory, typeof, ServiceDescriptor argument, descriptor-factory shape coverage, and conditional-access (`services?.AddXxx<...>()`) lifetime rewrite |
 | DI004 (Use After Dispose) | 9 | 8.8 | Low -- move fix is gated to owning-scope immediate and awaited invocations, with unsafe escape/adjacent-scope shapes suppressed |
@@ -210,9 +210,9 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1229 |
-| Analyzer tests | 963 |
-| Code fix tests | 151 |
+| Total tests | 1237 |
+| Analyzer tests | 969 |
+| Code fix tests | 153 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
@@ -226,6 +226,8 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI001 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var scope = _provider?.CreateScope();` with later `scope?.Dispose()` including `finally` cleanup and predeclared reassignment, `return _provider?.CreateScope();`, and arrow-bodied returns) were reported as leaks even though the scope was handled | Medium | DI001 |
+| Current | The DI001 "Add 'await using'" fix converted only `MemberAccessExpressionSyntax` receivers to `CreateAsyncScope`, so for conditional-access creations in async contexts it emitted `await using var scope = factory?.CreateScope();`, which does not compile (`IServiceScope` is not `IAsyncDisposable`; the converted form would not compile either because `factory?.CreateAsyncScope()` yields `Nullable<AsyncServiceScope>` with no `DisposeAsync`) | Medium | DI001 |
 | Current | DI019 receiver extraction classified the conditional-access receiver (`host` in `host?.Services.GetRequiredService<T>()`) instead of the true provider receiver (the `.Services` member binding), so known root-provider properties accessed through conditional access -- `host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases -- were never reported | Medium | DI019 |
 | Current | DI019 scoped-provider recognition did not handle `MemberBindingExpressionSyntax`, so once conditional-access receivers became reachable, `httpContext?.RequestServices...` and `scope?.ServiceProvider...` inside singleton implementations would have fallen through to the singleton heuristic as false positives; the DI019 code fix also offered a rewrite for `var s = host?.Services.GetRequiredService<T>();` that emitted a standalone member binding (`using var scope = .Services.CreateScope();`) which does not compile | Medium | DI019 |
 | Current | DI016 missed `BuildServiceProvider()` misuse when the receiver chain used conditional access (`builder.Services?.BuildServiceProvider()` or `builder?.Services.BuildServiceProvider()`), because `TryGetReceiverExpression` only matched `MemberAccessExpressionSyntax` and `IsServicesPropertySource` did not recognize `MemberBindingExpressionSyntax` as a Services source | Medium | DI016 |
