@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.3] - 2026-06-09
+
+### Changed
+
+- **DI014 conditional-access disposal proofs**: DI014 no longer reports root providers created through conditional access (`services?.BuildServiceProvider()`) that are in fact handled. As with DI001 in 2.9.2, the consumption-shape checks matched the invocation's direct parent, so `var provider = services?.BuildServiceProvider();` with a later `provider?.Dispose()` (including `finally` cleanup and predeclared reassignment), `return services?.BuildServiceProvider();`, and arrow-bodied returns all produced false positives. The analyzer now resolves the enclosing `ConditionalAccessExpressionSyntax` before matching initializer/assignment/return/arrow parents. Undisposed conditional-access creations still report, and `using var provider = services?.BuildServiceProvider();` stays quiet as before.
+- **DI014 fixer conditional-access support**: The dispose-provider code fix now also offers the `using` / `await using` rewrite for conditional-access creations. The rewrite stays valid for that shape because the local is a nullable reference type (`ServiceProvider` implements both `IDisposable` and `IAsyncDisposable`, and `using` accepts null values).
+
 ## [2.9.2] - 2026-06-09
 
 ### Changed

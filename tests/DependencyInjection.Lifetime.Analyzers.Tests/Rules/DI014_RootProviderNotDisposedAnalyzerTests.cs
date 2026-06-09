@@ -1766,4 +1766,106 @@ public class Program
 
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_DisposedInFinally_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        var provider = services?.BuildServiceProvider();
+        try
+        {
+            provider?.GetService(typeof(string));
+        }
+        finally
+        {
+            provider?.Dispose();
+        }
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_ReassignedPredeclaredThenDisposed_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        ServiceProvider? provider = null;
+        provider = services?.BuildServiceProvider();
+        provider?.Dispose();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_Returned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ServiceProvider? Create(IServiceCollection? services)
+    {
+        return services?.BuildServiceProvider();
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_ArrowReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ServiceProvider? Create(IServiceCollection? services) => services?.BuildServiceProvider();
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_NeverDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        var provider = services?{|#0:.BuildServiceProvider()|};
+        provider?.GetService(typeof(string));
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(0));
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_UsingVar_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        using var provider = services?.BuildServiceProvider();
+        provider?.GetService(typeof(string));
+    }
+}";
+
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

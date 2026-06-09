@@ -378,4 +378,74 @@ public class Program
 
         await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
     }
+
+    [Fact]
+    public async Task Fixes_ConditionalAccessBuild_AddsUsing()
+    {
+        var test = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        var provider = services?{|#0:.BuildServiceProvider()|};
+        provider?.GetService(typeof(string));
+    }
+}";
+
+        var fixtest = @"
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Run(IServiceCollection? services)
+    {
+        using var provider = services?.BuildServiceProvider();
+        provider?.GetService(typeof(string));
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(0);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
+
+    [Fact]
+    public async Task Fixes_ConditionalAccessBuild_AsyncMethod_AddsAwaitUsing()
+    {
+        var test = @"
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task RunAsync(IServiceCollection? services)
+    {
+        var provider = services?{|#0:.BuildServiceProvider()|};
+        provider?.GetService(typeof(string));
+        await Task.CompletedTask;
+    }
+}";
+
+        var fixtest = @"
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public async Task RunAsync(IServiceCollection? services)
+    {
+        await using var provider = services?.BuildServiceProvider();
+        provider?.GetService(typeof(string));
+        await Task.CompletedTask;
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(0);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
 }
