@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.2] - 2026-06-09
+
+### Changed
+
+- **DI001 conditional-access disposal proofs**: DI001 no longer reports scopes created through conditional access (`_provider?.CreateScope()`) that are in fact handled. The consumption-shape checks (`IsReturned`, explicit-disposal local extraction) previously matched the invocation's direct parent, but a conditional-access creation hangs the initializer/assignment/return/arrow shape off the enclosing `ConditionalAccessExpressionSyntax`, so `var scope = _provider?.CreateScope();` with a later `scope?.Dispose()` (including `finally` cleanup and predeclared reassignment), `return _provider?.CreateScope();`, and arrow-bodied `=> _provider?.CreateScope()` all produced false positives. Undisposed conditional-access creations still report, and `using var scope = _provider?.CreateScope();` stays quiet as before.
+- **DI001 fixer await-using guardrail**: The "Add 'await using'" fix is no longer offered for conditional-access creations. `factory?.CreateAsyncScope()` produces a nullable `AsyncServiceScope` (a `Nullable<T>` with no `DisposeAsync`), so the rewrite could not compile; the plain "Add 'using'" fix remains available and valid for that shape because the scope local is a nullable reference type.
+
 ## [2.9.1] - 2026-06-09
 
 ### Changed

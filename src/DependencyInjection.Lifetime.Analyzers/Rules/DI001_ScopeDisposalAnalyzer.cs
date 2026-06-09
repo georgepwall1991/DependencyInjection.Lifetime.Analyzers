@@ -164,6 +164,25 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// Returns the expression whose parent decides how the created scope is consumed. A
+    /// conditional-access creation (`provider?.CreateScope()`) wraps the invocation in a
+    /// <see cref="ConditionalAccessExpressionSyntax"/>, so the consumption shape (initializer,
+    /// assignment, return statement, arrow body) hangs off the conditional access rather than
+    /// the invocation itself.
+    /// </summary>
+    private static SyntaxNode GetCreationExpression(SyntaxNode syntax)
+    {
+        var current = syntax;
+        while (current.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+               conditionalAccess.WhenNotNull == current)
+        {
+            current = conditionalAccess;
+        }
+
+        return current;
+    }
+
     private static bool IsReturned(IInvocationOperation invocation)
     {
         // Check if the invocation is directly returned
@@ -175,14 +194,15 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        // return _factory.CreateScope();
-        if (invocation.Syntax.Parent is ReturnStatementSyntax)
+        // return _factory.CreateScope(); / return _factory?.CreateScope();
+        var creationExpression = GetCreationExpression(invocation.Syntax);
+        if (creationExpression.Parent is ReturnStatementSyntax)
         {
             return true;
         }
 
-        // Arrow expression: => CreateScope()
-        if (invocation.Syntax.Parent is ArrowExpressionClauseSyntax)
+        // Arrow expression: => CreateScope() / => _factory?.CreateScope()
+        if (creationExpression.Parent is ArrowExpressionClauseSyntax)
         {
             return true;
         }
@@ -192,7 +212,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
-        var syntax = invocation.Syntax;
+        var syntax = GetCreationExpression(invocation.Syntax);
         ILocalSymbol? variableSymbol = null;
 
         // Pattern 1: var scope = CreateScope();
