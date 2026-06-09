@@ -476,7 +476,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         {
             foreach (var variable in usingStmt.Declaration.Variables)
             {
-                if (variable.Initializer?.Value is not InvocationExpressionSyntax invocation ||
+                if (UnwrapToInvocation(variable.Initializer?.Value) is not { } invocation ||
                     !IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) ||
                     semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol localSymbol)
                 {
@@ -501,7 +501,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
         foreach (var variable in localDecl.Declaration.Variables)
         {
-            if (variable.Initializer?.Value is not InvocationExpressionSyntax invocation ||
+            if (UnwrapToInvocation(variable.Initializer?.Value) is not { } invocation ||
                 !IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) ||
                 semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol localSymbol)
             {
@@ -536,7 +536,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
         foreach (var syntaxReference in localSymbol.DeclaringSyntaxReferences)
         {
-            if (syntaxReference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: InvocationExpressionSyntax invocation } &&
+            if (syntaxReference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer } &&
+                UnwrapToInvocation(initializer) is { } invocation &&
                 IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes))
             {
                 scopeSymbol = localSymbol;
@@ -583,18 +584,66 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel)
     {
-        if (invocation.Parent is AssignmentExpressionSyntax assignment &&
+        // A conditional-access resolution (`scope?.ServiceProvider.GetRequiredService<T>()`)
+        // hangs the assignment/initializer off the enclosing ConditionalAccessExpressionSyntax
+        // rather than the invocation itself.
+        SyntaxNode consumption = invocation;
+        while (consumption.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+               conditionalAccess.WhenNotNull == consumption)
+        {
+            consumption = conditionalAccess;
+        }
+
+        if (consumption.Parent is AssignmentExpressionSyntax assignment &&
             assignment.Left is IdentifierNameSyntax assignmentIdentifier &&
             semanticModel.GetSymbolInfo(assignmentIdentifier).Symbol is ILocalSymbol assignmentSymbol)
         {
             return assignmentSymbol;
         }
 
-        if (invocation.Parent is EqualsValueClauseSyntax equalsValue &&
+        if (consumption.Parent is EqualsValueClauseSyntax equalsValue &&
             equalsValue.Parent is VariableDeclaratorSyntax declarator &&
             semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol declaratorSymbol)
         {
             return declaratorSymbol;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Unwraps a conditional-access creation expression (`factory?.CreateScope()`) to the
+    /// invocation it evaluates, or returns the expression itself when it already is one.
+    /// </summary>
+    private static InvocationExpressionSyntax? UnwrapToInvocation(ExpressionSyntax? expression) =>
+        expression switch
+        {
+            InvocationExpressionSyntax invocation => invocation,
+            ConditionalAccessExpressionSyntax conditionalAccess => UnwrapToInvocation(conditionalAccess.WhenNotNull),
+            _ => null,
+        };
+
+    /// <summary>
+    /// Resolves the receiver that a conditional-access member binding is evaluated against: for
+    /// `scope?.ServiceProvider` the `.ServiceProvider` binding's receiver is `scope`. The owning
+    /// conditional access is the nearest ancestor whose <c>WhenNotNull</c> contains the binding --
+    /// the binding can also be the <c>Expression</c> of an inner chained conditional access, which
+    /// is not its owner.
+    /// </summary>
+    private static ExpressionSyntax? TryGetConditionalAccessReceiver(MemberBindingExpressionSyntax memberBinding)
+    {
+        for (SyntaxNode? node = memberBinding.Parent; node is not null; node = node.Parent)
+        {
+            if (node is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(memberBinding.Span))
+            {
+                return conditionalAccess.Expression;
+            }
+
+            if (node is StatementSyntax or MemberDeclarationSyntax)
+            {
+                break;
+            }
         }
 
         return null;
@@ -624,7 +673,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             {
                 foreach (var variable in localDeclaration.Declaration.Variables)
                 {
-                    if (variable.Initializer?.Value is InvocationExpressionSyntax invocation &&
+                    if (UnwrapToInvocation(variable.Initializer?.Value) is { } invocation &&
                         IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) &&
                         semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol localSymbol)
                     {
@@ -635,7 +684,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             if (node is AssignmentExpressionSyntax assignment &&
                 assignment.Left is IdentifierNameSyntax leftIdentifier &&
-                assignment.Right is InvocationExpressionSyntax assignedInvocation &&
+                UnwrapToInvocation(assignment.Right) is { } assignedInvocation &&
                 IsCreateScopeInvocation(assignedInvocation, semanticModel, wellKnownTypes) &&
                 semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol assignedScope)
             {
@@ -713,9 +762,20 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         isKeyed = false;
         isCollectionResolution = false;
 
-        if (invocation.Expression is not MemberAccessExpressionSyntax outerMember ||
+        // The provider is the receiver of the resolution member itself: the member-access
+        // expression, or -- for `provider?.GetRequiredService<T>()` member bindings -- the
+        // enclosing conditional access's expression.
+        ExpressionSyntax? providerExpression = invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax outerMember => outerMember.Expression,
+            MemberBindingExpressionSyntax when invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+                                               conditionalAccess.WhenNotNull == invocation => conditionalAccess.Expression,
+            _ => null,
+        };
+
+        if (providerExpression is null ||
             !TryResolveProviderScope(
-                outerMember.Expression,
+                providerExpression,
                 semanticModel,
                 scopeSymbol,
                 providerAliases,
@@ -865,6 +925,17 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 out resolvedScope);
         }
 
+        // `scope?.ServiceProvider` evaluates to the scope's provider when not null.
+        if (expression is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            return TryResolveProviderScope(
+                conditionalAccess.WhenNotNull,
+                semanticModel,
+                scopeSymbol,
+                providerAliases,
+                out resolvedScope);
+        }
+
         if (expression is MemberAccessExpressionSyntax memberAccess &&
             memberAccess.Name.Identifier.Text == "ServiceProvider" &&
             memberAccess.Expression is IdentifierNameSyntax scopeIdentifier &&
@@ -872,6 +943,19 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             SymbolEqualityComparer.Default.Equals(directScope, scopeSymbol))
         {
             resolvedScope = directScope;
+            return true;
+        }
+
+        // Conditional-access form: in `scope?.ServiceProvider.GetRequiredService<T>()` the
+        // provider surfaces as a `.ServiceProvider` member binding whose receiver is the
+        // enclosing conditional access's expression.
+        if (expression is MemberBindingExpressionSyntax memberBinding &&
+            memberBinding.Name.Identifier.Text == "ServiceProvider" &&
+            TryGetConditionalAccessReceiver(memberBinding) is IdentifierNameSyntax bindingScopeIdentifier &&
+            semanticModel.GetSymbolInfo(bindingScopeIdentifier).Symbol is ILocalSymbol bindingScope &&
+            SymbolEqualityComparer.Default.Equals(bindingScope, scopeSymbol))
+        {
+            resolvedScope = bindingScope;
             return true;
         }
 

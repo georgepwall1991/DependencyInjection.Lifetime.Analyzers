@@ -2123,5 +2123,203 @@ public class DI004_UseAfterDisposeAnalyzerTests
                 .WithArguments("service"));
     }
 
+    [Fact]
+    public async Task ConditionalResolutionUsedAfterScopeDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IMyService? service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope?.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                    {|#0:service?.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task ChainedConditionalResolutionUsedAfterScopeDisposed_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IMyService? service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope?.ServiceProvider?.GetRequiredService<IMyService>();
+                    }
+                    {|#0:service?.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task ConditionalScopeCreationServiceUsedAfterUsingStatement_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory? _scopeFactory;
+
+                public MyClass(IServiceScopeFactory? scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    IMyService? service;
+                    using (var scope = _scopeFactory?.CreateScope())
+                    {
+                        service = scope?.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+                    {|#0:service?.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task ConditionalResolutionUsedInsideScope_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var service = scope?.ServiceProvider.GetRequiredService<IMyService>();
+                        service?.DoWork();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     #endregion
 }
