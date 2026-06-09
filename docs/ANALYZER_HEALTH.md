@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-09 (DI019 conditional-access receiver classification; DI001 conditional-access disposal proofs and await-using fixer guardrail)
-**Version:** 2.9.2
-**Test result:** 1237/1237 passing.
+**Date:** 2026-06-09 (DI019 conditional-access receiver classification; DI001/DI014 conditional-access disposal proofs and fixer hardening)
+**Version:** 2.9.3
+**Test result:** 1245/1245 passing.
 **Analyzers:** 20 (DI001-DI020)
 **Code fix providers:** 13
 
@@ -23,7 +23,7 @@
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
 | DI012 | Conditional Registration | Info | 32 | 8 | 9.2 | 9 | Complex flow, ignored keyed/non-keyed TryAdd fixer covers conditional-access (`services?.TryAdd*(...)`), embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 14 | 9.5 | 9 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal, embedded/top-level rewrite guardrails, and conditional-access (`services?.AddSingleton(...)`) standalone-removal support |
-| DI014 | Root Provider Not Disposed | Warn | 63 | 10 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails |
+| DI014 | Root Provider Not Disposed | Warn | 69 | 12 | 9.2 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails, and conditional-access creation (`services?.BuildServiceProvider()`) disposal/return proofs with using/await-using fixer support |
 | DI015 | Unresolvable Dependency | Warn | 121 | 16 | 9.8 | 9.2 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered, conditional-access (`services?.AddXxx(...)`) self-bindings mirror the trigger shape |
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
@@ -131,9 +131,9 @@ Most comprehensive test file in the repo. Covers variance-aware closed generic a
 
 ### DI014 -- Root Provider Not Disposed (Warning)
 
-**Analyzer: 9.2/10** | Tests: 63 | **Fixer: 9/10** | Fix Tests: 10
+**Analyzer: 9.2/10** | Tests: 69 | **Fixer: 9/10** | Fix Tests: 12
 
-Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered, including synchronous lambdas inside async methods where plain `using` is required. Added tests for async local function inside sync method, sync lambda inside async method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
+Concrete lifetime rule with coverage across `using`, explicit dispose, fields, properties, returns, and shadowing. Conditional-access creations (`services?.BuildServiceProvider()`) participate in the consumption-shape proofs: the analyzer resolves the enclosing `ConditionalAccessExpressionSyntax` before matching initializer, assignment, return-statement, and arrow-body parents, so explicitly disposed (`provider?.Dispose()` including `finally` cleanup and predeclared reassignment), returned, and arrow-returned conditional creations stay quiet while undisposed ones still report; the fixer offers the same `using`/`await using` rewrite for that shape because the local is a nullable reference type and `ServiceProvider` implements both disposal interfaces. Fixer wraps `BuildServiceProvider()` in `using`/`await using`. Post-hardening: fixed `IsAsyncMethod` bug where it checked `MethodDeclarationSyntax` ancestors before `LocalFunctionStatementSyntax`/`LambdaExpressionSyntax`, causing async local functions inside sync methods to get plain `using` instead of `await using`. Now walks ancestors in order and returns on the first callable encountered, including synchronous lambdas inside async methods where plain `using` is required. Added tests for async local function inside sync method, sync lambda inside async method, multiple BuildServiceProvider calls, local function scopes, and chained fluent builder patterns.
 
 Latest pass tightened local ownership proofs: conditional and catch-only `Dispose()` calls no longer suppress DI014, provider reassignments before disposal report the leaked first provider, mutually exclusive `if`/`else` assignments to the same outer provider are accepted when a later dispose covers the selected branch, branches with direct or nested `return`/`throw` exits before shared cleanup stay reportable unless same-block/branch-block `Dispose()` or awaited `DisposeAsync()` cleanup or a containing `finally` disposes the provider, repeated loop assignments disposed only after the loop stay reportable, and predeclared providers assigned inside `try` blocks are recognized when a `finally` block disposes them. The fixer now skips diagnostics that already have manual disposal code, keeping partial-disposal repairs explicit instead of layering `using` on top of an unsafe flow.
 
@@ -185,7 +185,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 | DI009 (Open Generic Mismatch) | 15 | 9 | Low -- comprehensive refactor with defensive SimpleNameSyntax handling |
 | DI012 (Ignored TryAdd) | 8 | 9 | Low -- narrow standalone block/top-level keyed/non-keyed statement removal (now including conditional-access `services?.TryAdd*(...)`) with embedded-statement guardrails |
 | DI013 (Implementation Mismatch) | 14 | 9 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, embedded rewrites, and conditional-access standalone removal are covered; removal is standalone-only, FixAll disabled |
-| DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, and chained builders covered |
+| DI014 (Root Provider) | 12 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, chained builders, and conditional-access creation using/await-using rewrites covered |
 | DI015 (Unresolvable Dependency) | 16 | 9.2 | Low -- keyed, factory, TryAdd, local-alias, and conditional-access (`services?.AddXxx(...)`) self-binding generation is tightly gated; inserted statement mirrors the trigger's null-safe shape; FixAll remains disabled |
 | DI019 (Root Scoped Resolution) | 16 | 9 | Medium -- behavior-changing scope wrap, but escape analysis (assignment/argument/return/lambda capture), conditional-access refusal, async-context `CreateAsyncScope` selection, and name-collision handling are all covered; FixAll disabled |
 
@@ -210,9 +210,9 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1237 |
-| Analyzer tests | 969 |
-| Code fix tests | 153 |
+| Total tests | 1245 |
+| Analyzer tests | 975 |
+| Code fix tests | 155 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
@@ -226,6 +226,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI014 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var provider = services?.BuildServiceProvider();` with later `provider?.Dispose()` including `finally` cleanup and predeclared reassignment, `return services?.BuildServiceProvider();`, and arrow-bodied returns) were reported as leaks even though the provider was handled; the fixer also skipped the conditional-access initializer shape entirely | Medium | DI014 |
 | Current | DI001 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var scope = _provider?.CreateScope();` with later `scope?.Dispose()` including `finally` cleanup and predeclared reassignment, `return _provider?.CreateScope();`, and arrow-bodied returns) were reported as leaks even though the scope was handled | Medium | DI001 |
 | Current | The DI001 "Add 'await using'" fix converted only `MemberAccessExpressionSyntax` receivers to `CreateAsyncScope`, so for conditional-access creations in async contexts it emitted `await using var scope = factory?.CreateScope();`, which does not compile (`IServiceScope` is not `IAsyncDisposable`; the converted form would not compile either because `factory?.CreateAsyncScope()` yields `Nullable<AsyncServiceScope>` with no `DisposeAsync`) | Medium | DI001 |
 | Current | DI019 receiver extraction classified the conditional-access receiver (`host` in `host?.Services.GetRequiredService<T>()`) instead of the true provider receiver (the `.Services` member binding), so known root-provider properties accessed through conditional access -- `host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases -- were never reported | Medium | DI019 |

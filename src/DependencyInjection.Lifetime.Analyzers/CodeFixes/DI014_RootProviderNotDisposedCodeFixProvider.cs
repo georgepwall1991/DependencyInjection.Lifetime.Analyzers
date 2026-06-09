@@ -36,8 +36,20 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         // Check if we can fix this:
         // 1. It must be assigned to a variable
         // 2. That variable must be a local declaration
+        //
+        // A conditional-access creation (`services?.BuildServiceProvider()`) hangs the initializer
+        // off the enclosing ConditionalAccessExpressionSyntax, so unwrap it first. The using/await
+        // using rewrite stays valid for that shape because the local is a nullable reference type
+        // (ServiceProvider implements both IDisposable and IAsyncDisposable, and `using` accepts
+        // null values).
+        SyntaxNode creationExpression = invocation;
+        while (creationExpression.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+               conditionalAccess.WhenNotNull == creationExpression)
+        {
+            creationExpression = conditionalAccess;
+        }
 
-        if (invocation.Parent is EqualsValueClauseSyntax equalsValue &&
+        if (creationExpression.Parent is EqualsValueClauseSyntax equalsValue &&
             equalsValue.Parent is VariableDeclaratorSyntax declarator &&
             declarator.Parent is VariableDeclarationSyntax declaration &&
             declaration.Parent is LocalDeclarationStatementSyntax localDeclaration &&

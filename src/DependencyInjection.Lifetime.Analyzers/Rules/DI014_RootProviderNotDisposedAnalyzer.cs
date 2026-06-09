@@ -155,6 +155,25 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// Returns the expression whose parent decides how the created provider is consumed. A
+    /// conditional-access creation (`services?.BuildServiceProvider()`) wraps the invocation in a
+    /// <see cref="ConditionalAccessExpressionSyntax"/>, so the consumption shape (initializer,
+    /// assignment, return statement, arrow body) hangs off the conditional access rather than
+    /// the invocation itself.
+    /// </summary>
+    private static SyntaxNode GetCreationExpression(SyntaxNode syntax)
+    {
+        var current = syntax;
+        while (current.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+               conditionalAccess.WhenNotNull == current)
+        {
+            current = conditionalAccess;
+        }
+
+        return current;
+    }
+
     private static bool IsReturned(IInvocationOperation invocation)
     {
         var parent = invocation.Parent;
@@ -164,12 +183,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (invocation.Syntax.Parent is ReturnStatementSyntax)
+        var creationExpression = GetCreationExpression(invocation.Syntax);
+        if (creationExpression.Parent is ReturnStatementSyntax)
         {
             return true;
         }
 
-        if (invocation.Syntax.Parent is ArrowExpressionClauseSyntax)
+        if (creationExpression.Parent is ArrowExpressionClauseSyntax)
         {
             return true;
         }
@@ -179,7 +199,8 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
 
     private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
     {
-        var assignmentTarget = GetAssignmentTarget(invocation.Syntax, semanticModel);
+        var creationExpression = GetCreationExpression(invocation.Syntax);
+        var assignmentTarget = GetAssignmentTarget(creationExpression, semanticModel);
         if (assignmentTarget is null)
         {
             return false;
@@ -188,13 +209,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         var (targetSymbol, containingType) = assignmentTarget.Value;
         if (targetSymbol is ILocalSymbol localSymbol)
         {
-            var searchRoot = GetExecutableBoundary(invocation.Syntax) ?? GetContainingBlock(invocation.Syntax);
+            var searchRoot = GetExecutableBoundary(creationExpression) ?? GetContainingBlock(creationExpression);
             if (searchRoot is null)
             {
                 return false;
             }
 
-            return HasDisposeCallInBlock(searchRoot, invocation.Syntax, localSymbol, semanticModel);
+            return HasDisposeCallInBlock(searchRoot, creationExpression, localSymbol, semanticModel);
         }
 
         if (targetSymbol is IFieldSymbol or IPropertySymbol)
