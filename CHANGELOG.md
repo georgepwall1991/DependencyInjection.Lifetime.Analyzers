@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.1] - 2026-06-09
+
+### Changed
+
+- **DI019 conditional-access receiver hardening**: DI019 now resolves the *true* provider receiver of a resolution call before classifying it. Previously, for `host?.Services.GetRequiredService<T>()` the analyzer classified the conditional-access receiver `host` (never a known root provider) instead of the `.Services` member binding, so scoped resolutions through `host?.Services...`, chained `app?.Services?...`, and local aliases such as `var rootServices = app?.Services;` were silently missed. Known root-provider properties (`Services`, `ApplicationServices`, `ServiceProvider`) and known scoped-provider properties (`RequestServices`, scope `ServiceProvider`) are now recognised when they appear as a `MemberBindingExpressionSyntax`, with the owner resolved from the enclosing `ConditionalAccessExpressionSyntax`. The scoped-provider recognition keeps `httpContext?.RequestServices...` and `scope?.ServiceProvider...` quiet inside singleton implementations now that the receiver reorder makes those shapes reachable.
+- **DI019 code fix conditional-access guardrail**: The scope-wrapping code fix now refuses resolutions evaluated inside a conditional access's `WhenNotNull` (e.g. `var s = host?.Services.GetRequiredService<T>();`). Lifting that receiver into `using var scope = ....CreateScope();` would have emitted a standalone member binding that does not compile, and the wrap would also have dropped the null-shortcut semantics.
+
 ## [2.9.0] - 2026-06-01
 
 ### Added

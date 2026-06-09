@@ -454,16 +454,20 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     {
         receiver = null!;
 
-        if (invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
-            conditionalAccess.WhenNotNull == invocation)
-        {
-            receiver = conditionalAccess.Expression;
-            return true;
-        }
-
+        // The provider is the receiver of the resolution member itself. Check the member access
+        // first: in `host?.Services.GetRequiredService<T>()` the conditional access's WhenNotNull is
+        // the whole invocation, but the provider is the `.Services` member binding, not `host`.
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
         {
             receiver = memberAccess.Expression;
+            return true;
+        }
+
+        if (invocation.Expression is MemberBindingExpressionSyntax &&
+            invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull == invocation)
+        {
+            receiver = conditionalAccess.Expression;
             return true;
         }
 
@@ -538,6 +542,15 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // Conditional-access form: `host?.Services.GetRequiredService<T>()` exposes the `.Services`
+        // receiver as a MemberBindingExpressionSyntax whose owner is the conditional access's
+        // expression.
+        if (expression is MemberBindingExpressionSyntax rootProviderBinding &&
+            IsKnownRootProviderProperty(rootProviderBinding, semanticModel, wellKnownTypes))
+        {
+            return true;
+        }
+
         return false;
     }
 
@@ -552,7 +565,30 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         var ownerType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
-        return memberAccess.Name.Identifier.Text switch
+        return IsKnownRootProviderPropertyName(memberAccess.Name.Identifier.Text, ownerType);
+    }
+
+    private static bool IsKnownRootProviderProperty(
+        MemberBindingExpressionSyntax memberBinding,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes)
+    {
+        if (!wellKnownTypes.IsServiceProvider(semanticModel.GetTypeInfo(memberBinding).Type))
+        {
+            return false;
+        }
+
+        if (TryGetConditionalAccessReceiver(memberBinding) is not { } owner)
+        {
+            return false;
+        }
+
+        var ownerType = semanticModel.GetTypeInfo(owner).Type;
+        return IsKnownRootProviderPropertyName(memberBinding.Name.Identifier.Text, ownerType);
+    }
+
+    private static bool IsKnownRootProviderPropertyName(string propertyName, ITypeSymbol? ownerType) =>
+        propertyName switch
         {
             "Services" => IsKnownRootServicesOwner(ownerType),
             "ApplicationServices" => IsNamedOrImplements(
@@ -565,6 +601,31 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 "IEndpointRouteBuilder"),
             _ => false
         };
+
+    /// <summary>
+    /// Resolves the receiver that a conditional-access member binding is evaluated against: for
+    /// `host?.Services` the `.Services` binding's receiver is `host`. The owning conditional access
+    /// is the nearest ancestor whose <c>WhenNotNull</c> contains the binding -- the binding can also
+    /// be the <c>Expression</c> of an inner chained conditional access (`host?.Services?.X`), which
+    /// is not its owner.
+    /// </summary>
+    private static ExpressionSyntax? TryGetConditionalAccessReceiver(MemberBindingExpressionSyntax memberBinding)
+    {
+        for (SyntaxNode? node = memberBinding.Parent; node is not null; node = node.Parent)
+        {
+            if (node is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(memberBinding.Span))
+            {
+                return conditionalAccess.Expression;
+            }
+
+            if (node is StatementSyntax or MemberDeclarationSyntax)
+            {
+                break;
+            }
+        }
+
+        return null;
     }
 
     private static bool IsKnownRootServicesOwner(ITypeSymbol? ownerType)
@@ -650,6 +711,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             if (memberAccess.Name.Identifier.Text == "ServiceProvider")
             {
                 var ownerType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+                return wellKnownTypes.IsServiceScope(ownerType) ||
+                       wellKnownTypes.IsAsyncServiceScope(ownerType);
+            }
+        }
+
+        // Conditional-access form: `httpContext?.RequestServices...` / `scope?.ServiceProvider...`
+        // expose the scoped-provider property as a MemberBindingExpressionSyntax.
+        if (expression is MemberBindingExpressionSyntax memberBinding)
+        {
+            if (memberBinding.Name.Identifier.Text == "RequestServices" &&
+                wellKnownTypes.IsServiceProvider(semanticModel.GetTypeInfo(expression).Type))
+            {
+                return true;
+            }
+
+            if (memberBinding.Name.Identifier.Text == "ServiceProvider" &&
+                TryGetConditionalAccessReceiver(memberBinding) is { } scopeOwner)
+            {
+                var ownerType = semanticModel.GetTypeInfo(scopeOwner).Type;
                 return wellKnownTypes.IsServiceScope(ownerType) ||
                        wellKnownTypes.IsAsyncServiceScope(ownerType);
             }
@@ -789,6 +869,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 case PostfixUnaryExpressionSyntax postfixUnaryExpression
                     when postfixUnaryExpression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                     expression = postfixUnaryExpression.Operand;
+                    continue;
+                case ConditionalAccessExpressionSyntax conditionalAccessExpression:
+                    // `app?.Services` classifies like its WhenNotNull member binding: the value the
+                    // expression produces (when not null) is that member's value.
+                    expression = conditionalAccessExpression.WhenNotNull;
                     continue;
                 default:
                     return expression;
