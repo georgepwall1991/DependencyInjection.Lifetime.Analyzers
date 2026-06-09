@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-09 (conditional-access hardening pass: DI019 receiver classification, DI001/DI014 disposal proofs and fixer gating, DI002 escape detection)
-**Version:** 2.9.4
-**Test result:** 1251/1251 passing.
+**Date:** 2026-06-09 (conditional-access hardening pass: DI019 receiver classification, DI001/DI014 disposal proofs and fixer gating, DI002 escape detection, DI004 resolution tracking)
+**Version:** 2.9.5
+**Test result:** 1255/1255 passing.
 **Analyzers:** 20 (DI001-DI020)
 **Code fix providers:** 13
 
@@ -13,7 +13,7 @@
 | DI001 | Scope Disposal | Warn | 59 | 14 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
 | DI002 | Scope Escape | Warn | 39 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage, and conditional-access resolutions (`scope?.ServiceProvider...`, chained `?.`, conditional scope creations) participating in escape detection |
 | DI003 | Captive Dependency | Warn | 107 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
-| DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
+| DI004 | Use After Dispose | Warn | 47 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails; conditional-access resolutions (`scope?.ServiceProvider...`, chained `?.`, conditional scope creations) tracked alongside the existing conditional-use coverage |
 | DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
 | DI007 | Service Locator | Info | 38 | -- | 9.6 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
@@ -71,9 +71,9 @@ Strong runtime-correctness rule. Instance-backed registrations are explicitly ex
 
 ### DI004 -- Use After Dispose (Warning)
 
-**Analyzer: 10/10** | Tests: 43 | **Fixer: 8.8/10** | Fix Tests: 9
+**Analyzer: 10/10** | Tests: 47 | **Fixer: 8.8/10** | Fix Tests: 9
 
-Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
+Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Conditional-access *resolutions* are tracked alongside the existing conditional-use coverage: `service = scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, and scopes created via `using (var scope = factory?.CreateScope())` participate in use-after-dispose detection (the assigned local resolves through the enclosing `ConditionalAccessExpressionSyntax`, and provider receivers resolve through the `.ServiceProvider` member binding), while conditional resolutions consumed inside the scope stay quiet. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -210,8 +210,8 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1251 |
-| Analyzer tests | 981 |
+| Total tests | 1255 |
+| Analyzer tests | 985 |
 | Code fix tests | 155 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -226,6 +226,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI004 did not track services resolved through conditional access (`service = scope?.ServiceProvider.GetRequiredService<T>();`), so later uses after the scope was disposed went unreported; conditional-access scope creations (`using (var scope = factory?.CreateScope())`) were also invisible to scope collection | Medium | DI004 |
 | Current | DI002 missed every conditional-access escape: `return scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?...`, field captures, and locals resolved through `scope?.ServiceProvider...` that later escaped were silent because resolution recognition required a plain `MemberAccessExpressionSyntax` receiver and consumption checks matched the invocation's direct parent; `using var scope = factory?.CreateScope();` was also not tracked as a scope variable | Medium | DI002 |
 | Current | DI014 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var provider = services?.BuildServiceProvider();` with later `provider?.Dispose()` including `finally` cleanup and predeclared reassignment, `return services?.BuildServiceProvider();`, and arrow-bodied returns) were reported as leaks even though the provider was handled; the fixer also skipped the conditional-access initializer shape entirely | Medium | DI014 |
 | Current | DI001 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var scope = _provider?.CreateScope();` with later `scope?.Dispose()` including `finally` cleanup and predeclared reassignment, `return _provider?.CreateScope();`, and arrow-bodied returns) were reported as leaks even though the scope was handled | Medium | DI001 |

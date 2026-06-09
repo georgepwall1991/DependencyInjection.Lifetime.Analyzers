@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.5] - 2026-06-09
+
+### Changed
+
+- **DI004 conditional-access resolution tracking**: DI004 now tracks services resolved through conditional access, so `service = scope?.ServiceProvider.GetRequiredService<T>();` inside a `using` block is recognized and a later use after the scope is disposed reports as it does for the plain form. Chained `scope?.ServiceProvider?.GetRequiredService<T>()` resolutions and scopes created with `using (var scope = factory?.CreateScope())` (declaration, using-statement, predeclared, and reassignment forms) participate too. Conditional resolutions consumed inside the scope stay quiet. Conditional *uses* after dispose (`service?.DoWork()`) were already covered.
+
 ## [2.9.4] - 2026-06-09
 
 ### Changed
