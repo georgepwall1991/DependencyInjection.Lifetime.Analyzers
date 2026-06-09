@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-01 (DI020 middleware scoped-capture rule, DI019 resolution-path diagnostics, and DI019 root-scoped-resolution code fix)
-**Version:** 2.9.0
-**Test result:** 1223/1223 passing.
+**Date:** 2026-06-09 (DI019 conditional-access receiver classification and code-fix guardrail)
+**Version:** 2.9.1
+**Test result:** 1229/1229 passing.
 **Analyzers:** 20 (DI001-DI020)
 **Code fix providers:** 13
 
@@ -28,7 +28,7 @@
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
 | DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
-| DI019 | Root Scoped Resolution | Warn | 53 | 15 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, and async-aware (`CreateAsyncScope`/`await using`) |
+| DI019 | Root Scoped Resolution | Warn | 58 | 16 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, conditional-access receiver classification (`host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases report; `httpContext?.RequestServices...` / `scope?.ServiceProvider...` stay quiet), transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, conditional-access receivers, and async-aware (`CreateAsyncScope`/`await using`) |
 | DI020 | Middleware Scoped Service | Warn | 19 | -- | 9.3 | -- | New rule: conventional middleware constructors that capture scoped services (direct and transitive, via the shared `ScopedDependencyGraph`) for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance |
 
 `--` = no code fix exists for this rule.
@@ -165,9 +165,11 @@ The shared `RegistrationCollector` now mirrors Pattern 2's self-binding default 
 
 ### DI019 -- Root Scoped Resolution (Warning)
 
-**Analyzer: 9.6/10** | Tests: 43
+**Analyzer: 9.7/10** | Tests: 58 | **Fixer: 9/10** | Fix Tests: 16
 
-Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers known ASP.NET Core, ASP.NET test-host, and Generic Host `Services` properties including nullable `Services!` use, `ApplicationServices`, endpoint-route `ServiceProvider`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices`, arbitrary holder properties named `Services`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
+Detects scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)`, including service/implementation overload self-registrations, and service graphs that reach scoped services, resolved from a root provider. Covers known ASP.NET Core, ASP.NET test-host, and Generic Host `Services` properties including nullable `Services!` use, `ApplicationServices`, endpoint-route `ServiceProvider`, `BuildServiceProvider()`, local root-provider variables, singleton implementations, hosted services, `GetServices<T>()`, and keyed resolutions. Receiver extraction now resolves the true provider receiver before classification, so conditional-access shapes participate: `host?.Services.GetRequiredService<T>()`, chained `app?.Services?.GetRequiredService<T>()`, and local aliases of `var rootServices = app?.Services;` report, with the member-binding owner resolved from the enclosing `ConditionalAccessExpressionSyntax` (the owning conditional access is the nearest ancestor whose `WhenNotNull` contains the binding, so chained accesses resolve to the real owner). Stays silent for scoped providers from `CreateScope()`/`CreateAsyncScope()`, `HttpContext.RequestServices` including the conditional-access forms `httpContext?.RequestServices...` and `scope?.ServiceProvider...` inside singleton implementations, arbitrary holder properties named `Services`, DI factory lambdas covered by DI003, singleton-safe options abstractions, singleton-lifetime `AddDbContext(...)` registrations, existing explicit EF registrations preserved by later `TryAdd`-style helpers, factory/options services from EF factory and pooled registrations, `AddDbContextFactory(..., ServiceLifetime.Transient)` context registrations, and dynamic service-type requests.
+
+The scope-wrapping code fix is gated against scoped-service escape (assignment/argument), type-receiver static calls, and synchronous/async context mismatches, and now also refuses resolutions evaluated inside a conditional access's `WhenNotNull` (`var s = host?.Services.GetRequiredService<T>();`), where lifting the member-binding receiver into `using var scope = ....CreateScope();` would emit non-compiling code and drop the null-shortcut semantics.
 
 ## Code Fix Health
 
@@ -185,8 +187,9 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 | DI013 (Implementation Mismatch) | 14 | 9 | Medium -- broad assists are symbol-backed, implementation-instance retargeting/removal, top-level removals, embedded rewrites, and conditional-access standalone removal are covered; removal is standalone-only, FixAll disabled |
 | DI014 (Root Provider) | 10 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, and chained builders covered |
 | DI015 (Unresolvable Dependency) | 16 | 9.2 | Low -- keyed, factory, TryAdd, local-alias, and conditional-access (`services?.AddXxx(...)`) self-binding generation is tightly gated; inserted statement mirrors the trigger's null-safe shape; FixAll remains disabled |
+| DI019 (Root Scoped Resolution) | 16 | 9 | Medium -- behavior-changing scope wrap, but escape analysis (assignment/argument/return/lambda capture), conditional-access refusal, async-context `CreateAsyncScope` selection, and name-collision handling are all covered; FixAll disabled |
 
-**Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI019. These rules detect problems whose resolution requires architectural or context-dependent decisions.
+**Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI020. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
 ## Infrastructure Health
 
@@ -207,9 +210,9 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1223 |
-| Analyzer tests | 958 |
-| Code fix tests | 150 |
+| Total tests | 1229 |
+| Analyzer tests | 963 |
+| Code fix tests | 151 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
 | Fixer mean score | 8.6/10 |
@@ -223,6 +226,8 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI019 receiver extraction classified the conditional-access receiver (`host` in `host?.Services.GetRequiredService<T>()`) instead of the true provider receiver (the `.Services` member binding), so known root-provider properties accessed through conditional access -- `host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases -- were never reported | Medium | DI019 |
+| Current | DI019 scoped-provider recognition did not handle `MemberBindingExpressionSyntax`, so once conditional-access receivers became reachable, `httpContext?.RequestServices...` and `scope?.ServiceProvider...` inside singleton implementations would have fallen through to the singleton heuristic as false positives; the DI019 code fix also offered a rewrite for `var s = host?.Services.GetRequiredService<T>();` that emitted a standalone member binding (`using var scope = .Services.CreateScope();`) which does not compile | Medium | DI019 |
 | Current | DI016 missed `BuildServiceProvider()` misuse when the receiver chain used conditional access (`builder.Services?.BuildServiceProvider()` or `builder?.Services.BuildServiceProvider()`), because `TryGetReceiverExpression` only matched `MemberAccessExpressionSyntax` and `IsServicesPropertySource` did not recognize `MemberBindingExpressionSyntax` as a Services source | Medium | DI016 |
 | Current | DI005 missed `CreateScope()` calls whose invocation expression was a `MemberBindingExpressionSyntax` (the conditional-access form `provider?.CreateScope()` and `_scopeFactory?.CreateScope()`) because the fast-path filter only matched `MemberAccessExpressionSyntax` and `IdentifierNameSyntax` receivers | Medium | DI005 |
 | Current | DI018 silently accepted delegate-type registrations such as `services.AddSingleton<MyHandler>()` because delegates have implicit public `(object, IntPtr)` constructors that satisfy the public-constructor check, yet the default DI container cannot populate those parameters and the registration fails at activation | Low | DI018 |

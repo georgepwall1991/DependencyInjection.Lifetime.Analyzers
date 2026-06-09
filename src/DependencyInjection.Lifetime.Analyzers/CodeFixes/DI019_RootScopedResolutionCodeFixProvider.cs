@@ -85,6 +85,21 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
             return false;
         }
 
+        // A resolution evaluated inside a conditional access (`host?.Services.GetRequiredService<T>()`)
+        // exposes its provider chain through a MemberBindingExpressionSyntax. Lifting that receiver into
+        // `using var scope = ....CreateScope();` would emit a standalone member binding that does not
+        // compile, and wrapping the statement would also drop the null-shortcut semantics, so refuse.
+        for (SyntaxNode? node = invocation.Parent;
+             node is not null && node is not StatementSyntax;
+             node = node.Parent)
+        {
+            if (node is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(invocation.Span))
+            {
+                return false;
+            }
+        }
+
         var receiver = memberAccess.Expression;
 
         // The fix calls `.CreateScope()` on the resolution receiver, so that receiver must be a

@@ -1634,4 +1634,176 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 .WithLocation(0)
                 .WithArguments("IScopedService", "IScopedService"));
     }
+
+    [Fact]
+    public async Task ConditionalAccessHostServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHost
+                {
+                    IServiceProvider Services { get; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.Extensions.Hosting.IHost? host)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    host?{|#0:.Services.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ChainedConditionalAccessAppServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public sealed class WebApplication
+                {
+                    public IServiceProvider? Services { get; init; }
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Builder.WebApplication? app)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    app?.Services?{|#0:.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task LocalAliasOfConditionalAccessAppServicesResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public sealed class WebApplication
+                {
+                    public IServiceProvider Services { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, Microsoft.AspNetCore.Builder.WebApplication? app)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var rootServices = app?.Services;
+                    rootServices?{|#0:.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ConditionalAccessRequestServicesInSingletonImplementation_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Http
+            {
+                public sealed class HttpContext
+                {
+                    public IServiceProvider RequestServices { get; init; } = null!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public void Handle(Microsoft.AspNetCore.Http.HttpContext? httpContext)
+                {
+                    httpContext?.RequestServices.GetRequiredService<IScopedService>();
+                }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessScopeServiceProviderInSingletonImplementation_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                private readonly IServiceProvider _provider;
+
+                public SingletonService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _provider.CreateScope();
+                    scope?.ServiceProvider.GetRequiredService<IScopedService>();
+                }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService, SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

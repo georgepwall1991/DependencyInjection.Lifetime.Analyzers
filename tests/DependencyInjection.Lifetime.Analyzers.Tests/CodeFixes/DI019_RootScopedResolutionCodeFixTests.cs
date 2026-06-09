@@ -273,6 +273,44 @@ public class DI019_RootScopedResolutionCodeFixTests
     }
 
     [Fact]
+    public async Task RootResolution_ConditionalAccessReceiver_NoCodeFix()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHost
+                {
+                    IServiceProvider Services { get; }
+                }
+            }
+
+            public interface IScoped { }
+            public class Scoped : IScoped { }
+
+            public class Program
+            {
+                public void Run(IServiceCollection services, Microsoft.Extensions.Hosting.IHost? host)
+                {
+                    var service = host?{|#0:.Services.GetRequiredService<IScoped>()|};
+                }
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScoped, Scoped>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+            .WithLocation(0)
+            .WithArguments("IScoped", "IScoped");
+
+        await CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(source, expected);
+    }
+
+    [Fact]
     public async Task RootResolution_EscapesViaReturn_NoCodeFix()
     {
         var source = Usings + """
