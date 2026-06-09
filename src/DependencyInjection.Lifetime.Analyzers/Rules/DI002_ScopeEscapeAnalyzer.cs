@@ -127,38 +127,43 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (invocation.Parent is EqualsValueClauseSyntax equalsValue &&
+            // A conditional-access resolution (`scope?.ServiceProvider.GetRequiredService<T>()`)
+            // hangs its consumption shape (initializer, assignment, return) off the enclosing
+            // ConditionalAccessExpressionSyntax rather than the invocation itself.
+            var consumption = GetConsumptionExpression(invocation);
+
+            if (consumption.Parent is EqualsValueClauseSyntax equalsValue &&
                 equalsValue.Parent is VariableDeclaratorSyntax declarator &&
                 semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
             {
                 serviceVariables[localSymbol] = invocation;
             }
 
-            if (invocation.Parent is AssignmentExpressionSyntax assignment &&
+            if (consumption.Parent is AssignmentExpressionSyntax assignment &&
                 assignment.Left is IdentifierNameSyntax assignmentIdentifier &&
                 semanticModel.GetSymbolInfo(assignmentIdentifier).Symbol is ILocalSymbol assignedLocalSymbol)
             {
                 serviceVariables[assignedLocalSymbol] = invocation;
             }
 
-            if (invocation.Parent is ReturnStatementSyntax)
+            if (consumption.Parent is ReturnStatementSyntax)
             {
                 ReportDiagnostic(context, invocation, "return", reportedSpans);
             }
 
-            if (invocation.Parent is AssignmentExpressionSyntax fieldAssignment &&
+            if (consumption.Parent is AssignmentExpressionSyntax fieldAssignment &&
                 semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol fieldSymbol)
             {
                 ReportDiagnostic(context, invocation, fieldSymbol.Name, reportedSpans);
             }
 
-            if (invocation.Parent is AssignmentExpressionSyntax propertyAssignment &&
+            if (consumption.Parent is AssignmentExpressionSyntax propertyAssignment &&
                 semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol propertySymbol)
             {
                 ReportDiagnostic(context, invocation, propertySymbol.Name, reportedSpans);
             }
 
-            if (invocation.Parent is AssignmentExpressionSyntax parameterAssignment &&
+            if (consumption.Parent is AssignmentExpressionSyntax parameterAssignment &&
                 semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameterSymbol &&
                 IsEscapingParameter(parameterSymbol))
             {
@@ -252,6 +257,61 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     private static bool IsEscapingParameter(IParameterSymbol parameter) =>
         parameter.RefKind is RefKind.Ref or RefKind.Out;
 
+    /// <summary>
+    /// Returns the expression whose parent decides how the resolved service is consumed: the
+    /// invocation itself, or the outermost enclosing conditional access that evaluates it
+    /// (`scope?.ServiceProvider.GetRequiredService<T>()`).
+    /// </summary>
+    private static SyntaxNode GetConsumptionExpression(InvocationExpressionSyntax invocation)
+    {
+        SyntaxNode current = invocation;
+        while (current.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+               conditionalAccess.WhenNotNull == current)
+        {
+            current = conditionalAccess;
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Unwraps a conditional-access creation expression (`factory?.CreateScope()`) to the
+    /// invocation it evaluates, or returns the expression itself when it already is one.
+    /// </summary>
+    private static InvocationExpressionSyntax? UnwrapToInvocation(ExpressionSyntax? expression) =>
+        expression switch
+        {
+            InvocationExpressionSyntax invocation => invocation,
+            ConditionalAccessExpressionSyntax conditionalAccess => UnwrapToInvocation(conditionalAccess.WhenNotNull),
+            _ => null,
+        };
+
+    /// <summary>
+    /// Resolves the receiver that a conditional-access member binding is evaluated against: for
+    /// `scope?.ServiceProvider` the `.ServiceProvider` binding's receiver is `scope`. The owning
+    /// conditional access is the nearest ancestor whose <c>WhenNotNull</c> contains the binding --
+    /// the binding can also be the <c>Expression</c> of an inner chained conditional access, which
+    /// is not its owner.
+    /// </summary>
+    private static ExpressionSyntax? TryGetConditionalAccessReceiver(MemberBindingExpressionSyntax memberBinding)
+    {
+        for (SyntaxNode? node = memberBinding.Parent; node is not null; node = node.Parent)
+        {
+            if (node is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(memberBinding.Span))
+            {
+                return conditionalAccess.Expression;
+            }
+
+            if (node is StatementSyntax or MemberDeclarationSyntax)
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
+
     private static HashSet<ILocalSymbol> CollectScopeVariables(
         SyntaxNode executableBody,
         SemanticModel semanticModel,
@@ -266,7 +326,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             {
                 foreach (var variable in localDecl.Declaration.Variables)
                 {
-                    if (variable.Initializer?.Value is InvocationExpressionSyntax invocation &&
+                    if (UnwrapToInvocation(variable.Initializer?.Value) is { } invocation &&
                         IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) &&
                         semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol localSymbol)
                     {
@@ -353,7 +413,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         {
             foreach (var variable in usingStmt.Declaration.Variables)
             {
-                if (variable.Initializer?.Value is InvocationExpressionSyntax invocation &&
+                if (UnwrapToInvocation(variable.Initializer?.Value) is { } invocation &&
                     IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) &&
                     semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol localSymbol)
                 {
@@ -387,7 +447,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         foreach (var syntaxReference in localSymbol.DeclaringSyntaxReferences)
         {
-            if (syntaxReference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: InvocationExpressionSyntax invocation } &&
+            if (syntaxReference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer } &&
+                UnwrapToInvocation(initializer) is { } invocation &&
                 IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes))
             {
                 scopeSymbol = localSymbol;
@@ -477,9 +538,20 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         key = null;
         isKeyed = false;
 
-        if (invocation.Expression is not MemberAccessExpressionSyntax outerMember ||
+        // The provider is the receiver of the resolution member itself: the member-access
+        // expression, or -- for `provider?.GetRequiredService<T>()` member bindings -- the
+        // enclosing conditional access's expression.
+        ExpressionSyntax? providerExpression = invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax outerMember => outerMember.Expression,
+            MemberBindingExpressionSyntax when invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+                                               conditionalAccess.WhenNotNull == invocation => conditionalAccess.Expression,
+            _ => null,
+        };
+
+        if (providerExpression is null ||
             !TryResolveProviderScope(
-                outerMember.Expression,
+                providerExpression,
                 semanticModel,
                 scopeVariables,
                 providerAliases,
@@ -529,6 +601,17 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 out scopeSymbol);
         }
 
+        // `scope?.ServiceProvider` evaluates to the scope's provider when not null.
+        if (expression is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            return TryResolveProviderScope(
+                conditionalAccess.WhenNotNull,
+                semanticModel,
+                scopeVariables,
+                providerAliases,
+                out scopeSymbol);
+        }
+
         if (expression is MemberAccessExpressionSyntax memberAccess &&
             memberAccess.Name.Identifier.Text == "ServiceProvider" &&
             memberAccess.Expression is IdentifierNameSyntax scopeIdentifier &&
@@ -536,6 +619,19 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             scopeVariables.Contains(directScope))
         {
             scopeSymbol = directScope;
+            return true;
+        }
+
+        // Conditional-access form: in `scope?.ServiceProvider.GetRequiredService<T>()` the
+        // provider surfaces as a `.ServiceProvider` member binding whose receiver is the
+        // enclosing conditional access's expression.
+        if (expression is MemberBindingExpressionSyntax memberBinding &&
+            memberBinding.Name.Identifier.Text == "ServiceProvider" &&
+            TryGetConditionalAccessReceiver(memberBinding) is IdentifierNameSyntax bindingScopeIdentifier &&
+            semanticModel.GetSymbolInfo(bindingScopeIdentifier).Symbol is ILocalSymbol bindingScope &&
+            scopeVariables.Contains(bindingScope))
+        {
+            scopeSymbol = bindingScope;
             return true;
         }
 

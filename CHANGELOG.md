@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.4] - 2026-06-09
+
+### Changed
+
+- **DI002 conditional-access escape detection**: DI002 now reports scoped services that escape their scope through conditional-access shapes. Previously `return scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, field captures `_field = scope?.ServiceProvider.GetRequiredService<T>();`, and locals resolved through `scope?.ServiceProvider...` that later escape were all silent, because resolution recognition required a plain `MemberAccessExpressionSyntax` receiver and the consumption-shape checks matched the invocation's direct parent. The analyzer now resolves the provider receiver through `MemberBindingExpressionSyntax`/`ConditionalAccessExpressionSyntax` shapes (including `using var scope = factory?.CreateScope();` creations) and classifies consumption from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
+
 ## [2.9.3] - 2026-06-09
 
 ### Changed

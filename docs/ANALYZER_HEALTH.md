@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-09 (DI019 conditional-access receiver classification; DI001/DI014 conditional-access disposal proofs and fixer hardening)
-**Version:** 2.9.3
-**Test result:** 1245/1245 passing.
+**Date:** 2026-06-09 (conditional-access hardening pass: DI019 receiver classification, DI001/DI014 disposal proofs and fixer gating, DI002 escape detection)
+**Version:** 2.9.4
+**Test result:** 1251/1251 passing.
 **Analyzers:** 20 (DI001-DI020)
 **Code fix providers:** 13
 
@@ -11,7 +11,7 @@
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 59 | 14 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
-| DI002 | Scope Escape | Warn | 33 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage |
+| DI002 | Scope Escape | Warn | 39 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage, and conditional-access resolutions (`scope?.ServiceProvider...`, chained `?.`, conditional scope creations) participating in escape detection |
 | DI003 | Captive Dependency | Warn | 107 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
 | DI004 | Use After Dispose | Warn | 43 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails |
 | DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
@@ -57,9 +57,9 @@ Operation-based tracking covers lambdas, fields, conditionals, nested scopes, an
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 9.5/10** | Tests: 33 | **Fixer: 8.5/10** | Fix Tests: 8
+**Analyzer: 9.5/10** | Tests: 39 | **Fixer: 8.5/10** | Fix Tests: 8
 
-Strong analyzer after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks.
+Strong analyzer after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks. Conditional-access shapes participate in escape detection: resolutions through `scope?.ServiceProvider.GetRequiredService<T>()` and chained `scope?.ServiceProvider?.GetRequiredService<T>()` are recognized (the provider receiver is resolved through the `MemberBindingExpressionSyntax` and its owning conditional access), `using var scope = factory?.CreateScope();` creations are tracked, and the consumption shape (return, field/property capture, local tracking) is classified from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
 
 The fixer intentionally offers pragma suppression only, because moving scoped services across ownership boundaries is context-dependent. Suppression coverage now spans direct returns, field/property assignments, alias returns, ref/out parameter escapes, captured-delegate escapes, local-function returns, and lambda-body assignments while keeping the transformation trivia-only and low blast radius.
 
@@ -210,8 +210,8 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1245 |
-| Analyzer tests | 975 |
+| Total tests | 1251 |
+| Analyzer tests | 981 |
 | Code fix tests | 155 |
 | Infrastructure tests | 115 |
 | Analyzer mean score | 9.4/10 |
@@ -226,6 +226,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 | PR | Bug | Severity | Rule |
 |----|-----|----------|------|
+| Current | DI002 missed every conditional-access escape: `return scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?...`, field captures, and locals resolved through `scope?.ServiceProvider...` that later escaped were silent because resolution recognition required a plain `MemberAccessExpressionSyntax` receiver and consumption checks matched the invocation's direct parent; `using var scope = factory?.CreateScope();` was also not tracked as a scope variable | Medium | DI002 |
 | Current | DI014 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var provider = services?.BuildServiceProvider();` with later `provider?.Dispose()` including `finally` cleanup and predeclared reassignment, `return services?.BuildServiceProvider();`, and arrow-bodied returns) were reported as leaks even though the provider was handled; the fixer also skipped the conditional-access initializer shape entirely | Medium | DI014 |
 | Current | DI001 consumption-shape checks matched the invocation's direct parent, so conditional-access creations (`var scope = _provider?.CreateScope();` with later `scope?.Dispose()` including `finally` cleanup and predeclared reassignment, `return _provider?.CreateScope();`, and arrow-bodied returns) were reported as leaks even though the scope was handled | Medium | DI001 |
 | Current | The DI001 "Add 'await using'" fix converted only `MemberAccessExpressionSyntax` receivers to `CreateAsyncScope`, so for conditional-access creations in async contexts it emitted `await using var scope = factory?.CreateScope();`, which does not compile (`IServiceScope` is not `IAsyncDisposable`; the converted form would not compile either because `factory?.CreateAsyncScope()` yields `Nullable<AsyncServiceScope>` with no `DisposeAsync`) | Medium | DI001 |
