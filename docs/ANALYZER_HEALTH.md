@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-10 (DI021/DI022 launch: concurrent-handler shared-state family with scope-per-invocation fixer)
+**Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
-**Test result:** 1348/1348 passing.
+**Test result:** 1348/1348 passing (verified this date, 0 skipped).
 **Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
 **Code fix providers:** 14
 
@@ -10,10 +10,10 @@
 
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
-| DI001 | Scope Disposal | Warn | 59 | 14 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
-| DI002 | Scope Escape | Warn | 39 | 8 | 9.5 | 8.5 | Hardened: delegate-capture escapes, aliases, property/out/ref sinks, nested-boundary suppression coverage, and conditional-access resolutions (`scope?.ServiceProvider...`, chained `?.`, conditional scope creations) participating in escape detection |
-| DI003 | Captive Dependency | Warn | 107 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
-| DI004 | Use After Dispose | Warn | 47 | 9 | 10 | 8.8 | Fixer gated to owning using scope with awaited/immediate invocation guardrails; conditional-access resolutions (`scope?.ServiceProvider...`, chained `?.`, conditional scope creations) tracked alongside the existing conditional-use coverage |
+| DI001 | Scope Disposal | Warn | 59 | 15 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
+| DI002 | Scope Escape | Warn | 39 | 8 | 8.5 | 8.5 | Re-scored down (was 9.5): delegate-capture, alias, property/out/ref, and conditional-access sinks are solid, but whole sink classes are missing — collection `Add`/indexer assignment, event subscription, tuple/anonymous-object returns (all same-boundary, FN direction) |
+| DI003 | Captive Dependency | Warn | 120 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
+| DI004 | Use After Dispose | Warn | 46 | 10 | 8.7 | 8.8 | Re-scored down (was 10): strong mainline + conditional-access coverage, but explicit-dispose tracking is linear position-based (breaks at first `Dispose()`, no branch awareness — DI001/DI014 got branch-aware proofs, DI004 did not), and field-stored scopes are invisible |
 | DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
 | DI007 | Service Locator | Info | 38 | -- | 9.6 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
@@ -26,16 +26,16 @@
 | DI014 | Root Provider Not Disposed | Warn | 84 | 12 | 9.3 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails, conditional-access creation (`services?.BuildServiceProvider()`) disposal/return proofs with using/await-using fixer support, and wrapped-result proofs (parenthesized, provable upcast, null-forgiving) that reject user-defined conversions and unproven downcasts |
 | DI015 | Unresolvable Dependency | Warn | 121 | 16 | 9.8 | 9.2 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered, conditional-access (`services?.AddXxx(...)`) self-bindings mirror the trigger shape |
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
-| DI017 | Circular Dependency | Warn | 28 | -- | 9.5 | -- | Constructor selection fix, keyed cycle dedup fix, ServiceLookupKey, ActivatorUtilities factory guardrails |
+| DI017 | Circular Dependency | Warn | 28 | -- | 8.8 | -- | Re-scored down (was 9.5): the algorithm is sophisticated (flow-aware registrations, mutations, keyed deps, memoization) but 28 tests over 1,319 lines is thin — `Replace` mutation handled in code yet untested, only 2 keyed tests, `Lazy<T>` parameters never modeled |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 58 | 16 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, conditional-access receiver classification (`host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases report; `httpContext?.RequestServices...` / `scope?.ServiceProvider...` stay quiet), transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, conditional-access receivers, and async-aware (`CreateAsyncScope`/`await using`) |
-| DI020 | Middleware Scoped Service | Warn | 19 | -- | 9.3 | -- | New rule: conventional middleware constructors that capture scoped services (direct and transitive, via the shared `ScopedDependencyGraph`) for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance |
+| DI020 | Middleware Scoped Service | Warn | 19 | -- | 8.4 | -- | Re-scored down (was 9.3): new rule with real untested code paths — the non-generic `UseMiddleware(typeof(T))` branch has zero tests, zero keyed-service tests, and only `IApplicationBuilder` of the three recognized builder types is exercised |
 | DI021 | Concurrent Handler Shared State | Warn | 60 | 16 | 8.8 | 8.5 | New rule: non-thread-safe services (DbContext + derived, DbConnection/DbCommand/DbTransaction/DbDataReader + interfaces, IDbContextTransaction, HttpContext) captured via field/closure/enclosing-parameter into concurrently-invoked handlers (ServiceBus processors, EventProcessorClient, both Timer types, Parallel.*), including captured-scope in-handler resolution; serialization-guard suppressions (lock, SemaphoreSlim, Interlocked, timer re-arm, async-lock idiom) and proven-sequential escapes ship in v1 |
 | DI022 | Config-Gated Handler Capture | Info | (shared) | (shared) | 8.8 | 8.5 | New rule (same analyzer as DI021): the config-gated tier — sink concurrency knob unprovable at compile time (ServiceBusProcessor MaxConcurrentCalls); conditional wording, upgrades to DI021 when the knob is proven > 1, silent when proven 1 |
 
 `--` = no code fix exists for this rule.
 
-**Aggregates:** Analyzer mean 9.4/10. Fixer mean 8.6/10.
+**Aggregates:** Analyzer mean 9.3/10. Fixer mean 8.9/10.
 
 ## Scoring Methodology
 
@@ -49,33 +49,35 @@
 
 **Fixer factors:** all analyzer factors plus correctness risk (a bad code fix is worse than a missed diagnostic — behavior-changing rewrites like `using` wrapping rank higher risk than trivia-only fixes like suppression comments), and coverage of the fixer's actual transformation surface (action variants, statement shapes, trivia/formatting).
 
+**Honesty rules (2026-06-10 re-audit):** No rule scores 10 while a same-boundary, syntactically-reachable miss exists — 10 means "no obvious hardening need," and that claim must survive a source read, not just a green test run. Test density counts against the score when implementation complexity outpaces it (a 1,300-line flow algorithm with 28 tests cannot score 9.5 next to a 120-test rule at 9.8). Cross-boundary/inter-procedural blindness (helper methods that store arguments, fields mutated elsewhere) is a shared, deliberate design limit of every rule in this package and is *not* per-rule score debt; missing same-boundary sinks or untested in-code branches *are*.
+
 ## Per-Rule Details
 
 ### DI001 -- Scope Disposal (Warning)
 
-**Analyzer: 9.6/10** | Tests: 59 | **Fixer: 8.8/10** | Fix Tests: 14
+**Analyzer: 9.6/10** | Tests: 59 | **Fixer: 8.8/10** | Fix Tests: 15
 
 Operation-based tracking covers lambdas, fields, conditionals, nested scopes, and both `CreateScope()`/`CreateAsyncScope()` entry points. Conditional-access creations (`_provider?.CreateScope()`) participate in the consumption-shape proofs: the analyzer resolves the enclosing `ConditionalAccessExpressionSyntax` before matching initializer, assignment, return-statement, and arrow-body parents, so explicitly disposed (`scope?.Dispose()` including `finally` cleanup and predeclared reassignment), returned, and arrow-returned conditional creations stay quiet while undisposed ones still report. The await-using fix is suppressed for conditional-access creations because `factory?.CreateAsyncScope()` yields a nullable `AsyncServiceScope` with no `DisposeAsync`; the plain using fix remains offered for that shape. Explicit-disposal proofs reject `Dispose()` / `DisposeAsync()` calls that are reachable only through unsafe conditional branches, switch sections, loops, catch blocks, or after branch exits that can bypass shared cleanup, while continuing to accept straight-line, same-branch pre-exit, mutually exclusive branch-exit, and `finally` disposal patterns. Conditional ownership is now modeled for predeclared nullable scope locals assigned inside `if` / `else` or `try` blocks and disposed later through conditional access, exact non-null guards, or `finally` cleanup. Reassignment and repeated loop-creation guardrails keep the analyzer from treating one later dispose call as proof for a lost or repeatedly overwritten scope. Fixer wraps in `using`/`await using` statement and now offers `await using` only when the nearest callable can legally await it, so synchronous `CreateAsyncScope()` fixes stay on plain `using`.
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 9.5/10** | Tests: 39 | **Fixer: 8.5/10** | Fix Tests: 8
+**Analyzer: 8.5/10** (re-scored from 9.5, 2026-06-10) | Tests: 39 | **Fixer: 8.5/10** | Fix Tests: 8
 
-Strong analyzer after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks. Conditional-access shapes participate in escape detection: resolutions through `scope?.ServiceProvider.GetRequiredService<T>()` and chained `scope?.ServiceProvider?.GetRequiredService<T>()` are recognized (the provider receiver is resolved through the `MemberBindingExpressionSyntax` and its owning conditional access), `using var scope = factory?.CreateScope();` creations are tracked, and the consumption shape (return, field/property capture, local tracking) is classified from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
+**Why the re-score:** the sink table is enumerated, and whole escape classes are absent from it — none of these are detected or tested: collection escapes (`list.Add(service)`, `dict[key] = service`, indexer assignment to a field-held container), event-handler subscription (`SomeEvent += () => service.Use()`), and composite-construction returns (`return (service, other);`, `return new { Service = service };`). All are same-boundary and syntactically reachable, so they are real FN holes, not deliberate conservatism. Method-argument escape (`Register(service)` where the callee stores it) and iterator/async state-machine capture remain out of scope by design (inter-procedural). Strong analyzer within its implemented sinks after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks. Conditional-access shapes participate in escape detection: resolutions through `scope?.ServiceProvider.GetRequiredService<T>()` and chained `scope?.ServiceProvider?.GetRequiredService<T>()` are recognized (the provider receiver is resolved through the `MemberBindingExpressionSyntax` and its owning conditional access), `using var scope = factory?.CreateScope();` creations are tracked, and the consumption shape (return, field/property capture, local tracking) is classified from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
 
 The fixer intentionally offers pragma suppression only, because moving scoped services across ownership boundaries is context-dependent. Suppression coverage now spans direct returns, field/property assignments, alias returns, ref/out parameter escapes, captured-delegate escapes, local-function returns, and lambda-body assignments while keeping the transformation trivia-only and low blast radius.
 
 ### DI003 -- Captive Dependency (Warning)
 
-**Analyzer: 9.8/10** | Tests: 107 | **Fixer: 9/10** | Fix Tests: 13
+**Analyzer: 9.8/10** | Tests: 120 | **Fixer: 9/10** | Fix Tests: 13
 
 Strong runtime-correctness rule. Instance-backed registrations are explicitly excluded from constructor analysis, direct + ServiceDescriptor regressions are covered, collection-shaped captures through `IEnumerable<T>` / DI `GetServices<T>()` are detected without matching unrelated same-named APIs, and known scoped framework services such as `IOptionsSnapshot<T>` plus EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` now participate in lifetime checks, including guarded `AddDbContext<TService,TImplementation>(...)` and `AddDbContextPool<TService,TImplementation>(...)` implementation self-registrations. Stable same-block local delegate factories are inspected, including later definite simple reassignments, predeclared delegates assigned after declaration, same-declaration delegate reassignments, recursive local delegate aliases, exhaustive `if`/`else` branch reassignments, exhaustive local-function branch rewrites, definite directly invoked block-bodied and expression-bodied local-function reassignments, method-group delegate aliases to local functions that rewrite the factory, synchronous writes before the first `await` in unawaited async local functions, and inherited keyed factory parameters across conditional delegate branches; conditional, short-circuit, switch-arm, `for` incrementor, or early-return-bypassed local-function writes stay possible instead of replacing the prior delegate, iterator local-function bodies are not treated as executed at invocation time, no-op, mixed-value, and intervening-write alias cycles preserve reachable factory snapshots, guard-clause and throwing branch exits do not keep stale factory values reachable, overwritten branch-local helper rewrites do not leak stale diagnostics, branch-local helper rewrites on the only completing path clear stale initializer values, local-function guard returns keep prior factory values reachable, nested branch writes that return before registration stay unreachable, reassigned helper delegate aliases are resolved at the invocation site, unrelated assignment left-hand-side uses including invoked anonymous delegates do not count as factory writes, unreachable `ref`/`out` writes do not make a reachable initializer opaque, conditional nested returns do not clear reachable factory values, and opaque writes including direct delegate calls, delegate `.Invoke()` calls, and reachable ref/out writes stay conservative. Existing explicit EF context/options/factory registrations keep their original lifetime when later EF helpers use `TryAdd`-style registrations, with scoped options/factory guardrails across factory and pooled helpers. Factory-created `IDbContextFactory<TContext>` and singleton `DbContextOptions<TContext>` dependencies stay quiet, while `AddDbContextFactory(..., ServiceLifetime.Transient)` reports the context dependency as transient rather than scoped. Fixer adjusts local explicit registration lifetimes with coverage across direct, keyed, `TryAdd*`, inline-factory, `typeof(...)`, `ServiceDescriptor.Describe(...)` including named lifetime arguments, `new ServiceDescriptor(...)`, descriptor factory forms, and conditional-access (`services?.AddSingleton<...>()` etc.) lifetime rewrites that preserve the trigger's null-safe shape.
 
 ### DI004 -- Use After Dispose (Warning)
 
-**Analyzer: 10/10** | Tests: 47 | **Fixer: 8.8/10** | Fix Tests: 9
+**Analyzer: 8.7/10** (re-scored from 10, 2026-06-10) | Tests: 46 | **Fixer: 8.8/10** | Fix Tests: 10
 
-Strong after explicit-disposal and post-boundary state hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Conditional-access *resolutions* are tracked alongside the existing conditional-use coverage: `service = scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, and scopes created via `using (var scope = factory?.CreateScope())` participate in use-after-dispose detection (the assigned local resolves through the enclosing `ConditionalAccessExpressionSyntax`, and provider receivers resolve through the `.ServiceProvider` member binding), while conditional resolutions consumed inside the scope stay quiet. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
+**Why the re-score:** 10/10 claimed "no obvious hardening need," and a source read contradicts it. The explicit-dispose path (`AnalyzeExplicitScopeDisposals`) is linear and position-based — it `break`s at the first `Dispose()` invocation found in document order with no branch awareness (DI004_UseAfterDisposeAnalyzer.cs:299-304), so a `Dispose()` inside one `if` branch is treated as disposing for everything textually after it, and mutually-exclusive branch shapes are neither proven nor tested. DI001 and DI014 received branch-aware disposal-proof hardening; DI004's equivalent path did not. Scopes stored in instance/static fields and later disposed are also invisible (`CollectExplicitScopeVariables` only collects locals), which is a common real-world pattern, though it sits at the cross-boundary design limit. Strong after explicit-disposal and post-boundary state hardening within those limits. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Conditional-access *resolutions* are tracked alongside the existing conditional-use coverage: `service = scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, and scopes created via `using (var scope = factory?.CreateScope())` participate in use-after-dispose detection (the assigned local resolves through the enclosing `ConditionalAccessExpressionSyntax`, and provider receivers resolve through the `.ServiceProvider` member binding), while conditional resolutions consumed inside the scope stay quiet. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -155,9 +157,9 @@ Strong after builder-flow hardening. Covers assignable `IServiceCollection` abst
 
 ### DI017 -- Circular Dependency (Warning)
 
-**Analyzer: 9.5/10** | Tests: 28
+**Analyzer: 8.8/10** (re-scored from 9.5, 2026-06-10) | Tests: 28
 
-Major hardening pass applied. Cycle detection now uses reachable, flow-aware effective registrations, honors `TryAdd` plus `RemoveAll` / `Replace` removal, analyzes high-confidence factory requests including `ActivatorUtilities.CreateInstance<T>(...)` and `GetServiceOrCreateInstance<T>(...)`, inherited keyed dependencies, open-generic activation, and registered `IEnumerable<T>` elements, and keeps ambiguous constructors, dynamic keys, opaque factories, unrelated service collections, uninvoked wrappers, and mixed factory bodies with extra unclassified invocations silent. `knownNoCycle` memoization remains in place for scale. No code fix -- breaking cycles requires architectural decisions.
+**Why the re-score:** test density does not match algorithm complexity — 28 tests over 1,319 lines of flow-aware graph code, versus DI003's 120 tests at 9.8. Specific debt: `Replace` mutation is handled in `ApplyMutation` but has zero tests (the only mutation tests cover `RemoveAll`); keyed cycles have only 2 tests despite the PR #32 keyed-dedup bug history; and `Lazy<T>` constructor parameters are not modeled at all (likely silent today because `Lazy<T>` is unregistered in default MEDI, but that silence is incidental, not proven). Memoization is correctly keyed per registration instance including `Order`. Major hardening pass applied. Cycle detection now uses reachable, flow-aware effective registrations, honors `TryAdd` plus `RemoveAll` / `Replace` removal, analyzes high-confidence factory requests including `ActivatorUtilities.CreateInstance<T>(...)` and `GetServiceOrCreateInstance<T>(...)`, inherited keyed dependencies, open-generic activation, and registered `IEnumerable<T>` elements, and keeps ambiguous constructors, dynamic keys, opaque factories, unrelated service collections, uninvoked wrappers, and mixed factory bodies with extra unclassified invocations silent. `knownNoCycle` memoization remains in place for scale. No code fix -- breaking cycles requires architectural decisions.
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
@@ -175,6 +177,14 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 The scope-wrapping code fix is gated against scoped-service escape (assignment/argument), type-receiver static calls, and synchronous/async context mismatches, and now also refuses resolutions evaluated inside a conditional access's `WhenNotNull` (`var s = host?.Services.GetRequiredService<T>();`), where lifting the member-binding receiver into `using var scope = ....CreateScope();` would emit non-compiling code and drop the null-shortcut semantics.
 
+### DI020 -- Middleware Scoped Service (Warning)
+
+**Analyzer: 8.4/10** (re-scored from 9.3, 2026-06-10; this section was previously missing) | Tests: 19
+
+Detects conventional middleware constructors that capture scoped services — direct and transitive via the shared `ScopedDependencyGraph` — for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance. Constructor selection honors explicit `UseMiddleware` arguments, optional parameters, and greedy-overload resolution.
+
+**Why the re-score:** the rule is new and has real untested code paths, not just thin coverage. The non-generic `UseMiddleware(typeof(MyMiddleware), args)` branch (DI020_MiddlewareScopedServiceAnalyzer.cs:112-126) — a supported and common registration form — has zero tests. Keyed-service parameters route through `KeyedServiceHelpers` but no test exercises a `[FromKeyedServices]` middleware dependency. The receiver check recognizes three builder abstractions but only `IApplicationBuilder` is tested; `IEndpointRouteBuilder` and convention-builder registration are unverified. Conditional-access registration (`app?.UseMiddleware<T>()`) is also untested. Fundamentals are proven and the shared graph is hardened by DI019's suite, so this is coverage debt rather than suspected wrongness — but 9.3 assumed no untested branches, which is false. No code fix — moving a dependency to `Invoke` parameters changes the middleware's contract.
+
 ### DI021 / DI022 -- Concurrent Handler Shared State (Warning / Info)
 
 **Analyzer: 8.8/10** | Tests: 60 (shared) | **Fixer: 8.5/10** | Fix Tests: 16 (shared)
@@ -191,10 +201,10 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Fixer | Fix Tests | Score | Risk Assessment |
 |-------|-----------|-------|-----------------|
-| DI001 (Scope Disposal) | 14 | 8.8 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates, unsafe await-using suppression, conditional-access creation using/await-using gating) |
+| DI001 (Scope Disposal) | 15 | 8.8 | Low -- behavior-changing rewrite now well-covered (nested, explicit types, trivia, async delegates, unsafe await-using suppression, conditional-access creation using/await-using gating) |
 | DI002 (Scope Escape) | 8 | 8.5 | Low -- pragma-only suppression now covers direct, nested-boundary, alias, ref/out, property, and captured-delegate diagnostics |
 | DI003 (Captive Dependency) | 13 | 9 | Low -- direct, keyed, TryAdd, inline-factory, typeof, ServiceDescriptor argument, descriptor-factory shape coverage, and conditional-access (`services?.AddXxx<...>()`) lifetime rewrite |
-| DI004 (Use After Dispose) | 9 | 8.8 | Low -- move fix is gated to owning-scope immediate and awaited invocations, with unsafe escape/adjacent-scope shapes suppressed |
+| DI004 (Use After Dispose) | 10 | 8.8 | Low -- move fix is gated to owning-scope immediate and awaited invocations, with unsafe escape/adjacent-scope shapes suppressed |
 | DI005 (Async Scope) | 11 | 8.8 | Low -- narrow direct-resource using/await-using transformation, including top-level async using declarations and nested-resource no-fix guardrails |
 | DI006 (Static Provider Cache) | 16 | 9.2 | Low -- direct and `Lazy<T>` cache shapes covered with conservative static-context fix gating |
 | DI008 (Disposable Transient) | 18 | 9.3 | Low -- strong shape coverage, including named `typeof` overloads, `ServiceDescriptor.Transient(...)` method rewrites, and descriptor lifetime-argument replacement |
@@ -204,7 +214,7 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 | DI014 (Root Provider) | 12 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, chained builders, conditional-access creation using/await-using rewrites, and wrapped-result (paren/upcast/null-forgiving) proofs covered |
 | DI015 (Unresolvable Dependency) | 16 | 9.2 | Low -- keyed, factory, TryAdd, local-alias, and conditional-access (`services?.AddXxx(...)`) self-binding generation is tightly gated; inserted statement mirrors the trigger's null-safe shape; FixAll remains disabled |
 | DI019 (Root Scoped Resolution) | 16 | 9 | Medium -- behavior-changing scope wrap, but escape analysis (assignment/argument/return/lambda capture), conditional-access refusal, async-context `CreateAsyncScope` selection, and name-collision handling are all covered; FixAll disabled |
-| DI021/DI022 (Scope Per Invocation) | 10 | 8.5 | Medium -- behavior-changing handler rewrite with constructor plumbing and dead-field removal; static-handler/scope-resolution/no-constructor refusals and shadow-safe naming covered; FixAll disabled |
+| DI021/DI022 (Scope Per Invocation) | 16 | 8.5 | Medium -- behavior-changing handler rewrite with constructor plumbing and dead-field removal; static-handler/scope-resolution/no-constructor refusals and shadow-safe naming covered; FixAll disabled |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI020. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
@@ -214,10 +224,12 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 |-----------|-------|------------|
 | RegistrationCollector | 46 | Core engine, strong coverage, including EF Core AddDbContext, AddDbContextFactory, AddDbContextPool, AddPooledDbContextFactory, and guarded service/implementation self-registration modeling |
 | WellKnownTypes | 29 | Type symbol cache, comprehensive |
-| PerformanceRegression | 4 | Baseline performance guards |
-| SampleDiagnosticsVerifier | 10 | SARIF contract + freshness gates |
-| RegistrationCollector (ServiceDescriptor) | 4 | ServiceDescriptor-specific collection |
-| DiagnosticDescriptorSeverity | 1 (Theory, 19 cases) | Severity budget enforcement |
+| PerformanceRegression | 7 | Baseline performance guards |
+| SampleDiagnosticsVerifier | 14 | SARIF contract (8) + verifier (2) + sample-docs freshness gates (4) |
+| RegistrationCollector (ServiceDescriptor) | 4 + 2 | Infrastructure suite (4) plus rule-level ServiceDescriptor registration tests (2) |
+| DiagnosticDescriptorSeverity | 3 + 1 Theory (23 cases) | Severity budget enforcement across all 22 rule IDs + DI012b |
+| CompatibilitySmoke | 6 | Roslyn/package compatibility floor |
+| CodeFixInventoryParity | 3 | Fixer inventory stays in sync with shipped rules |
 | CrossRuleInteraction | 10 | Multi-rule scenario validation |
 | KeyedService | 9 | DI 8.0 keyed service support |
 
@@ -227,16 +239,16 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1255 |
-| Analyzer tests | 985 |
-| Code fix tests | 155 |
-| Infrastructure tests | 115 |
-| Analyzer mean score | 9.4/10 |
-| Fixer mean score | 8.6/10 |
-| Rules at 9+ | 20/20 (100%) |
-| Fixers at 8+ | 13/13 (100%) |
-| Rules needing pass | 0 analyzers, 0 fixers |
-| TODO/FIXME in source | 0 |
+| Total tests | 1348 (verified passing 2026-06-10) |
+| Analyzer tests | 1025 (per-rule 1004 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
+| Code fix tests | 188 |
+| Infrastructure tests | 135 (112 facts + 23 severity theory cases) |
+| Analyzer mean score | 9.3/10 |
+| Fixer mean score | 8.9/10 |
+| Rules at 9+ | 16/22 (sub-9: DI002 8.5, DI004 8.7, DI017 8.8, DI020 8.4, DI021 8.8, DI022 8.8) |
+| Fixers at 8+ | 14/14 (100%) |
+| Rules needing pass | 5 analyzer passes (DI020, DI021/DI022 v2, DI002, DI004, DI017 — see Work Priority), 0 fixers |
+| TODO/FIXME in source | 0 (verified) |
 | Skipped tests | 0 |
 
 ## Bugs Found During Hardening
@@ -344,6 +356,70 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 | Current | EF Core `AddDbContextFactory<TContext>()` registrations were invisible to DI003/DI019 and could make DI015 report normal `TContext`, `DbContextOptions<TContext>`, or `IDbContextFactory<TContext>` dependencies as missing | Medium | DI003/DI019/DI015 |
 | Current | EF Core pooled registrations were invisible to DI003/DI019/DI015, and `AddDbContextFactory(..., ServiceLifetime.Transient)` was modeled as scoped, risking root-provider false positives and imprecise DI003 wording | Medium | DI003/DI019/DI015 |
 
+## Importance Ranking
+
+Which rules matter most *to catch*, independent of how healthy each currently is. Ranked by three factors: severity of the runtime consequence (silent data corruption > crash > leak > design smell), detectability without the analyzer (silent/intermittent bugs rank above fail-fast startup crashes, because fail-fast bugs get caught in dev anyway — the analyzer's value-add there is shifting discovery left, not preventing shipped bugs), and how commonly real codebases make the mistake.
+
+### Tier 1 — Silent state corruption (highest stakes: wrong data, cross-request bleed, intermittent)
+
+| Rank | Rule | Why it tops the list |
+|------|------|----------------------|
+| 1 | DI003 Captive Dependency | The flagship bug class of this package: a scoped service (typically a `DbContext`) captured by a singleton silently shares state across requests. No exception, no log line — just wrong data and cross-user leakage. Extremely common mistake. |
+| 2 | DI021/DI022 Concurrent Handler Shared State | Concurrent use of a non-thread-safe service (DbContext, DbConnection) from message handlers/timers: intermittent corruption and `InvalidOperationException` only under production load. The hardest bug class on this list to diagnose after the fact. |
+| 3 | DI019 Root Scoped Resolution | Scoped-from-root behaves as an accidental singleton (same corruption class as DI003) *and* the root provider holds every resolved disposable forever — silent unbounded memory growth. |
+| 4 | DI020 Middleware Scoped Service | DI003's bug class specialized to middleware: a scoped service captured at pipeline-build time lives for the application lifetime. Common in real ASP.NET Core apps. |
+| 5 | DI009 Open Generic Lifetime Mismatch | Same captive-dependency consequence as DI003 via the open-generic registration shape; rarer in practice, hence below its siblings. |
+
+### Tier 2 — Resource leaks and disposal crashes (degrade over time, or crash on a specific path)
+
+| Rank | Rule | Why |
+|------|------|-----|
+| 6 | DI004 Use After Dispose | `ObjectDisposedException` in production on the affected path; silent until that path runs. |
+| 7 | DI014 Root Provider Not Disposed | Leaks an entire container graph per occurrence (worst per-instance leak); common in tests, tools, and factory misuse. |
+| 8 | DI001 Scope Disposal | Leaks the scope's disposables; the most common leak shape day-to-day. |
+| 9 | DI008 Disposable Transient | Root-resolved disposable transients are held by the container for its lifetime — slow, invisible memory growth. |
+| 10 | DI002 Scope Escape | The precursor bug to DI004/DI001: a service smuggled past its scope boundary. Silent; consequence arrives later and far from the cause. |
+| 11 | DI005 Async Disposal | Sync-over-async disposal: deadlock risk and lost async cleanup; narrower trigger than the rest of this tier. |
+
+### Tier 3 — Fail-fast activation errors (real bugs, but runtime catches them loudly; analyzer value is shift-left)
+
+| Rank | Rule | Why |
+|------|------|-----|
+| 12 | DI015 Unresolvable Dependency | Highest in this tier because resolution crashes on *rarely-executed paths* do ship to production — it is only fail-fast when the path runs. |
+| 13 | DI013 Implementation Mismatch (Error) | Crashes at first resolution and is never correct code — which is exactly why it's the only Error-severity rule, and also why it rarely survives dev. Zero false positives is the non-negotiable here. |
+| 14 | DI017 Circular Dependency | Exception at first resolution of the cycle; usually caught in dev unless the cycle is on a rare path. |
+| 15 | DI018 Non-Instantiable Implementation | Activation failure, almost always caught immediately. |
+
+### Tier 4 — Configuration/structure correctness smells
+
+| Rank | Rule | Why |
+|------|------|-----|
+| 16 | DI016 BuildServiceProvider Misuse | Duplicate singleton universes and leaked providers — real consequences, but usually a code-review-visible pattern. |
+| 17 | DI012 Conditional Registration | "Wrong service wins" surprises; consequence is usually functional and discoverable. |
+| 18 | DI006 Static Provider Cache | Hidden global container state; primarily testability and lifetime hygiene. |
+
+### Tier 5 — Design guidance (Info severity, by design)
+
+| Rank | Rule |
+|------|------|
+| 19 | DI007 Service Locator |
+| 20 | DI011 Service Provider Injection |
+| 21 | DI010 Constructor Over-Injection |
+
+## Work Priority (importance × health gap)
+
+Work should go where a high-importance rule has a low honest score. Combining the ranking above with the re-audited scores:
+
+| Priority | Target | Importance | Health | What to do |
+|----------|--------|------------|--------|------------|
+| 1 | DI020 hardening | Tier 1 (#4) | 8.4 | Close the audit gaps before widening anything: tests + any fixes for the non-generic `UseMiddleware(typeof(T))` branch, keyed-service (`[FromKeyedServices]`) middleware dependencies, `IEndpointRouteBuilder`/convention-builder receivers, conditional-access registration. Smallest effort, highest-importance payoff. |
+| 2 | DI021/DI022 v2 | Tier 1 (#2) | 8.8 | The documented v2 roadmap: RabbitMQ (v6/v7 surfaces), PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; cross-method concurrency-knob proofs; `IDbContextFactory<TContext>` second code action. |
+| 3 | DI002 sink expansion | Tier 2 (#10) | 8.5 | Add the missing same-boundary sinks: collection `Add`/`Insert`/indexer assignment, event subscription, tuple/anonymous-object returns. Each is a bounded, testable sink row — same playbook as previous hardening passes. |
+| 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.7 | Make explicit-dispose tracking branch-aware (port the DI001/DI014 disposal-proof approach instead of first-`Dispose()` position break); add branch-shape tests. Field-stored scopes can follow as a separate, larger pass if cross-boundary tracking is ever taken on. |
+| 5 | DI017 test density | Tier 3 (#14) | 8.8 | Cheapest item: this is test debt, not suspected wrongness. Add `Replace` mutation tests, keyed permutations (mixed keyed/unkeyed edges, int-vs-string keys), and a `Lazy<T>` parameter test pinning current behavior. |
+
+DI003/DI019 (Tier 1, scores 9.8/9.7) stay maintenance-only: they earned their scores with 120/58 tests and repeated hardening; new work there should be feedback-driven, not speculative.
+
 ## Watchlist
 
 | Item | Reason | Priority |
@@ -354,6 +430,11 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 ## Recommended Next Actions
 
-1. **DI021 v2 pass** -- RabbitMQ/PLINQ/Dataflow sink rows, scoped-lifetime DI022 tier, cross-method knob proofs, and an `IDbContextFactory<TContext>` second code action
-2. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
-3. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019
+Ordered by the Work Priority table above:
+
+1. **DI020 hardening pass** -- non-generic `UseMiddleware(typeof(T))` coverage, keyed-service middleware dependencies, endpoint-route/convention-builder receivers, conditional-access registration (Tier-1 rule at the lowest score in the suite)
+2. **DI021 v2 pass** -- RabbitMQ/PLINQ/Dataflow sink rows, scoped-lifetime DI022 tier, cross-method knob proofs, and an `IDbContextFactory<TContext>` second code action
+3. **DI002 sink expansion** -- collection/indexer/event/composite-return escape sinks
+4. **DI004 branch-aware explicit-dispose tracking** -- port the DI001/DI014 disposal-proof approach
+5. **DI017 test-density pass** -- `Replace` mutation, keyed permutations, `Lazy<T>` behavior pin
+6. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019
