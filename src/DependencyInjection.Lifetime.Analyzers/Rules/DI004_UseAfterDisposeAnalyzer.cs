@@ -288,6 +288,7 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
             var capturedDelegateVariables = new Dictionary<ILocalSymbol, string>(SymbolEqualityComparer.Default);
             int? disposePosition = null;
+            List<SyntaxNode>? disposeNodes = null;
 
             foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
             {
@@ -299,7 +300,21 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 if (node is InvocationExpressionSyntax disposeInvocation &&
                     IsDisposeInvocationForScope(disposeInvocation, semanticModel, scope.Symbol))
                 {
+                    // Every dispose site matters: a branch mutually exclusive with the first
+                    // dispose can contain its own dispose-then-use. Variable tracking still
+                    // stops at the first site.
                     disposePosition = disposeInvocation.Span.End;
+                    disposeNodes = new List<SyntaxNode> { disposeInvocation };
+                    foreach (var later in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+                    {
+                        if (later.SpanStart > disposeInvocation.SpanStart &&
+                            later is InvocationExpressionSyntax laterDispose &&
+                            IsDisposeInvocationForScope(laterDispose, semanticModel, scope.Symbol))
+                        {
+                            disposeNodes.Add(laterDispose);
+                        }
+                    }
+
                     break;
                 }
 
@@ -340,8 +355,122 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 serviceVariables,
                 capturedDelegateVariables,
                 disposePosition.Value,
-                reportedSpans);
+                reportedSpans,
+                disposeNodes);
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="use"/> sits in a branch that is mutually exclusive with the
+    /// branch containing <paramref name="dispose"/>: the opposite arm of the same if/else, or a
+    /// different section of the same switch. Such a pair cannot both execute on one path.
+    /// </summary>
+    private static bool IsInMutuallyExclusiveBranch(SyntaxNode use, SyntaxNode dispose)
+    {
+        for (SyntaxNode? current = dispose.Parent; current is not null; current = current.Parent)
+        {
+            if (current is IfStatementSyntax ifStatement)
+            {
+                var disposeInThen = ifStatement.Statement.Span.Contains(dispose.Span);
+                if (disposeInThen &&
+                    ifStatement.Else is { } elseClause &&
+                    elseClause.Statement.Span.Contains(use.Span))
+                {
+                    return true;
+                }
+
+                if (!disposeInThen && ifStatement.Statement.Span.Contains(use.Span))
+                {
+                    return true;
+                }
+            }
+
+            if (current is SwitchSectionSyntax disposeSection &&
+                disposeSection.Parent is SwitchStatementSyntax switchStatement)
+            {
+                foreach (var section in switchStatement.Sections)
+                {
+                    // goto case / goto default chains sections onto one execution path — but
+                    // only the chain actually reachable from the dispose's section matters.
+                    if (section != disposeSection &&
+                        section.Span.Contains(use.Span) &&
+                        !CanReachSectionViaGoto(switchStatement, disposeSection, section))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether control can flow from <paramref name="from"/> to <paramref name="to"/> through
+    /// goto case / goto default edges of the same switch. Plain label gotos and unresolvable
+    /// targets are treated as reaching everything (conservative).
+    /// </summary>
+    private static bool CanReachSectionViaGoto(
+        SwitchStatementSyntax switchStatement,
+        SwitchSectionSyntax from,
+        SwitchSectionSyntax to)
+    {
+        var visited = new HashSet<SwitchSectionSyntax> { from };
+        var queue = new Queue<SwitchSectionSyntax>();
+        queue.Enqueue(from);
+        while (queue.Count > 0)
+        {
+            var section = queue.Dequeue();
+            foreach (var gotoStatement in section.DescendantNodes().OfType<GotoStatementSyntax>())
+            {
+                // A goto inside a nested switch targets that switch, not this one.
+                if (gotoStatement.Ancestors().OfType<SwitchStatementSyntax>().FirstOrDefault() !=
+                    switchStatement)
+                {
+                    continue;
+                }
+
+                var target = ResolveGotoTargetSection(switchStatement, gotoStatement);
+                if (target is null)
+                {
+                    // Plain `goto label` or an unresolvable case value: assume it can reach.
+                    return true;
+                }
+
+                if (target == to)
+                {
+                    return true;
+                }
+
+                if (visited.Add(target))
+                {
+                    queue.Enqueue(target);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static SwitchSectionSyntax? ResolveGotoTargetSection(
+        SwitchStatementSyntax switchStatement,
+        GotoStatementSyntax gotoStatement)
+    {
+        if (gotoStatement.IsKind(SyntaxKind.GotoDefaultStatement))
+        {
+            return switchStatement.Sections.FirstOrDefault(
+                section => section.Labels.Any(label => label is DefaultSwitchLabelSyntax));
+        }
+
+        if (gotoStatement.IsKind(SyntaxKind.GotoCaseStatement) && gotoStatement.Expression is { } caseValue)
+        {
+            var normalized = caseValue.ToString();
+            return switchStatement.Sections.FirstOrDefault(section => section.Labels.Any(
+                label => label is CaseSwitchLabelSyntax caseLabel &&
+                         caseLabel.Value.ToString() == normalized));
+        }
+
+        return null;
     }
 
     private static void ReportUsageAfterPosition(
@@ -351,7 +480,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
         Dictionary<ILocalSymbol, string> capturedDelegateVariables,
         int position,
-        HashSet<TextSpan> reportedSpans)
+        HashSet<TextSpan> reportedSpans,
+        List<SyntaxNode>? disposeNodes = null)
     {
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
@@ -360,8 +490,22 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            // Alias/reassignment tracking must observe every node — a reassignment in a branch
+            // exclusive with the first dispose still changes what the local refers to before
+            // that branch's own dispose.
             TrackServiceAlias(node, semanticModel, serviceVariables);
             TrackDelegateCapture(node, semanticModel, serviceVariables, capturedDelegateVariables);
+
+            // A use reports only when SOME dispose site precedes it on a path it shares: an
+            // explicit Dispose() in one if/else arm or switch section cannot have run when
+            // execution is in a mutually exclusive sibling branch, but that sibling's own
+            // dispose still counts.
+            if (disposeNodes is not null &&
+                !disposeNodes.Any(dispose =>
+                    dispose.Span.End <= node.SpanStart && !IsInMutuallyExclusiveBranch(node, dispose)))
+            {
+                continue;
+            }
 
             if (node is InvocationExpressionSyntax delegateInvocation &&
                 delegateInvocation.Expression is IdentifierNameSyntax delegateIdentifier &&

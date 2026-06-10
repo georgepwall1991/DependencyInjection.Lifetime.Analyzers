@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
-**Test result:** 1415/1415 passing (verified this date, 0 skipped).
+**Test result:** 1423/1423 passing (verified this date, 0 skipped).
 **Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
 **Code fix providers:** 14
 
@@ -13,7 +13,7 @@
 | DI001 | Scope Disposal | Warn | 59 | 15 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
 | DI002 | Scope Escape | Warn | 57 | 8 | 8.8 | 8.5 | 2.10.3 closed the two highest-frequency audit gaps: field/property-collection mutation (`_cache.Add`, `Insert`/`Enqueue`/`Push`/`TryAdd`, direct-resolution arguments) and event subscription (method-group and captured-delegate handlers on owners that outlive the scope); indexer assignment was already covered via the indexer property symbol and is now pinned. Remaining audit debt: tuple/anonymous-object composite returns (FN direction) |
 | DI003 | Captive Dependency | Warn | 120 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
-| DI004 | Use After Dispose | Warn | 46 | 10 | 8.7 | 8.8 | Re-scored down (was 10): strong mainline + conditional-access coverage, but explicit-dispose tracking is linear position-based (breaks at first `Dispose()`, no branch awareness — DI001/DI014 got branch-aware proofs, DI004 did not), and field-stored scopes are invisible |
+| DI004 | Use After Dispose | Warn | 54 | 10 | 8.9 | 8.8 | 2.10.5 fixed the audit's branch-precision gap: uses in branches mutually exclusive with an explicit `Dispose()` (opposite if/else arm, different switch section) no longer report, while shared-path uses after a conditional dispose still do. Remaining cross-boundary limit: field-stored scopes are invisible (shared design limit) |
 | DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
 | DI006 | Static Provider Cache | Warn | 28 | 16 | 9.5 | 9.2 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
 | DI007 | Service Locator | Info | 38 | -- | 9.6 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
@@ -75,9 +75,9 @@ Strong runtime-correctness rule. Instance-backed registrations are explicitly ex
 
 ### DI004 -- Use After Dispose (Warning)
 
-**Analyzer: 8.7/10** (re-scored from 10, 2026-06-10) | Tests: 46 | **Fixer: 8.8/10** | Fix Tests: 10
+**Analyzer: 8.9/10** (re-scored from 10 in the 2026-06-10 audit; raised from 8.7 after the 2.10.5 branch-awareness fix) | Tests: 54 | **Fixer: 8.8/10** | Fix Tests: 10
 
-**Why the re-score:** 10/10 claimed "no obvious hardening need," and a source read contradicts it. The explicit-dispose path (`AnalyzeExplicitScopeDisposals`) is linear and position-based — it `break`s at the first `Dispose()` invocation found in document order with no branch awareness (DI004_UseAfterDisposeAnalyzer.cs:299-304), so a `Dispose()` inside one `if` branch is treated as disposing for everything textually after it, and mutually-exclusive branch shapes are neither proven nor tested. DI001 and DI014 received branch-aware disposal-proof hardening; DI004's equivalent path did not. Scopes stored in instance/static fields and later disposed are also invisible (`CollectExplicitScopeVariables` only collects locals), which is a common real-world pattern, though it sits at the cross-boundary design limit. Strong after explicit-disposal and post-boundary state hardening within those limits. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Conditional-access *resolutions* are tracked alongside the existing conditional-use coverage: `service = scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, and scopes created via `using (var scope = factory?.CreateScope())` participate in use-after-dispose detection (the assigned local resolves through the enclosing `ConditionalAccessExpressionSyntax`, and provider receivers resolve through the `.ServiceProvider` member binding), while conditional resolutions consumed inside the scope stay quiet. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
+**2.10.5 branch-awareness fix:** the explicit-dispose path is still position-anchored at the first `Dispose()`, but the use-reporting pass now skips branches mutually exclusive with the dispose site (opposite if/else arm — else-if chains included via span containment — and different switch sections), closing the audit's false-positive shape; a use on the shared path after a conditional dispose still reports because the dispose may have run on the taken branch. Scopes stored in instance/static fields and later disposed remain invisible (`CollectExplicitScopeVariables` only collects locals) — a real-world pattern, but it sits at the cross-boundary design limit shared by every rule in this package. Strong after explicit-disposal and post-boundary state hardening within those limits. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, explicit `Dispose()` / `DisposeAsync()`, conditional/member uses, deconstruction, `await foreach`, keyed constants, deferred delegate capture, and mixed `GetServices<T>()` collections while keeping uncertain lifetimes silent. Conditional-access *resolutions* are tracked alongside the existing conditional-use coverage: `service = scope?.ServiceProvider.GetRequiredService<T>();`, chained `scope?.ServiceProvider?.GetRequiredService<T>()`, and scopes created via `using (var scope = factory?.CreateScope())` participate in use-after-dispose detection (the assigned local resolves through the enclosing `ConditionalAccessExpressionSyntax`, and provider receivers resolve through the `.ServiceProvider` member binding), while conditional resolutions consumed inside the scope stay quiet. Fixer now moves only simple immediate invocation-style uses whose diagnostic local was assigned inside the immediately preceding `using` block, and it offers pragma suppression for context-dependent cases. Guardrails cover unrelated adjacent scopes, escape assignments, nested-boundary assignments, invocation-argument diagnostics, awaited immediate invocations, comments, return-only suppression, and `await using` blocks.
 
 ### DI005 -- Async Disposal (Warning)
 
@@ -239,13 +239,13 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1415 (verified passing 2026-06-10) |
-| Analyzer tests | 1092 (per-rule 1071 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
+| Total tests | 1423 (verified passing 2026-06-10) |
+| Analyzer tests | 1100 (per-rule 1079 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
 | Code fix tests | 188 |
 | Infrastructure tests | 135 (112 facts + 23 severity theory cases) |
 | Analyzer mean score | 9.3/10 |
 | Fixer mean score | 8.9/10 |
-| Rules at 9+ | 17/22 (sub-9: DI002 8.8, DI004 8.7, DI017 8.8, DI021 8.8, DI022 8.8) |
+| Rules at 9+ | 17/22 (sub-9: DI002 8.8, DI004 8.9, DI017 8.8, DI021 8.8, DI022 8.8) |
 | Fixers at 8+ | 14/14 (100%) |
 | Rules needing pass | 5 analyzer passes (DI020, DI021/DI022 v2, DI002, DI004, DI017 — see Work Priority), 0 fixers |
 | TODO/FIXME in source | 0 (verified) |
@@ -415,7 +415,7 @@ Work should go where a high-importance rule has a low honest score. Combining th
 | 1 | DI020 hardening | Tier 1 (#4) | 9.0 | Shipped 2.10.4: all audit gaps covered, explicit-argument FP fixed, conditional-access detection added. Maintenance-only pending real-world feedback. |
 | 2 | DI021/DI022 v2 | Tier 1 (#2) | 8.8 | RabbitMQ consumer sinks shipped in 2.10.1. Remaining v2 roadmap: PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; same-tree helper-method knob proofs shipped 2.10.2 — remaining proof work is the RabbitMQ factory→connection→channel→consumer instance chain and cross-tree wiring; `IDbContextFactory<TContext>` second code action. |
 | 3 | DI002 sink expansion | Tier 2 (#10) | 8.8 | Collection-mutation and event-subscription sinks shipped 2.10.3 (indexer was already covered and is now pinned). Remaining: tuple/anonymous-object composite returns — bounded and testable, lower frequency than the shipped shapes. |
-| 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.7 | Make explicit-dispose tracking branch-aware (port the DI001/DI014 disposal-proof approach instead of first-`Dispose()` position break); add branch-shape tests. Field-stored scopes can follow as a separate, larger pass if cross-boundary tracking is ever taken on. |
+| 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.9 | Shipped 2.10.5: mutually-exclusive-branch uses no longer report; branch-shape tests added. Field-stored scopes remain a separate, larger pass if cross-boundary tracking is ever taken on. |
 | 5 | DI017 test density | Tier 3 (#14) | 8.8 | Cheapest item: this is test debt, not suspected wrongness. Add `Replace` mutation tests, keyed permutations (mixed keyed/unkeyed edges, int-vs-string keys), and a `Lazy<T>` parameter test pinning current behavior. |
 
 DI003/DI019 (Tier 1, scores 9.8/9.7) stay maintenance-only: they earned their scores with 120/58 tests and repeated hardening; new work there should be feedback-driven, not speculative.
@@ -435,6 +435,6 @@ Ordered by the Work Priority table above:
 1. **DI020 hardening pass** -- shipped 2.10.4 (all audit gaps covered, explicit-argument FP fixed, conditional-access detection added)
 2. **DI021 v2 pass (continued)** -- PLINQ/Dataflow/EventHubs-batch sink rows (RabbitMQ shipped 2.10.1), scoped-lifetime DI022 tier, instance-correlated knob proofs, and an `IDbContextFactory<TContext>` second code action
 3. **DI002 sink expansion** -- collection/indexer/event/composite-return escape sinks
-4. **DI004 branch-aware explicit-dispose tracking** -- port the DI001/DI014 disposal-proof approach
+4. **DI004 branch-aware explicit-dispose tracking** -- shipped 2.10.5 (mutually-exclusive branch skip)
 5. **DI017 test-density pass** -- `Replace` mutation, keyed permutations, `Lazy<T>` behavior pin
 6. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019
