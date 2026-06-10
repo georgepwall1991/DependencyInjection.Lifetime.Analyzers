@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -26,7 +28,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(
             DiagnosticDescriptors.ConcurrentHandlerSharedState,
-            DiagnosticDescriptors.ConcurrentHandlerConfigGatedSharedState);
+            DiagnosticDescriptors.ConcurrentHandlerConfigGatedSharedState,
+            DiagnosticDescriptors.ConcurrentHandlerScopedLifetimeSharedState);
 
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
@@ -34,10 +37,38 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
 
-        context.RegisterOperationAction(AnalyzeEventAssignment, OperationKind.EventAssignment);
-        context.RegisterOperationAction(AnalyzeInvocation, OperationKind.Invocation);
-        context.RegisterOperationAction(AnalyzeObjectCreation, OperationKind.ObjectCreation);
-        context.RegisterOperationAction(AnalyzeMethodBody, OperationKind.MethodBody);
+        context.RegisterCompilationStartAction(compilationContext =>
+        {
+            // The scoped-lifetime DI022 tier needs the full registration picture, which is only
+            // complete at compilation end — candidates are bagged during handler analysis and
+            // reported once lifetimes are known.
+            var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
+            var scopedTierCandidates = new ConcurrentBag<ScopedTierCandidate>();
+
+            if (registrationCollector is not null)
+            {
+                compilationContext.RegisterSyntaxNodeAction(
+                    syntaxContext => registrationCollector.AnalyzeInvocation(
+                        (InvocationExpressionSyntax)syntaxContext.Node, syntaxContext.SemanticModel),
+                    SyntaxKind.InvocationExpression);
+            }
+
+            compilationContext.RegisterOperationAction(
+                operationContext => AnalyzeEventAssignment(operationContext, scopedTierCandidates),
+                OperationKind.EventAssignment);
+            compilationContext.RegisterOperationAction(
+                operationContext => AnalyzeInvocation(operationContext, scopedTierCandidates),
+                OperationKind.Invocation);
+            compilationContext.RegisterOperationAction(
+                operationContext => AnalyzeObjectCreation(operationContext, scopedTierCandidates),
+                OperationKind.ObjectCreation);
+            compilationContext.RegisterOperationAction(
+                operationContext => AnalyzeMethodBody(operationContext, scopedTierCandidates),
+                OperationKind.MethodBody);
+
+            compilationContext.RegisterCompilationEndAction(
+                endContext => ReportScopedTierCandidates(endContext, registrationCollector, scopedTierCandidates));
+        });
     }
 
     private enum SinkConcurrency
@@ -87,7 +118,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     // Sink detection
     // ---------------------------------------------------------------------
 
-    private static void AnalyzeEventAssignment(OperationAnalysisContext context)
+    private static void AnalyzeEventAssignment(
+        OperationAnalysisContext context,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var assignment = (IEventAssignmentOperation)context.Operation;
         if (!assignment.Adds)
@@ -234,17 +267,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 return;
         }
 
-        AnalyzeHandlerValue(context, assignment.HandlerValue, sink, assignment.Syntax);
+        AnalyzeHandlerValue(context, assignment.HandlerValue, sink, assignment.Syntax, scopedTierCandidates);
     }
 
-    private static void AnalyzeInvocation(OperationAnalysisContext context)
+    private static void AnalyzeInvocation(
+        OperationAnalysisContext context,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var invocation = (IInvocationOperation)context.Operation;
         var method = invocation.TargetMethod;
         if (method.Name == "ForAll" &&
             method.ContainingType?.ToDisplayString() == "System.Linq.ParallelEnumerable")
         {
-            AnalyzePlinqForAll(context, invocation);
+            AnalyzePlinqForAll(context, invocation, scopedTierCandidates);
             return;
         }
 
@@ -281,12 +316,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // Parallel.Invoke(params Action[]) surfaces as a single array-creation argument.
                 foreach (var element in initializer.ElementValues)
                 {
-                    AnalyzeHandlerValue(context, element, sink, invocation.Syntax);
+                    AnalyzeHandlerValue(context, element, sink, invocation.Syntax, scopedTierCandidates);
                 }
             }
             else if (value is IDelegateCreationOperation)
             {
-                AnalyzeHandlerValue(context, value, sink, invocation.Syntax);
+                AnalyzeHandlerValue(context, value, sink, invocation.Syntax, scopedTierCandidates);
             }
         }
     }
@@ -296,7 +331,10 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     /// WithDegreeOfParallelism(1) on this query's own chain makes execution sequential —
     /// an unprovable degree or an untraceable query keeps the truthful default (concurrent).
     /// </summary>
-    private static void AnalyzePlinqForAll(OperationAnalysisContext context, IInvocationOperation invocation)
+    private static void AnalyzePlinqForAll(
+        OperationAnalysisContext context,
+        IInvocationOperation invocation,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var sourceArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Name == "source");
         if (sourceArgument is not null && QueryChainProvesSequential(sourceArgument.Value))
@@ -313,7 +351,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         var actionArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Name == "action");
         if (actionArgument is not null)
         {
-            AnalyzeHandlerValue(context, actionArgument.Value, sink, invocation.Syntax);
+            AnalyzeHandlerValue(context, actionArgument.Value, sink, invocation.Syntax, scopedTierCandidates);
         }
     }
 
@@ -355,14 +393,16 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         return false;
     }
 
-    private static void AnalyzeObjectCreation(OperationAnalysisContext context)
+    private static void AnalyzeObjectCreation(
+        OperationAnalysisContext context,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var creation = (IObjectCreationOperation)context.Operation;
         if (creation.Type is INamedTypeSymbol blockType &&
             blockType.Name is "ActionBlock" or "TransformBlock" or "TransformManyBlock" &&
             blockType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks.Dataflow")
         {
-            AnalyzeDataflowBlockCreation(context, creation, blockType.Name);
+            AnalyzeDataflowBlockCreation(context, creation, blockType.Name, scopedTierCandidates);
             return;
         }
 
@@ -409,7 +449,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             "System.Threading.Timer callbacks",
             "period",
             timerInstance: GetCreationTargetSymbol(creation));
-        AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax);
+        AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax, scopedTierCandidates);
     }
 
     /// <summary>
@@ -421,7 +461,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     private static void AnalyzeDataflowBlockCreation(
         OperationAnalysisContext context,
         IObjectCreationOperation creation,
-        string blockTypeName)
+        string blockTypeName,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var optionsArgument = creation.Arguments.FirstOrDefault(a =>
             a.Parameter?.Type?.ToDisplayString() == "System.Threading.Tasks.Dataflow.ExecutionDataflowBlockOptions");
@@ -472,7 +513,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         var handlerArgument = creation.Arguments.FirstOrDefault(a => a.Parameter?.Ordinal == 0);
         if (handlerArgument is not null)
         {
-            AnalyzeHandlerValue(context, handlerArgument.Value, sink, creation.Syntax);
+            AnalyzeHandlerValue(context, handlerArgument.Value, sink, creation.Syntax, scopedTierCandidates);
         }
     }
 
@@ -482,7 +523,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     /// error overrides invoked concurrently across partitions — the override body IS the
     /// handler, and instance fields are the capture channel.
     /// </summary>
-    private static void AnalyzeMethodBody(OperationAnalysisContext context)
+    private static void AnalyzeMethodBody(
+        OperationAnalysisContext context,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         if (context.ContainingSymbol is not IMethodSymbol method || !method.IsOverride)
         {
@@ -521,7 +564,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             $"EventProcessor<TPartition>.{overridden.Name} (partitions are processed concurrently)",
             $"EventProcessor<TPartition>.{overridden.Name}",
             "partition count");
-        AnalyzeHandlerBody(context, body, methodBody.Syntax, method, sink, methodBody.Syntax);
+        AnalyzeHandlerBody(context, body, methodBody.Syntax, method, sink, methodBody.Syntax, scopedTierCandidates);
     }
 
     /// <summary>
@@ -1257,6 +1300,35 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         return false;
     }
 
+    /// <summary>
+    /// Strips parentheses, casts, <c>as</c> conversions, and the null-forgiving operator from an
+    /// expression to expose its underlying construction.
+    /// </summary>
+    private static ExpressionSyntax? UnwrapConversions(ExpressionSyntax? expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    continue;
+                case BinaryExpressionSyntax asExpression when asExpression.IsKind(SyntaxKind.AsExpression):
+                    expression = asExpression.Left;
+                    continue;
+                case PostfixUnaryExpressionSyntax postfix when
+                    postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    expression = postfix.Operand;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
     /// <summary>Strips parentheses and the null-forgiving operator from an expression.</summary>
     private static ExpressionSyntax? UnwrapKnobExpression(ExpressionSyntax? expression)
     {
@@ -1941,7 +2013,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         OperationAnalysisContext context,
         IOperation handlerValue,
         SinkContext sink,
-        SyntaxNode registrationSyntax)
+        SyntaxNode registrationSyntax,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         if (sink.Concurrency == SinkConcurrency.Sequential)
         {
@@ -1957,19 +2030,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         {
             case IAnonymousFunctionOperation lambda:
                 AnalyzeHandlerBody(
-                    context, lambda.Body, lambda.Syntax, lambda.Symbol, sink, registrationSyntax);
+                    context, lambda.Body, lambda.Syntax, lambda.Symbol, sink, registrationSyntax, scopedTierCandidates);
 
                 // Thin delegation lambda (`args => HandleAsync(args)`): real handler logic lives
                 // in the same-type instance method, so analyze that body as well.
                 if (TryGetOneHopTarget(lambda, out var delegated))
                 {
-                    AnalyzeMethodHandler(context, delegated, sink, registrationSyntax);
+                    AnalyzeMethodHandler(context, delegated, sink, registrationSyntax, scopedTierCandidates);
                 }
 
                 break;
 
             case IMethodReferenceOperation methodReference:
-                AnalyzeMethodHandler(context, methodReference.Method, sink, registrationSyntax);
+                AnalyzeMethodHandler(context, methodReference.Method, sink, registrationSyntax, scopedTierCandidates);
                 break;
         }
     }
@@ -2014,7 +2087,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         OperationAnalysisContext context,
         IMethodSymbol method,
         SinkContext sink,
-        SyntaxNode registrationSyntax)
+        SyntaxNode registrationSyntax,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var enclosingType = GetEnclosingNamedType(context, registrationSyntax);
         if (enclosingType is null ||
@@ -2045,7 +2119,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             return;
         }
 
-        AnalyzeHandlerBody(context, body, declarationSyntax, method, sink, registrationSyntax);
+        AnalyzeHandlerBody(context, body, declarationSyntax, method, sink, registrationSyntax, scopedTierCandidates);
     }
 
     private static INamedTypeSymbol? GetEnclosingNamedType(
@@ -2072,7 +2146,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         SyntaxNode handlerBoundary,
         IMethodSymbol handlerSymbol,
         SinkContext sink,
-        SyntaxNode registrationSyntax)
+        SyntaxNode registrationSyntax,
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
     {
         var operations = new List<IOperation>();
         CollectSameBoundaryOperations(body, operations);
@@ -2087,6 +2162,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         // symbol -> (catalog display name, use type, ordered use syntax nodes)
         var directCandidates = new Dictionary<ISymbol, DirectCandidate>(SymbolEqualityComparer.Default);
+        var scopedTierCandidatesBySymbol = new Dictionary<ISymbol, DirectCandidate>(SymbolEqualityComparer.Default);
         foreach (var operation in operations)
         {
             var (symbol, type) = operation switch
@@ -2108,16 +2184,32 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
-            var catalogName = MatchNonThreadSafeCatalog(type);
-            if (catalogName is null)
-            {
-                continue;
-            }
-
             if (IsDisposeOnlyUse(operation.Syntax) ||
                 IsInsideLock(context, operation.Syntax, handlerBoundary) ||
                 guards.Covers(operation.Syntax))
             {
+                continue;
+            }
+
+            var catalogName = MatchNonThreadSafeCatalog(type);
+            if (catalogName is null)
+            {
+                // Scoped-lifetime tier: not in the non-thread-safe catalog, but if the type's
+                // effective registration turns out to be scoped, capturing it for the
+                // application lifetime reuses one instance across all invocations. Lifetimes are
+                // only known at compilation end, so bag the candidate.
+                if (type is INamedTypeSymbol { TypeKind: TypeKind.Interface or TypeKind.Class } namedType &&
+                    namedType.SpecialType == SpecialType.None)
+                {
+                    if (!scopedTierCandidatesBySymbol.TryGetValue(symbol, out var scopedCandidate))
+                    {
+                        scopedCandidate = new DirectCandidate(namedType.Name, type);
+                        scopedTierCandidatesBySymbol[symbol] = scopedCandidate;
+                    }
+
+                    scopedCandidate.Uses.Add(operation.Syntax);
+                }
+
                 continue;
             }
 
@@ -2142,6 +2234,41 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 handlerReturnsAwaitable: ReturnsAwaitable(handlerSymbol),
                 captureSite: pair.Key.DeclaringSyntaxReferences.FirstOrDefault(),
                 uses: pair.Value.Uses);
+        }
+
+        foreach (var pair in scopedTierCandidatesBySymbol)
+        {
+            if (pair.Value.Uses.Count == 0 || pair.Value.UseType is not INamedTypeSymbol scopedServiceType)
+            {
+                continue;
+            }
+
+            // A manually constructed instance is not a scoped DI instance being reused — the
+            // tier only applies when the capture's unique origin is not a `new` expression
+            // (casts, `as`, parentheses, and the null-forgiving operator unwrapped).
+            if (UnwrapConversions(FindSingleInitializerValue(context, registrationSyntax, pair.Key))
+                is BaseObjectCreationExpressionSyntax)
+            {
+                continue;
+            }
+
+            var (primary, additionalLocations, properties) = BuildCandidateDiagnosticParts(
+                context, sink, registrationSyntax,
+                symbolName: pair.Key.Name,
+                serviceType: pair.Value.UseType,
+                captureKind: pair.Key.Kind.ToString(),
+                handlerIsAsync: handlerSymbol.IsAsync,
+                handlerReturnsAwaitable: ReturnsAwaitable(handlerSymbol),
+                captureSite: pair.Key.DeclaringSyntaxReferences.FirstOrDefault(),
+                uses: pair.Value.Uses);
+            scopedTierCandidates.Add(new ScopedTierCandidate(
+                scopedServiceType,
+                primary,
+                additionalLocations,
+                properties,
+                pair.Key.Name,
+                sink.SinkDisplay,
+                sink.KnobName));
         }
 
         AnalyzeCapturedScopeResolutions(
@@ -2302,6 +2429,43 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             return;
         }
 
+        var (primary, additionalLocations, properties) = BuildCandidateDiagnosticParts(
+            context, sink, registrationSyntax, symbolName, serviceType, captureKind,
+            handlerIsAsync, handlerReturnsAwaitable, captureSite, uses);
+
+        var diagnostic = sink.Concurrency == SinkConcurrency.Concurrent
+            ? Diagnostic.Create(
+                DiagnosticDescriptors.ConcurrentHandlerSharedState,
+                primary,
+                additionalLocations,
+                properties,
+                symbolName,
+                sink.Description,
+                catalogName)
+            : Diagnostic.Create(
+                DiagnosticDescriptors.ConcurrentHandlerConfigGatedSharedState,
+                primary,
+                additionalLocations,
+                properties,
+                symbolName,
+                sink.SinkDisplay,
+                sink.KnobName);
+        context.ReportDiagnostic(diagnostic);
+    }
+
+    private static (Location Primary, List<Location> AdditionalLocations, ImmutableDictionary<string, string?> Properties)
+        BuildCandidateDiagnosticParts(
+            OperationAnalysisContext context,
+            SinkContext sink,
+            SyntaxNode registrationSyntax,
+            string symbolName,
+            ITypeSymbol serviceType,
+            string captureKind,
+            bool handlerIsAsync,
+            bool handlerReturnsAwaitable,
+            SyntaxReference? captureSite,
+            List<SyntaxNode> uses)
+    {
         uses.Sort((a, b) => a.SpanStart.CompareTo(b.SpanStart));
         var primary = uses[0].GetLocation();
 
@@ -2328,25 +2492,76 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         properties.Add("HandlerIsAsync", handlerIsAsync ? "true" : "false");
         properties.Add("HandlerReturnsAwaitable", handlerReturnsAwaitable ? "true" : "false");
         properties.Add("SinkKind", sink.SinkDisplay);
+        return (primary, additionalLocations, properties.ToImmutable());
+    }
 
-        var diagnostic = sink.Concurrency == SinkConcurrency.Concurrent
-            ? Diagnostic.Create(
-                DiagnosticDescriptors.ConcurrentHandlerSharedState,
-                primary,
-                additionalLocations,
-                properties.ToImmutable(),
-                symbolName,
-                sink.Description,
-                catalogName)
-            : Diagnostic.Create(
-                DiagnosticDescriptors.ConcurrentHandlerConfigGatedSharedState,
-                primary,
-                additionalLocations,
-                properties.ToImmutable(),
-                symbolName,
-                sink.SinkDisplay,
-                sink.KnobName);
-        context.ReportDiagnostic(diagnostic);
+    /// <summary>
+    /// A non-catalog capture whose lifetime verdict needs the full registration picture: if the
+    /// captured type's effective registration is scoped, capturing it for the application
+    /// lifetime reuses one instance across all handler invocations (DI022).
+    /// </summary>
+    private sealed class ScopedTierCandidate
+    {
+        public ScopedTierCandidate(
+            INamedTypeSymbol serviceType,
+            Location primary,
+            List<Location> additionalLocations,
+            ImmutableDictionary<string, string?> properties,
+            string symbolName,
+            string sinkDisplay,
+            string knobName)
+        {
+            ServiceType = serviceType;
+            Primary = primary;
+            AdditionalLocations = additionalLocations;
+            Properties = properties;
+            SymbolName = symbolName;
+            SinkDisplay = sinkDisplay;
+            KnobName = knobName;
+        }
+
+        public INamedTypeSymbol ServiceType { get; }
+
+        public Location Primary { get; }
+
+        public List<Location> AdditionalLocations { get; }
+
+        public ImmutableDictionary<string, string?> Properties { get; }
+
+        public string SymbolName { get; }
+
+        public string SinkDisplay { get; }
+
+        public string KnobName { get; }
+    }
+
+    private static void ReportScopedTierCandidates(
+        CompilationAnalysisContext context,
+        RegistrationCollector? registrationCollector,
+        ConcurrentBag<ScopedTierCandidate> candidates)
+    {
+        if (registrationCollector is null || candidates.IsEmpty)
+        {
+            return;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            // The collector's lifetime lookup is effective (last registration wins) and falls
+            // back to the open-generic registration for closed constructed types.
+            if (registrationCollector.GetLifetime(candidate.ServiceType) != ServiceLifetime.Scoped)
+            {
+                continue;
+            }
+
+            context.ReportDiagnostic(Diagnostic.Create(
+                DiagnosticDescriptors.ConcurrentHandlerScopedLifetimeSharedState,
+                candidate.Primary,
+                candidate.AdditionalLocations,
+                candidate.Properties,
+                candidate.SymbolName,
+                candidate.SinkDisplay));
+        }
     }
 
     // ---------------------------------------------------------------------

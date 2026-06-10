@@ -48,9 +48,11 @@ public class DiagnosticDescriptorSeverityTests
     [MemberData(nameof(DefaultSeverityExpectations))]
     public void DefaultSeverity_MatchesNoiseBudget(string diagnosticId, DiagnosticSeverity expectedSeverity)
     {
-        var descriptor = GetDescriptorById()[diagnosticId];
+        // An ID may have multiple descriptors (DI022 has the config-gated and scoped-lifetime
+        // tiers); every descriptor sharing the ID must honor the same noise budget.
+        var descriptors = GetDescriptorsById()[diagnosticId];
 
-        Assert.Equal(expectedSeverity, descriptor.DefaultSeverity);
+        Assert.All(descriptors, descriptor => Assert.Equal(expectedSeverity, descriptor.DefaultSeverity));
     }
 
     [Fact]
@@ -69,7 +71,7 @@ public class DiagnosticDescriptorSeverityTests
     public void PublicDiagnosticInventory_MatchesDiagnosticDescriptors()
     {
         var publicDiagnosticIds = GetPublicDiagnosticIds();
-        var descriptorIds = GetDescriptorById().Keys
+        var descriptorIds = GetDescriptorsById().Select(group => group.Key)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
 
@@ -96,13 +98,13 @@ public class DiagnosticDescriptorSeverityTests
             .ToArray();
     }
 
-    private static Dictionary<string, DiagnosticDescriptor> GetDescriptorById()
+    private static ILookup<string, DiagnosticDescriptor> GetDescriptorsById()
     {
         return typeof(DiagnosticDescriptors)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(field => field.FieldType == typeof(DiagnosticDescriptor))
             .Select(field => (DiagnosticDescriptor)field.GetValue(null)!)
-            .ToDictionary(descriptor => descriptor.Id, StringComparer.Ordinal);
+            .ToLookup(descriptor => descriptor.Id, StringComparer.Ordinal);
     }
 
     private static string[] GetReleaseTrackedDiagnosticIds()

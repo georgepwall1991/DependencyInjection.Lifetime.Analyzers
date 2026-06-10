@@ -298,4 +298,20 @@ public static class DiagnosticDescriptors
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
         description: "A non-thread-safe service is captured once and reused across every invocation of a handler whose concurrency is controlled by configuration that cannot be proven at compile time (for example ServiceBusProcessor with MaxConcurrentCalls bound from configuration). If the concurrency setting is ever raised above 1 this becomes a runtime concurrency failure, and even with sequential dispatch a single instance accumulates state (change tracking, failed-operation poisoning) across all messages. Resolve the service from a new IServiceScope inside the handler.");
+
+    /// <summary>
+    /// DI022 (scoped-lifetime tier): a scoped-registered service captured into a concurrently
+    /// invoked handler. Same ID as the config-gated tier, with wording that describes the
+    /// scoped capture itself; reported at compilation end because lifetimes need the full
+    /// registration picture.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ConcurrentHandlerScopedLifetimeSharedState = new(
+        id: DiagnosticIds.ConcurrentHandlerConfigGatedSharedState,
+        title: "Service instance reused across handler invocations",
+        messageFormat: "'{0}' is registered as scoped but captured once and reused across all invocations of {1}. One instance outlives its intended scope and accumulates state across all messages. Resolve it from a new scope inside the handler.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "A service whose registration is scoped is captured (through a field, closure, or enclosing parameter) into a handler that a framework invokes repeatedly. The single captured instance outlives the scope it was designed for and is reused across every invocation, accumulating state and breaking scoped-lifetime expectations. Resolve the service from a new IServiceScope inside the handler.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

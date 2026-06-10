@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.12] - 2026-06-10
+
+### Added
+
+- **DI022 scoped-lifetime tier (registration-backed)**: services outside the non-thread-safe catalog now report the config-gated Info when their *effective registration is scoped* and they are captured (field, closure, enclosing parameter) into a concurrently-invoked handler — a scoped service captured for the application lifetime reuses one instance across all invocations, accumulating state exactly like the documented ServiceBus case. Lifetimes come from the shared `RegistrationCollector` at compilation end (last registration wins, closed constructed types fall back to their open-generic registration; keyed registrations excluded in v1), and the tier carries its own DI022 wording describing the scoped capture itself rather than a configuration knob. Singleton-registered, unregistered, and manually-constructed captures (the symbol's unique origin is a `new` expression, with casts/`as`/parentheses/null-forgiving unwrapped — no scoped DI instance is being reused) stay silent, and every existing guardrail (whitelisted captures, in-handler creation, serialization guards, dispose-only uses) applies. The tier is Info-only by design — concurrency of an arbitrary scoped service is not provably unsafe, but the lifetime violation is real.
+
 ## [2.10.11] - 2026-06-10
 
 ### Changed

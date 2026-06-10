@@ -277,6 +277,7 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     {
         var test = new CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
             FixedCode = fixedSource,
             ReferenceAssemblies = ReferenceAssembliesWithDi
@@ -293,6 +294,7 @@ public static class CodeFixVerifier<TAnalyzer, TCodeFix>
     {
         var test = new CSharpCodeFixTest<TAnalyzer, TCodeFix, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
             FixedCode = fixedSource,
             ReferenceAssemblies = references,
