@@ -58,6 +58,69 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
 
     #region Should Report Diagnostic - TryAdd After Add
 
+
+    [Fact]
+    public async Task AddAddThenReplace_StillReportsForLeftoverDuplicate()
+    {
+        // Replace removes only ONE matching descriptor: with two prior Adds, one survives and
+        // the replacement is still another override of it.
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+            public class ReplacementService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService1>();
+                    services.AddScoped<IMyService, MyService2>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithLocation(14, 9)
+                .WithArguments("IMyService", "line 13"),
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithLocation(15, 9)
+                .WithArguments("IMyService", "line 14"));
+    }
+
+    [Fact]
+    public async Task AddThenReplace_DoesNotReportDuplicate()
+    {
+        // Replace removes the earlier descriptor before adding its own — intentional override
+        // semantics, not an accidental duplicate.
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class ReplacementService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
     [Fact]
     public async Task TryAddSingleton_AfterAddSingleton_ReportsDiagnostic()
     {

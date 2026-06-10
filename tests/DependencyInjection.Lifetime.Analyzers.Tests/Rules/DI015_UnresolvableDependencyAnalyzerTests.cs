@@ -190,6 +190,37 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task Dependency_ProvidedByInstanceReplace_DoesNotReport()
+    {
+        // Replace with the ServiceDescriptor(Type, object) constructor registers a singleton
+        // instance — the dependency is resolvable.
+        var source = Usings + """
+            public interface IDep { }
+            public class Dep : IDep { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep dep) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        new ServiceDescriptor(typeof(IDep), new Dep()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
     public async Task RegisteredService_WithMissingConstructorDependency_ReportsDiagnostic()
     {
         var source = Usings + """

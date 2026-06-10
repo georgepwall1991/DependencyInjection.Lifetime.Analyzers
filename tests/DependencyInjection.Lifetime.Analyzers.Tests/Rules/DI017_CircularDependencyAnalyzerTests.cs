@@ -17,6 +17,106 @@ public class DI017_CircularDependencyAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task CircularDependency_IntroducedByReplace_Reports()
+    {
+        // Replace swaps the safe registration for a cyclic one — the effective registration at
+        // the end of the flow is what matters.
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class SafeA : IServiceA { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, SafeA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IServiceA, ServiceA>());
+                }
+            }
+            """;
+
+        // Reported on the canonical (lexicographically smallest) registration in the cycle.
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(25, 9, 27, 61)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
+    public async Task KeyedCircularDependency_IntAndStringKeys_ReportSeparately()
+    {
+        // int 1 and string "1" stringify identically — the dedup key must not collapse them
+        // (regression guard for the PR #32 keyed-dedup fix).
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public class FromKeyedServicesAttribute : Attribute
+                {
+                    public object Key { get; }
+                    public FromKeyedServicesAttribute(object key) { Key = key; }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IServiceA { }
+
+            public class ServiceAInt : IServiceA
+            {
+                public ServiceAInt([FromKeyedServices(1)] IServiceA a) { }
+            }
+
+            public class ServiceAString : IServiceA
+            {
+                public ServiceAString([FromKeyedServices("1")] IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IServiceA, ServiceAInt>(1);
+                    services.AddKeyedScoped<IServiceA, ServiceAString>("1");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(36, 9, 36, 59)
+                .WithArguments("ServiceAInt", "IServiceA (key: 1) -> IServiceA (key: 1)"),
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(37, 9, 37, 64)
+                .WithArguments("ServiceAString", "IServiceA (key: 1) -> IServiceA (key: 1)"));
+    }
+
+
+    [Fact]
     public async Task DirectCircularDependency_Reports()
     {
         var source = Usings + """
@@ -503,6 +603,120 @@ public class DI017_CircularDependencyAnalyzerTests
     #endregion
 
     #region Should Not Report Diagnostic
+
+    [Fact]
+    public async Task CircularDependency_RemovedByReplace_DoesNotReport()
+    {
+        // Replace is a single-slot removal plus add: the cyclic registration is gone.
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class SafeA : IServiceA { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IServiceA, SafeA>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task KeyedDependency_DifferentKeyBreaksCycle_DoesNotReport()
+    {
+        // The "x" implementation depends on the "y" key, whose implementation has no
+        // dependencies — keyed edges must match keys, so there is no cycle.
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public class FromKeyedServicesAttribute : Attribute
+                {
+                    public object Key { get; }
+                    public FromKeyedServicesAttribute(object key) { Key = key; }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+
+            public interface IServiceA { }
+
+            public class ServiceAX : IServiceA
+            {
+                public ServiceAX([FromKeyedServices("y")] IServiceA a) { }
+            }
+
+            public class ServiceAY : IServiceA { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IServiceA, ServiceAX>("x");
+                    services.AddKeyedScoped<IServiceA, ServiceAY>("y");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CircularDependency_BrokenByLazyParameter_DoesNotReport()
+    {
+        // Lazy<T> is not registered by default in MEDI, so there is no A -> B edge through the
+        // Lazy parameter — DI017 stays quiet rather than guessing (pins the current posture:
+        // Lazy is not modeled as a deferred edge).
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(Lazy<IServiceB> b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
 
     [Fact]
     public async Task NoCycle_LinearChain_DoesNotReport()

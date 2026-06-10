@@ -775,12 +775,27 @@ public sealed class RegistrationCollector
         else if (methodName == "Replace")
         {
             kind = RegistrationMutationKind.Replace;
-            (serviceType, _, _, _, _, key, isKeyed) =
-                ExtractFromServiceDescriptor(invocation, semanticModel);
         }
         else
         {
             return false;
+        }
+
+        INamedTypeSymbol? implementationType = null;
+        ExpressionSyntax? factoryExpression = null;
+        var hasImplementationInstance = false;
+        ServiceLifetime? replacementLifetime = null;
+        if (kind == RegistrationMutationKind.Replace)
+        {
+            (serviceType, implementationType, factoryExpression, hasImplementationInstance, replacementLifetime, key, isKeyed) =
+                ExtractFromServiceDescriptor(invocation, semanticModel);
+
+            // new ServiceDescriptor(typeof(T), instance) carries no explicit lifetime — MEDI
+            // registers the instance as a singleton.
+            if (replacementLifetime is null && hasImplementationInstance)
+            {
+                replacementLifetime = ServiceLifetime.Singleton;
+            }
         }
 
         if (serviceType is null)
@@ -799,6 +814,49 @@ public sealed class RegistrationCollector
                 flowKey,
                 order,
                 kind));
+
+        // Replace removes the existing slot AND adds its own descriptor: record the replacement
+        // as a registration so cycles, captives, and resolutions it introduces are visible. The
+        // registration order comes after the removal's, mirroring runtime behavior.
+        if (kind == RegistrationMutationKind.Replace &&
+            replacementLifetime is { } descriptorLifetime &&
+            (implementationType is not null || factoryExpression is not null || hasImplementationInstance))
+        {
+            var registrationOrder = Interlocked.Increment(ref _registrationOrder);
+            var serviceIdentifier = new ServiceIdentifier(serviceType, key, isKeyed);
+            _orderedRegistrations.Add(
+                new OrderedRegistration(
+                    serviceType,
+                    key,
+                    isKeyed,
+                    descriptorLifetime,
+                    invocation.GetLocation(),
+                    flowKey,
+                    registrationOrder,
+                    isTryAdd: false,
+                    methodName,
+                    skipIfAlreadyRegistered: false));
+
+            var keyLiteral = SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var formattedKey)
+                ? formattedKey
+                : null;
+            var replacementRegistration = new ServiceRegistration(
+                serviceType,
+                implementationType,
+                factoryExpression,
+                hasImplementationInstance,
+                key,
+                isKeyed,
+                descriptorLifetime,
+                invocation.GetLocation(),
+                keyLiteral,
+                flowKey,
+                registrationOrder,
+                skipIfAlreadyRegistered: false,
+                isTryAdd: false);
+            _allRegistrations.Add(replacementRegistration);
+            _registrations[serviceIdentifier] = replacementRegistration;
+        }
 
         return true;
     }
