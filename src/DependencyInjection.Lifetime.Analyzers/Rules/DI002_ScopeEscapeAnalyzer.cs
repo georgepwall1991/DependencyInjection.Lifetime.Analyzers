@@ -151,6 +151,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 ReportDiagnostic(context, invocation, "return", reportedSpans);
             }
 
+            // return (resolution, x); / return new { Service = resolution }; — the composite
+            // hands the service out with the return.
+            if (IsInsideReturnedComposite(consumption))
+            {
+                ReportDiagnostic(context, invocation, "return", reportedSpans);
+            }
+
             if (consumption.Parent is AssignmentExpressionSyntax fieldAssignment &&
                 semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol fieldSymbol)
             {
@@ -217,6 +224,20 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     out var delegateReturnSource))
             {
                 ReportDiagnostic(context, delegateReturnSource, "return", reportedSpans);
+            }
+
+            // return (service, x); / return new { Service = service }; — composite construction
+            // smuggles the tracked service (or a capturing delegate) out with the return.
+            if (node is ReturnStatementSyntax compositeReturn &&
+                compositeReturn.Expression is TupleExpressionSyntax or AnonymousObjectCreationExpressionSyntax)
+            {
+                ReportCompositeReturnEscapes(
+                    context,
+                    compositeReturn.Expression,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    reportedSpans);
             }
 
             if (node is AssignmentExpressionSyntax fieldAssignment &&
@@ -491,6 +512,77 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         // shared captured-delegate classification.
         return TryGetCapturedDelegateSource(
             right, semanticModel, serviceVariables, capturedDelegateVariables, out source);
+    }
+
+    /// <summary>
+    /// Walks tuple-argument and anonymous-object-member parents: true when the expression's
+    /// outermost composite construction is the operand of a return statement.
+    /// </summary>
+    private static bool IsInsideReturnedComposite(SyntaxNode node)
+    {
+        var current = node.Parent;
+        var sawComposite = false;
+        while (current is not null)
+        {
+            switch (current)
+            {
+                case ArgumentSyntax { Parent: TupleExpressionSyntax tuple }:
+                    sawComposite = true;
+                    current = tuple.Parent;
+                    continue;
+                case AnonymousObjectMemberDeclaratorSyntax { Parent: AnonymousObjectCreationExpressionSyntax anonymous }:
+                    sawComposite = true;
+                    current = anonymous.Parent;
+                    continue;
+                case ReturnStatementSyntax:
+                    return sawComposite;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Reports every tracked service local or capturing delegate referenced inside a returned
+    /// tuple or anonymous object, recursing through nested composites.
+    /// </summary>
+    private static void ReportCompositeReturnEscapes(
+        CompilationAnalysisContext context,
+        ExpressionSyntax composite,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> capturedDelegateVariables,
+        HashSet<TextSpan> reportedSpans)
+    {
+        IEnumerable<ExpressionSyntax> elements = composite switch
+        {
+            TupleExpressionSyntax tuple => tuple.Arguments.Select(argument => argument.Expression),
+            AnonymousObjectCreationExpressionSyntax anonymous =>
+                anonymous.Initializers.Select(initializer => initializer.Expression),
+            _ => Enumerable.Empty<ExpressionSyntax>()
+        };
+
+        foreach (var element in elements)
+        {
+            if (element is TupleExpressionSyntax or AnonymousObjectCreationExpressionSyntax)
+            {
+                ReportCompositeReturnEscapes(
+                    context, element, semanticModel, serviceVariables, capturedDelegateVariables, reportedSpans);
+                continue;
+            }
+
+            if (TryGetTrackedLocalReference(element, semanticModel, serviceVariables, out var trackedSource))
+            {
+                ReportDiagnostic(context, trackedSource, "return", reportedSpans);
+            }
+            else if (TryGetCapturedDelegateSource(
+                         element, semanticModel, serviceVariables, capturedDelegateVariables, out var delegateSource))
+            {
+                ReportDiagnostic(context, delegateSource, "return", reportedSpans);
+            }
+        }
     }
 
     private static bool IsEscapingParameter(IParameterSymbol parameter) =>
