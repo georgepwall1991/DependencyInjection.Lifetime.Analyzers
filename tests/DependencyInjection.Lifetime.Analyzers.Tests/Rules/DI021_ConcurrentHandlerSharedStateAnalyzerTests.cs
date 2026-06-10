@@ -96,11 +96,25 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
         namespace RabbitMQ.Client
         {
             public interface IModel { }
+            public interface IChannel : IModel { }
+
+            public class CreateChannelOptions
+            {
+                public ushort? ConsumerDispatchConcurrency { get; set; }
+            }
+
+            public interface IConnection
+            {
+                IModel CreateModel();
+                System.Threading.Tasks.Task<IChannel> CreateChannelAsync(CreateChannelOptions? options = null, System.Threading.CancellationToken cancellationToken = default);
+            }
 
             public class ConnectionFactory
             {
                 public int ConsumerDispatchConcurrency { get; set; } = 1;
                 public IModel CreateChannel() => null!;
+                public IConnection CreateConnection() => null!;
+                public System.Threading.Tasks.Task<IConnection> CreateConnectionAsync() => null!;
             }
         }
 
@@ -2452,6 +2466,279 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
                         _db.Add(item);
                         _db.SaveChanges();
                     });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    // ---------------------------------------------------------------------
+    // RabbitMQ instance-correlated chain proofs (factory -> connection -> channel -> consumer)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task RabbitMq_ChainProvenSequential_OtherFactoryConcurrent_NoDiagnostic()
+    {
+        // THIS consumer's chain pins ConsumerDispatchConcurrency = 1; the unrelated factory's 4
+        // must not contaminate it.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var otherFactory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 1 };
+                    var connection = factory.CreateConnection();
+                    var channel = connection.CreateModel();
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        _db.Add(args);
+                        _db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_ChainDefaultFactory_NoDiagnostic()
+    {
+        // A fully traced fresh factory that never sets the knob keeps the sequential default
+        // of 1 — the config-gated Info is unnecessary noise here.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var factory = new ConnectionFactory();
+                    var connection = factory.CreateConnection();
+                    var channel = connection.CreateModel();
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        _db.Add(args);
+                        _db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_AsyncChainProvenSequential_NoDiagnostic()
+    {
+        // v7 shape: awaited connection/channel creation links still trace.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public async Task StartAsync()
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 1 };
+                    var connection = await factory.CreateConnectionAsync();
+                    var channel = await connection.CreateChannelAsync();
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_ChainProvenConcurrent_ReportsWarning()
+    {
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    var connection = factory.CreateConnection();
+                    var channel = connection.CreateModel();
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        _db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_ChannelOptionsArgument_ReportsInfo()
+    {
+        // A CreateChannelOptions argument can override the factory knob per channel — the chain
+        // bails conservatively to the config-gated tier.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public async Task StartAsync(CreateChannelOptions channelOptions)
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 1 };
+                    var connection = await factory.CreateConnectionAsync();
+                    var channel = await connection.CreateChannelAsync(channelOptions);
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+
+    [Fact]
+    public async Task RabbitMq_ChannelOptionsOverridesConcurrentFactory_ReportsInfo()
+    {
+        // The per-channel options may pin this channel back to sequential — the factory's 4
+        // must not upgrade the diagnostic past the config-gated tier.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public async Task StartAsync()
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    var connection = await factory.CreateConnectionAsync();
+                    var channel = await connection.CreateChannelAsync(new CreateChannelOptions { ConsumerDispatchConcurrency = 1 });
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+
+    [Fact]
+    public async Task RabbitMq_ChainConcurrent_CancellationTokenArgument_ReportsWarning()
+    {
+        // A cancellation token is not a channel-options override — the chain-proven 4 stands.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public async Task StartAsync(CancellationToken token)
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    var connection = await factory.CreateConnectionAsync();
+                    var channel = await connection.CreateChannelAsync(cancellationToken: token);
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+
+    [Fact]
+    public async Task RabbitMq_FreshDefaultFactory_ReassignedAfterConsumerBuilt_NoDiagnostic()
+    {
+        // The factory variable is reused after this consumer's chain was already built — the
+        // later reassignment belongs to a different consumer and must not break the
+        // fresh-default sequential proof.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var factory = new ConnectionFactory();
+                    var connection = factory.CreateConnection();
+                    var channel = connection.CreateModel();
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        _db.Add(args);
+                        _db.SaveChanges();
+                    };
+
+                    factory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    factory.CreateConnection();
                 }
             }
             """;

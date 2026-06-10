@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.11] - 2026-06-10
+
+### Changed
+
+- **DI021/DI022 RabbitMQ instance-correlated chain proofs**: the consumer's own creation chain — the consumer constructor's channel argument, the channel's `CreateModel`/`CreateChannel`/`CreateChannelAsync` call (awaits unwrapped), the connection's `CreateConnection(Async)` call — now traces to the `ConnectionFactory` that actually feeds this consumer. A chain-proven `ConsumerDispatchConcurrency = 1` (or a fresh factory that never sets the knob — the sequential default) silences the sink even when an unrelated factory in the same type sets the knob above 1; a chain-proven value above 1 reports DI021; an actual `CreateChannelOptions` argument (type-checked — cancellation tokens and null literals are not overrides) forces the config-gated tier in both directions, because the per-channel knob can override the factory in either direction. Every chain link must have a unique origin in the containing type (origin resolution for the factory ignores writes after the chain consumed it, so later reuse of the variable does not break the proof); untraceable chains keep the previous strengthen-only scan with DI022. This removes the last documented RabbitMQ noise source and completes the instance-correlation roadmap for this sink.
+
 ## [2.10.10] - 2026-06-10
 
 ### Added
