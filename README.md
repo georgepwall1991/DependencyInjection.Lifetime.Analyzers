@@ -105,6 +105,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Root-provider lifetime validation | `DI019` |
 | Middleware lifetime validation | `DI020` |
 | Concurrency-unsafe captures in message handlers, timers, and parallel loops | `DI021`, `DI022` |
+| Hosted-service scope-per-iteration validation | `DI024` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -137,6 +138,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI020: Middleware Captures Scoped Service In Constructor](#di020-middleware-captures-scoped-service-in-constructor)
 - [DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations)
 - [DI022: Service Instance Reused Across Handler Invocations](#di022-service-instance-reused-across-handler-invocations)
+- [DI024: Hosted Service Creates Scope Outside Execution Loop](#di024-hosted-service-creates-scope-outside-execution-loop)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -167,6 +169,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
+| [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 
 ---
 
@@ -1013,9 +1016,54 @@ When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnos
 
 ---
 
+## DI024: Hosted Service Creates Scope Outside Execution Loop
+
+**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — `while (!stoppingToken.IsCancellationRequested)`, `while (true)`, `for (;;)`, or a `PeriodicTimer` `WaitForNextTickAsync` loop — and uses it inside the loop, either directly or through a service resolved from it. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
+
+**Why it matters:** The well-known hosted-service idiom is *scope per iteration*. A scope hoisted above the loop keeps the same scoped instances alive for the entire process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, a unit of work accumulates every iteration's state, and a single failure poisons all subsequent iterations.
+
+```csharp
+public class PollingService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope(); // DI024: one scope for the process lifetime
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var processor = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();
+            await processor.ProcessPendingAsync(stoppingToken);
+        }
+    }
+}
+```
+
+**Correct pattern:** create the scope inside the loop body so each iteration gets fresh scoped services:
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    while (!stoppingToken.IsCancellationRequested)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();
+        await processor.ProcessPendingAsync(stoppingToken);
+    }
+}
+```
+
+DI024 stays quiet when the code already does the right thing: a scope created inside the loop (including an inner batch loop reusing the outer iteration's scope), a startup scope consumed entirely before the loop (migrations), a dispose-and-recreate scope reassigned inside the loop, a hoisted scope whose every resolution is provably singleton (hoisting is then behaviorally identical), bounded loops, and hoisted services whose lifetime cannot be proven scoped from the visible registrations.
+
+**Code Fix:** No. Moving the scope into the loop is a statement-level rewrite with disposal implications; apply the correct pattern above manually.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI022`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI024`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

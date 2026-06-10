@@ -171,6 +171,13 @@ const ruleSampleConfig = {
       { label: "Sample app per-message pattern", symbol: "Good_ConnectionPerMessage" },
     ],
   },
+  DI024: {
+    samplePath: "samples/SampleApp/Diagnostics/DI024/HostedServiceScopePerIterationExamples.cs",
+    highlights: [
+      { label: "Sample app hoisted-scope warning", symbol: "Bad_HoistedScopePollingService" },
+      { label: "Sample app scope-per-iteration pattern", symbol: "Good_ScopePerIterationPollingService" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-06-10
+
+### Added
+
+- **DI024: Hosted service creates scope outside execution loop** (Warning): a `BackgroundService.ExecuteAsync` override or `IHostedService`/`IHostedLifecycleService` start method that creates an `IServiceScope` once before its long-running execution loop (`while (!token.IsCancellationRequested)`, `while (true)`, `for (;;)`, `PeriodicTimer` tick loops) and uses it inside the loop now reports at the `CreateScope`/`CreateAsyncScope` call — the hoisted scope keeps the same scoped instances (DbContexts, units of work) alive for the entire process lifetime instead of per iteration. A second tier reports a service whose registration is provably scoped resolved once before the loop and reused across iterations (RegistrationCollector-backed, compilation-end). Scopes created inside the loop, startup scopes consumed before the loop, dispose-and-recreate reassignment inside the loop, hoisted scopes whose every resolution is provably singleton, bounded loops, shutdown paths, and unprovable lifetimes all stay silent. No code fix in v1 — the scope-into-loop move is a statement-level rewrite with disposal implications.
+
 ## [2.10.12] - 2026-06-10
 
 ### Added

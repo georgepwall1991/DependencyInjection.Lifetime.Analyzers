@@ -676,6 +676,26 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI024",
+      "ruleId": "DI024",
+      "claims": [
+        {
+          "filePathContains": "DI024/HostedServiceScopePerIterationExamples.cs",
+          "anchor": "await using var scope = _scopeFactory.CreateAsyncScope();",
+          "occurrence": 1,
+          "ruleId": "DI024",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI024/HostedServiceScopePerIterationExamples.cs",
+          "anchor": "var processor = _provider.GetRequiredService<IOrderProcessor>();",
+          "ruleId": "DI024",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],
