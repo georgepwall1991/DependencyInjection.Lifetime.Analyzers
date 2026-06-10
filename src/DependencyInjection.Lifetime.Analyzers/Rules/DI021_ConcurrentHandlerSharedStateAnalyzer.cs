@@ -37,6 +37,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         context.RegisterOperationAction(AnalyzeEventAssignment, OperationKind.EventAssignment);
         context.RegisterOperationAction(AnalyzeInvocation, OperationKind.Invocation);
         context.RegisterOperationAction(AnalyzeObjectCreation, OperationKind.ObjectCreation);
+        context.RegisterOperationAction(AnalyzeMethodBody, OperationKind.MethodBody);
     }
 
     private enum SinkConcurrency
@@ -445,6 +446,54 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         {
             AnalyzeHandlerValue(context, handlerArgument.Value, sink, creation.Syntax);
         }
+    }
+
+    /// <summary>
+    /// EventHubs batch processing: user subclasses of
+    /// Azure.Messaging.EventHubs.Primitives.EventProcessor&lt;TPartition&gt; have their batch and
+    /// error overrides invoked concurrently across partitions — the override body IS the
+    /// handler, and instance fields are the capture channel.
+    /// </summary>
+    private static void AnalyzeMethodBody(OperationAnalysisContext context)
+    {
+        if (context.ContainingSymbol is not IMethodSymbol method || !method.IsOverride)
+        {
+            return;
+        }
+
+        var overridden = method.OverriddenMethod;
+        while (overridden?.OverriddenMethod is not null)
+        {
+            overridden = overridden.OverriddenMethod;
+        }
+
+        if (overridden is null ||
+            overridden.Name is not ("OnProcessingEventBatchAsync" or "OnProcessingErrorAsync"))
+        {
+            return;
+        }
+
+        var declaringType = overridden.ContainingType?.OriginalDefinition;
+        if (declaringType is null ||
+            declaringType.Name != "EventProcessor" ||
+            declaringType.ContainingNamespace?.ToDisplayString() != "Azure.Messaging.EventHubs.Primitives")
+        {
+            return;
+        }
+
+        var methodBody = (IMethodBodyOperation)context.Operation;
+        var body = methodBody.BlockBody ?? methodBody.ExpressionBody;
+        if (body is null)
+        {
+            return;
+        }
+
+        var sink = new SinkContext(
+            SinkConcurrency.Concurrent,
+            $"EventProcessor<TPartition>.{overridden.Name} (partitions are processed concurrently)",
+            $"EventProcessor<TPartition>.{overridden.Name}",
+            "partition count");
+        AnalyzeHandlerBody(context, body, methodBody.Syntax, method, sink, methodBody.Syntax);
     }
 
     // ---------------------------------------------------------------------

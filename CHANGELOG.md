@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.10] - 2026-06-10
+
+### Added
+
+- **DI021 EventHubs batch-processor sink**: overrides of `Azure.Messaging.EventHubs.Primitives.EventProcessor<TPartition>.OnProcessingEventBatchAsync` and `OnProcessingErrorAsync` now participate in concurrent-handler shared-state analysis — the override body is the handler (partitions are dispatched concurrently), and instance fields are the capture channel. The base type matches by fully-qualified name through the override chain, so same-named user base types stay silent, and all existing guardrails (`IDbContextFactory<T>`, in-handler creation, serialization guards) apply. This completes the DI021 v2 sink registry.
+
 ## [2.10.9] - 2026-06-10
 
 ### Added
