@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-06-10
+
+### Added
+
+- **DI021: Non-thread-safe service shared across concurrent handler invocations** (Warning): catches the deferred captive dependency — a non-thread-safe service (EF Core `DbContext` and derived contexts, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their interfaces, `IDbContextTransaction`, `HttpContext`) created or resolved once and captured via field, closure, or enclosing-method parameter into a handler a framework invokes concurrently. v1 sinks: `ServiceBusProcessor`/`ServiceBusSessionProcessor` message and error handlers, `EventProcessorClient` event handlers, `System.Threading.Timer` callbacks with a finite period, `System.Timers.Timer.Elapsed`, and `Parallel.For`/`ForEach`/`ForEachAsync`/`Invoke` bodies. Also detects resolution from a long-lived scope captured from outside the handler (the "moved `GetRequiredService` inside the lambda" loophole). Stays quiet for in-handler scopes, `IDbContextFactory<T>`, inline creation, proven-sequential configurations (`MaxConcurrentCalls = 1`, `MaxConcurrentSessions = 1`, `MaxDegreeOfParallelism = 1`, one-shot timers, `AutoReset = false`, `SynchronizingObject`), and handlers that serialize themselves (`lock`, `SemaphoreSlim` wait/`finally`-release, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm, disposable async-lock idiom). Scope-per-message frameworks (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
+- **DI022: Service instance reused across handler invocations** (Info): the same capture shape on a config-gated sink whose concurrency knob cannot be proven at compile time (canonically `ServiceBusProcessor.MaxConcurrentCalls` from configuration or default). Conditional wording: raising the knob above 1 makes it a concurrency crash, and even sequential dispatch accumulates state across all messages. Proven `> 1` upgrades to DI021; proven `== 1` is silent.
+- **DI021/DI022 code fix**: rewrites the handler to scope-per-invocation — inserts `await using var scope = _scopeFactory.CreateAsyncScope();` (or the sync `CreateScope` form for synchronous delegates, converting expression-bodied lambdas to blocks), re-resolves the service from the new scope, plumbs `IServiceScopeFactory` through the constructor when no factory field exists, and removes the captured field, its constructor assignment, and the feeding parameter when the handler was their only consumer. Refuses safely for static handlers, scope-resolution diagnostics, and types without a declared constructor.
+
 ## [2.9.6] - 2026-06-10
 
 ### Changed

@@ -650,6 +650,32 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI021",
+      "ruleId": "DI021",
+      "claims": [
+        {
+          "filePathContains": "DI021/ConcurrentHandlerSharedStateExamples.cs",
+          "anchor": "var command = _connection.CreateCommand();",
+          "ruleId": "DI021",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI022",
+      "ruleId": "DI022",
+      "claims": [
+        {
+          "filePathContains": "DI022/ConfigGatedHandlerCaptureExamples.cs",
+          "anchor": "var command = _connection.CreateCommand();",
+          "ruleId": "DI022",
+          "severity": "note"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

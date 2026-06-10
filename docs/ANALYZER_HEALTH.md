@@ -1,10 +1,10 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-10 (DI014 wrapped-result pass: parenthesized/upcast/null-forgiving disposal and return proofs, user-defined conversion rejection)
-**Version:** 2.9.6
-**Test result:** 1270/1270 passing.
-**Analyzers:** 20 (DI001-DI020)
-**Code fix providers:** 13
+**Date:** 2026-06-10 (DI021/DI022 launch: concurrent-handler shared-state family with scope-per-invocation fixer)
+**Version:** 2.10.0
+**Test result:** 1348/1348 passing.
+**Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
+**Code fix providers:** 14
 
 ## Summary
 
@@ -30,6 +30,8 @@
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 58 | 16 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, conditional-access receiver classification (`host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases report; `httpContext?.RequestServices...` / `scope?.ServiceProvider...` stay quiet), transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, conditional-access receivers, and async-aware (`CreateAsyncScope`/`await using`) |
 | DI020 | Middleware Scoped Service | Warn | 19 | -- | 9.3 | -- | New rule: conventional middleware constructors that capture scoped services (direct and transitive, via the shared `ScopedDependencyGraph`) for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance |
+| DI021 | Concurrent Handler Shared State | Warn | 60 | 16 | 8.8 | 8.5 | New rule: non-thread-safe services (DbContext + derived, DbConnection/DbCommand/DbTransaction/DbDataReader + interfaces, IDbContextTransaction, HttpContext) captured via field/closure/enclosing-parameter into concurrently-invoked handlers (ServiceBus processors, EventProcessorClient, both Timer types, Parallel.*), including captured-scope in-handler resolution; serialization-guard suppressions (lock, SemaphoreSlim, Interlocked, timer re-arm, async-lock idiom) and proven-sequential escapes ship in v1 |
+| DI022 | Config-Gated Handler Capture | Info | (shared) | (shared) | 8.8 | 8.5 | New rule (same analyzer as DI021): the config-gated tier — sink concurrency knob unprovable at compile time (ServiceBusProcessor MaxConcurrentCalls); conditional wording, upgrades to DI021 when the knob is proven > 1, silent when proven 1 |
 
 `--` = no code fix exists for this rule.
 
@@ -173,6 +175,18 @@ Detects scoped services, known scoped framework services such as `IOptionsSnapsh
 
 The scope-wrapping code fix is gated against scoped-service escape (assignment/argument), type-receiver static calls, and synchronous/async context mismatches, and now also refuses resolutions evaluated inside a conditional access's `WhenNotNull` (`var s = host?.Services.GetRequiredService<T>();`), where lifting the member-binding receiver into `using var scope = ....CreateScope();` would emit non-compiling code and drop the null-shortcut semantics.
 
+### DI021 / DI022 -- Concurrent Handler Shared State (Warning / Info)
+
+**Analyzer: 8.8/10** | Tests: 60 (shared) | **Fixer: 8.5/10** | Fix Tests: 16 (shared)
+
+One analyzer class, two descriptors. Detects non-thread-safe services (catalog: EF Core `DbContext` + derived, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their `System.Data` interfaces, `IDbContextTransaction`, `HttpContext`) captured into concurrently-invoked handlers via instance/static fields, closures over outer locals, enclosing-method parameters, and the captured-scope resolution channel (`_scope.ServiceProvider.GetRequiredService<T>()` against a scope captured from outside the handler — closing the "move the resolution inside the lambda" silencing loophole). Sink table v1: `ServiceBusProcessor` (config-gated on `MaxConcurrentCalls`: proven `> 1` reports DI021, proven `== 1` is silent, otherwise DI022 Info), `ServiceBusSessionProcessor` (always-concurrent with the proven `MaxConcurrentSessions == 1` escape), `EventProcessorClient`, `System.Threading.Timer` (finite-period proof: `Timeout.Infinite`/`InfiniteTimeSpan`/`FromMilliseconds(-1)` periods, provably-infinite due times, zero (one-shot) periods, and never-started single-arg constructions suppress unless a finite `Change(...)` on the same timer instance starts it), `System.Timers.Timer.Elapsed` (every `AutoReset` write must be constant `false`, or every `SynchronizingObject` write provably non-null, on this timer instance; `SynchronizingObject = null` or a later `AutoReset = true` is not proof), and `Parallel.For/ForEach/ForEachAsync/Invoke` (params-array delegate extraction; proven `MaxDegreeOfParallelism == 1` suppresses). Concurrency-knob proofs are instance-correlated: sequential proofs only come from the options object traced to this sink's own creation (event receiver → single initializer/assignment → options argument), so a `MaxConcurrentCalls = 1` on a different processor in the same type never silences this one; untraceable receivers can only strengthen to concurrent, never prove sequential. Sinks and catalog match by fully-qualified name so source stubs in tests and samples behave like the real packages, and same-named user types in other namespaces stay silent. Method-group and local-function handlers are analyzed when declared on the registration's own type in the same tree (cross-type/cross-tree bails silently, RS1030-driven), and one-hop thin-delegation lambdas (`args => HandleAsync(args)`) follow into the same-type target. Serialization guards ship in v1: per-use `lock` coverage (the monitor object must be shared — locking an object created inside the handler guards nothing), a symbol-correlated `SemaphoreSlim` bracket (the semaphore must be shared from outside the handler, wait and `finally`-release must target the same instance, and only uses inside the guarded try region — or after an in-try wait — are protected, so a use before the wait still reports), `Interlocked.CompareExchange`/`Monitor.TryEnter` early-return reentrancy guards (the guard must be a top-level handler statement and protects only what executes after it), timer re-arm (correlated to the sink's own timer instance and guarding only uses after the stop), and the disposable async-lock name heuristic (shared lock instance required; only the using region is guarded). Target-typed `new() { ... }` options initializers participate in knob proofs. Reassigned-inside-handler symbols, dispose-only references, whitelisted captures (`IDbContextFactory<T>`, `IServiceScopeFactory`, `ILogger`, `IOptions*`, `IHttpContextAccessor`), handler parameters, and in-handler creations stay quiet. Reports once per (handler, symbol) at the first use with capture site, sink registration, and remaining uses as additional locations, plus a properties bag (`SymbolName`, `ServiceTypeName`, `CaptureKind`, `HandlerIsAsync`, `SinkKind`) that drives the fixer without re-deriving analysis.
+
+**Known under-reports (v2 targets, deliberate — do not re-litigate as bugs):** concurrency-knob proofs are containing-type-scoped (cross-method/cross-type options wiring reports DI022 instead of DI021); RabbitMQ (`Received`/`ReceivedAsync` across the v6/v7 surface drift), PLINQ, TPL Dataflow, and EventHubs batch sinks are v2 registry rows; the scoped-lifetime DI022 tier (RegistrationCollector-backed) is v2; `Task.Run`/`WhenAll` fan-out is parked as a future DI023; nested-lambda captures inside a handler are not attributed to the outer handler; `GetService(typeof(T))` non-generic resolutions are not tracked by the resolution channel; `Monitor.TryEnter` reentrancy guards are not correlated to a specific lock object (over-suppression edge, FN direction); one-hop delegation does not flow lambda arguments into the target method's parameters.
+
+### DI021 fixer
+
+Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: inserts `await using var scope = _scopeFactory.CreateAsyncScope();` for async handlers or `using var scope = _scopeFactory.CreateScope();` for synchronous delegates, converts expression-bodied lambdas to blocks (return-vs-statement decided semantically), re-resolves the service, rewrites all use sites, reuses an existing `IServiceScopeFactory` field or plumbs field + constructor parameter + assignment, and removes the dead captured field, its constructor assignment, and the feeding parameter (constructor-scoped reference checks so the new handler local cannot keep the parameter alive). Name collisions for the inserted `scope`/local are avoided against all handler identifiers, which also prevents shadowing captured outer locals. Refusals: static handlers, `ScopeResolution`-kind diagnostics, non-async handlers with awaitable return types (a synchronous using-scope would dispose before the returned task completes), types without exactly one declared constructor (plumbing only one of several would leave other construction paths with a null factory), expression-bodied method handlers, and any use that no longer matches the analyzed shape. `GetFixAllProvider()` returns null.
+
 ## Code Fix Health
 
 | Fixer | Fix Tests | Score | Risk Assessment |
@@ -190,6 +204,7 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 | DI014 (Root Provider) | 12 | 9 | Low -- reliable local disposal proofs, branch/reassignment/loop guardrails, branch-exit coverage, nearest-callable async/sync fixer boundaries, chained builders, conditional-access creation using/await-using rewrites, and wrapped-result (paren/upcast/null-forgiving) proofs covered |
 | DI015 (Unresolvable Dependency) | 16 | 9.2 | Low -- keyed, factory, TryAdd, local-alias, and conditional-access (`services?.AddXxx(...)`) self-binding generation is tightly gated; inserted statement mirrors the trigger's null-safe shape; FixAll remains disabled |
 | DI019 (Root Scoped Resolution) | 16 | 9 | Medium -- behavior-changing scope wrap, but escape analysis (assignment/argument/return/lambda capture), conditional-access refusal, async-context `CreateAsyncScope` selection, and name-collision handling are all covered; FixAll disabled |
+| DI021/DI022 (Scope Per Invocation) | 10 | 8.5 | Medium -- behavior-changing handler rewrite with constructor plumbing and dead-field removal; static-handler/scope-resolution/no-constructor refusals and shadow-safe naming covered; FixAll disabled |
 
 **Rules without code fixes:** DI007, DI010, DI011, DI016, DI017, DI018, DI020. These rules detect problems whose resolution requires architectural or context-dependent decisions.
 
@@ -334,8 +349,11 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 | Item | Reason | Priority |
 |------|--------|----------|
 | EF/options real-world feedback | Watch for uncommon EF registration overload or options-lifetime shapes that need conservative modeling tweaks | Low |
+| DI021 sink/catalog v2 expansion | RabbitMQ (v6/v7 surfaces), PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; cross-method concurrency-knob proofs | Medium |
+| DI022 default-on Info volume | DI022 fires on every config-bound ServiceBusProcessor capture by design; watch adoption feedback for whether default-on Info is the right noise budget | Medium |
 
 ## Recommended Next Actions
 
-1. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
-2. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019
+1. **DI021 v2 pass** -- RabbitMQ/PLINQ/Dataflow sink rows, scoped-lifetime DI022 tier, cross-method knob proofs, and an `IDbContextFactory<TContext>` second code action
+2. **Refresh low-priority info-rule docs** -- keep Info-rule remediation guidance polished without widening diagnostic scope
+3. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019

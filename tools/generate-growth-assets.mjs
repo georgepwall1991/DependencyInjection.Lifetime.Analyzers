@@ -157,6 +157,20 @@ const ruleSampleConfig = {
       { label: "Sample app safe invoke pattern", symbol: "Good_MiddlewareInvokeResolution" },
     ],
   },
+  DI021: {
+    samplePath: "samples/SampleApp/Diagnostics/DI021/ConcurrentHandlerSharedStateExamples.cs",
+    highlights: [
+      { label: "Sample app concurrent capture warning", symbol: "Bad_TimerCallbackSharedConnection" },
+      { label: "Sample app per-invocation pattern", symbol: "Good_ConnectionPerInvocation" },
+    ],
+  },
+  DI022: {
+    samplePath: "samples/SampleApp/Diagnostics/DI022/ConfigGatedHandlerCaptureExamples.cs",
+    highlights: [
+      { label: "Sample app config-gated capture info", symbol: "Bad_ProcessorCaptureWithUnprovenConcurrency" },
+      { label: "Sample app per-message pattern", symbol: "Good_ConnectionPerMessage" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(
