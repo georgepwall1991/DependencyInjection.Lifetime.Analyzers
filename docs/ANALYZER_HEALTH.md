@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
-**Test result:** 1390/1390 passing (verified this date, 0 skipped).
+**Test result:** 1408/1408 passing (verified this date, 0 skipped).
 **Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
 **Code fix providers:** 14
 
@@ -11,7 +11,7 @@
 | ID | Rule | Sev | Analyzer Tests | Fixer Tests | Analyzer | Fixer | Status |
 |----|------|-----|----------------|-------------|----------|-------|--------|
 | DI001 | Scope Disposal | Warn | 59 | 15 | 9.6 | 8.8 | Hardened: conditional ownership proofs, branch-exit disposal proof, non-null disposal guards, reassignment and unsafe await-using guardrails, conditional-access creation (`_provider?.CreateScope()`) disposal/return proofs, and await-using suppression for conditional-access creations |
-| DI002 | Scope Escape | Warn | 39 | 8 | 8.5 | 8.5 | Re-scored down (was 9.5): delegate-capture, alias, property/out/ref, and conditional-access sinks are solid, but whole sink classes are missing — collection `Add`/indexer assignment, event subscription, tuple/anonymous-object returns (all same-boundary, FN direction) |
+| DI002 | Scope Escape | Warn | 57 | 8 | 8.8 | 8.5 | 2.10.3 closed the two highest-frequency audit gaps: field/property-collection mutation (`_cache.Add`, `Insert`/`Enqueue`/`Push`/`TryAdd`, direct-resolution arguments) and event subscription (method-group and captured-delegate handlers on owners that outlive the scope); indexer assignment was already covered via the indexer property symbol and is now pinned. Remaining audit debt: tuple/anonymous-object composite returns (FN direction) |
 | DI003 | Captive Dependency | Warn | 120 | 13 | 9.8 | 9 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, and conditional-access (`services?.AddSingleton<...>()`) lifetime rewrite |
 | DI004 | Use After Dispose | Warn | 46 | 10 | 8.7 | 8.8 | Re-scored down (was 10): strong mainline + conditional-access coverage, but explicit-dispose tracking is linear position-based (breaks at first `Dispose()`, no branch awareness — DI001/DI014 got branch-aware proofs, DI004 did not), and field-stored scopes are invisible |
 | DI005 | Async Disposal | Warn | 24 | 11 | 9.2 | 8.8 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside the existing top-level async, nested async, and direct-resource fixer coverage |
@@ -61,9 +61,9 @@ Operation-based tracking covers lambdas, fields, conditionals, nested scopes, an
 
 ### DI002 -- Scope Escape (Warning)
 
-**Analyzer: 8.5/10** (re-scored from 9.5, 2026-06-10) | Tests: 39 | **Fixer: 8.5/10** | Fix Tests: 8
+**Analyzer: 8.8/10** (re-scored from 9.5 in the 2026-06-10 audit; raised from 8.5 after the 2.10.3 sink expansion) | Tests: 57 | **Fixer: 8.5/10** | Fix Tests: 8
 
-**Why the re-score:** the sink table is enumerated, and whole escape classes are absent from it — none of these are detected or tested: collection escapes (`list.Add(service)`, `dict[key] = service`, indexer assignment to a field-held container), event-handler subscription (`SomeEvent += () => service.Use()`), and composite-construction returns (`return (service, other);`, `return new { Service = service };`). All are same-boundary and syntactically reachable, so they are real FN holes, not deliberate conservatism. Method-argument escape (`Register(service)` where the callee stores it) and iterator/async state-machine capture remain out of scope by design (inter-procedural). Strong analyzer within its implemented sinks after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks. Conditional-access shapes participate in escape detection: resolutions through `scope?.ServiceProvider.GetRequiredService<T>()` and chained `scope?.ServiceProvider?.GetRequiredService<T>()` are recognized (the provider receiver is resolved through the `MemberBindingExpressionSyntax` and its owning conditional access), `using var scope = factory?.CreateScope();` creations are tracked, and the consumption shape (return, field/property capture, local tracking) is classified from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
+**2.10.3 sink expansion** closed the audit's two highest-frequency gaps: mutation of field/property-held containers (`_cache.Add(service)` and friends — tracked locals, capturing delegates, and direct resolutions passed as arguments) and event subscription (`_publisher.Changed += service.Handle`, captured-delegate handlers; owners that outlive the scope are fields, properties, parameters, and the enclosing instance, while scope-local publishers stay quiet). Indexer assignment (`_byTenant[key] = service`) was already detected through the indexer property symbol and is now pinned by a regression test. Remaining audit debt, FN direction: composite-construction returns (`return (service, other);`, `return new { Service = service };`); collection receivers that are parameters (`cacheParam.Add(service)` — caller-owned but unnamed-container); immutable collections reassigned in place (`_cache = _cache.Add(service)`). The new sinks use document-order guards as the execution-order proxy and root-of-chain receiver classification; method groups bind at conversion time and gate on IMethodSymbol. Method-argument escape (`Register(service)` where the callee stores it) and iterator/async state-machine capture remain out of scope by design (inter-procedural). Strong analyzer within its implemented sinks after executable-boundary and delegate-escape hardening. Covers constructors, accessors, local functions, lambdas, anonymous methods, provider aliases, predeclared scopes, out/ref parameter escape sinks, and high-confidence delegates that capture scoped services before escaping via returns, fields, properties, or ref/out parameters. Reassignment guardrails keep stale delegate captures quiet before later escape sinks. Conditional-access shapes participate in escape detection: resolutions through `scope?.ServiceProvider.GetRequiredService<T>()` and chained `scope?.ServiceProvider?.GetRequiredService<T>()` are recognized (the provider receiver is resolved through the `MemberBindingExpressionSyntax` and its owning conditional access), `using var scope = factory?.CreateScope();` creations are tracked, and the consumption shape (return, field/property capture, local tracking) is classified from the outermost enclosing conditional access. Transient resolutions and locally-consumed services through the same shapes stay quiet.
 
 The fixer intentionally offers pragma suppression only, because moving scoped services across ownership boundaries is context-dependent. Suppression coverage now spans direct returns, field/property assignments, alias returns, ref/out parameter escapes, captured-delegate escapes, local-function returns, and lambda-body assignments while keeping the transformation trivia-only and low blast radius.
 
@@ -239,13 +239,13 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1390 (verified passing 2026-06-10) |
-| Analyzer tests | 1067 (per-rule 1046 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
+| Total tests | 1408 (verified passing 2026-06-10) |
+| Analyzer tests | 1085 (per-rule 1064 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
 | Code fix tests | 188 |
 | Infrastructure tests | 135 (112 facts + 23 severity theory cases) |
 | Analyzer mean score | 9.3/10 |
 | Fixer mean score | 8.9/10 |
-| Rules at 9+ | 16/22 (sub-9: DI002 8.5, DI004 8.7, DI017 8.8, DI020 8.4, DI021 8.8, DI022 8.8) |
+| Rules at 9+ | 16/22 (sub-9: DI002 8.8, DI004 8.7, DI017 8.8, DI020 8.4, DI021 8.8, DI022 8.8) |
 | Fixers at 8+ | 14/14 (100%) |
 | Rules needing pass | 5 analyzer passes (DI020, DI021/DI022 v2, DI002, DI004, DI017 — see Work Priority), 0 fixers |
 | TODO/FIXME in source | 0 (verified) |
@@ -414,7 +414,7 @@ Work should go where a high-importance rule has a low honest score. Combining th
 |----------|--------|------------|--------|------------|
 | 1 | DI020 hardening | Tier 1 (#4) | 8.4 | Close the audit gaps before widening anything: tests + any fixes for the non-generic `UseMiddleware(typeof(T))` branch, keyed-service (`[FromKeyedServices]`) middleware dependencies, `IEndpointRouteBuilder`/convention-builder receivers, conditional-access registration. Smallest effort, highest-importance payoff. |
 | 2 | DI021/DI022 v2 | Tier 1 (#2) | 8.8 | RabbitMQ consumer sinks shipped in 2.10.1. Remaining v2 roadmap: PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; same-tree helper-method knob proofs shipped 2.10.2 — remaining proof work is the RabbitMQ factory→connection→channel→consumer instance chain and cross-tree wiring; `IDbContextFactory<TContext>` second code action. |
-| 3 | DI002 sink expansion | Tier 2 (#10) | 8.5 | Add the missing same-boundary sinks: collection `Add`/`Insert`/indexer assignment, event subscription, tuple/anonymous-object returns. Each is a bounded, testable sink row — same playbook as previous hardening passes. |
+| 3 | DI002 sink expansion | Tier 2 (#10) | 8.8 | Collection-mutation and event-subscription sinks shipped 2.10.3 (indexer was already covered and is now pinned). Remaining: tuple/anonymous-object composite returns — bounded and testable, lower frequency than the shipped shapes. |
 | 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.7 | Make explicit-dispose tracking branch-aware (port the DI001/DI014 disposal-proof approach instead of first-`Dispose()` position break); add branch-shape tests. Field-stored scopes can follow as a separate, larger pass if cross-boundary tracking is ever taken on. |
 | 5 | DI017 test density | Tier 3 (#14) | 8.8 | Cheapest item: this is test debt, not suspected wrongness. Add `Replace` mutation tests, keyed permutations (mixed keyed/unkeyed edges, int-vs-string keys), and a `Lazy<T>` parameter test pinning current behavior. |
 

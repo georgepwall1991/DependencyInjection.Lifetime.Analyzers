@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.3] - 2026-06-10
+
+### Added
+
+- **DI002 collection and event-subscription escape sinks**: scoped services now report when they escape through mutation of a field/property-held container (`_cache.Add(service)`, `_cache.Insert(...)`, `Enqueue`, `Push`, `TryAdd` — both for tracked locals and direct resolutions passed as arguments) and when a handler bound to the scoped service is subscribed to an event whose owner outlives the scope (`_publisher.Changed += service.Handle`, captured-delegate subscriptions, method-group delegate locals (`EventHandler h = service.Handle;`), static events, and events on the enclosing instance). Method groups on tracked service locals participate in delegate-capture tracking generally, so they also report through the existing field/property/ref-out/return delegate sinks. Mutation matching requires the resolved method to return void/bool/int (real mutator signatures) and the receiver type to actually be a collection (implement `IEnumerable`), so value-returning shapes — `ImmutableList.Add`, fluent builders — and ordinary field-held objects with Insert/Add-style methods (repositories persisting data) stay quiet; conditional-access mutations (`_cache?.Add(service)`) are recognized through the enclosing conditional access. The new sinks require the resolution to precede the sink in document order (a local reassigned to a scoped resolution after the `Add`/subscription escaped its previous value, not the scoped one), method-group recognition gates on the member actually being a method (delegate-valued properties returning static handlers stay quiet) and on the resolution preceding the conversion site (method groups bind their receiver at conversion time), and event receivers are classified by the root of the access chain, so `wrapper.Publisher.Changed` with a scope-local wrapper stays quiet while field/property/parameter/static roots report. Local containers and scope-local publishers stay quiet too — they live and die with the scope. Indexer assignment to a field dictionary (`_byTenant[key] = service`) was already detected through the indexer property symbol and is now pinned by a regression test. These were the two highest-frequency real-world escape shapes missing from the sink table per the 2026-06-10 health re-audit.
+
 ## [2.10.2] - 2026-06-10
 
 ### Changed

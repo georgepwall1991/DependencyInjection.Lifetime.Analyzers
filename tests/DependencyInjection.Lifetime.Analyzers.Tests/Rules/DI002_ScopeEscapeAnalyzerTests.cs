@@ -707,6 +707,424 @@ public class DI002_ScopeEscapeAnalyzerTests
                 .WithArguments("escaped"));
     }
 
+
+    [Fact]
+    public async Task ScopedService_AddedToFieldCollection_ReportsDiagnostic()
+    {
+        // The field-held list outlives the scope: adding the scoped service hands it to a
+        // container that survives disposal.
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly List<IMyService> _cache = new List<IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _cache.Add(service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_FieldDictionaryIndexerAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Dictionary<string, IMyService> _byTenant = new Dictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string tenant)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _byTenant[tenant] = service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_DirectResolutionAddedToFieldCollection_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly List<IMyService> _cache = new List<IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.Add({|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_SubscribedToFieldEventViaMethodGroup_ReportsDiagnostic()
+    {
+        // The publisher lives in a field: the subscription keeps the scoped service reachable
+        // (and invocable) after the scope is disposed.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+                public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _publisher.Changed += service.Handle;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_CapturedDelegateSubscribedToFieldEvent_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    EventHandler handler = (sender, args) => service.DoWork();
+                    _publisher.Changed += handler;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_MethodGroupDelegateLocalSubscribed_ReportsDiagnostic()
+    {
+        // The delegate local is bound to the scoped service via a method group — subscribing it
+        // is the same escape as subscribing service.Handle directly.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    EventHandler handler = service.Handle;
+                    _publisher.Changed += handler;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_SubscribedToStaticEvent_ReportsDiagnostic()
+    {
+        // A static event outlives every scope.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public static class GlobalPublisher
+            {
+                public static event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    GlobalPublisher.Changed += service.Handle;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_ConditionalAccessFieldCollectionAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly List<IMyService>? _cache = new List<IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _cache?.Add(service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_InlineResolutionMethodGroupSubscribed_ReportsDiagnostic()
+    {
+        // The method group is taken directly on the resolution — same escape as binding a
+        // tracked local's Handle.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _publisher.Changed += {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|}.Handle;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -857,6 +1275,460 @@ public class DI002_ScopeEscapeAnalyzerTests
                     }
 
                     return escaped;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_AddedToLocalCollection_NoDiagnostic()
+    {
+        // A local list consumed inside the scope does not outlive it.
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { void DoWork(); }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var batch = new List<IMyService>();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    batch.Add(service);
+                    foreach (var item in batch)
+                    {
+                        item.DoWork();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_SubscribedToLocalPublisherEvent_NoDiagnostic()
+    {
+        // The publisher itself is a scope-lived local: the subscription dies with it.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+                public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var publisher = new Publisher();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    publisher.Changed += service.Handle;
+                    publisher.Raise();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_FluentNonMutatingAdd_NoDiagnostic()
+    {
+        // Add returns a new value instead of storing into the receiver (immutable/fluent shape):
+        // the discarded result does not retain the service.
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class FluentCache
+            {
+                public FluentCache Add(IMyService service) => new FluentCache();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly FluentCache _cache = new FluentCache();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _cache.Add(service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_NonCollectionInsertMethod_NoDiagnostic()
+    {
+        // The receiver is not a collection — Insert here persists data, it is an ordinary
+        // method argument, which DI002 documents as out of scope.
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class Repository
+            {
+                public int Insert(IMyService entity) => 1;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Repository _repository = new Repository();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Save()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _repository.Insert(service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_DelegateValuedPropertySubscribed_NoDiagnostic()
+    {
+        // service.Handler is a delegate-valued property returning a static handler — the
+        // subscribed delegate does not retain the scoped service instance.
+        var source = Usings + """
+            public interface IMyService
+            {
+                EventHandler Handler { get; }
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Subscribe()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _publisher.Changed += service.Handler;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                private static void Handle(object sender, EventArgs args) { }
+                public EventHandler Handler => Handle;
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_CollectionAddBeforeResolutionAssignment_NoDiagnostic()
+    {
+        // The object added to the field collection is the pre-existing instance; the local is
+        // only reassigned to a scoped resolution afterwards.
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { void DoWork(); }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly List<IMyService> _cache = new List<IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work(IMyService existing)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    IMyService service = existing;
+                    _cache.Add(service);
+                    service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_SubscribedThroughLocalWrapperProperty_NoDiagnostic()
+    {
+        // The event is reached through a property, but the chain's root is a scope-local
+        // wrapper — the publisher dies with the scope.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Wrapper
+            {
+                public Publisher Publisher { get; } = new Publisher();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var wrapper = new Wrapper();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    wrapper.Publisher.Changed += service.Handle;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_MethodGroupConvertedBeforeResolution_NoDiagnostic()
+    {
+        // Method groups bind their receiver at conversion time: the handler is bound to the
+        // pre-existing instance, not the scoped resolution assigned afterwards.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void Handle(object sender, EventArgs args);
+                void DoWork();
+            }
+
+            public class Publisher
+            {
+                public event EventHandler Changed;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Publisher _publisher = new Publisher();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work(IMyService existing)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    IMyService service = existing;
+                    EventHandler handler = service.Handle;
+                    service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    _publisher.Changed += handler;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void Handle(object sender, EventArgs args) { }
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedService_AddedToLocalWrapperCollectionProperty_NoDiagnostic()
+    {
+        // The container is reached through a property, but the chain's root is a scope-local
+        // wrapper — the container dies with the scope.
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class Wrapper
+            {
+                public List<IMyService> Items { get; } = new List<IMyService>();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Work()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var wrapper = new Wrapper();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    wrapper.Items.Add(service);
                 }
             }
 

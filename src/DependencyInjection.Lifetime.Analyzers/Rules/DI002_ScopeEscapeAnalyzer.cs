@@ -169,6 +169,32 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             {
                 ReportDiagnostic(context, invocation, parameterSymbol.Name, reportedSpans);
             }
+
+            // _publisher.Changed += scope.ServiceProvider.GetRequiredService<T>().Handle — a
+            // method group taken directly on the resolution, subscribed to an event whose owner
+            // outlives the scope.
+            if (consumption.Parent is MemberAccessExpressionSyntax inlineMethodGroup &&
+                inlineMethodGroup.Expression == consumption &&
+                inlineMethodGroup.Parent is AssignmentExpressionSyntax inlineSubscription &&
+                inlineSubscription.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                inlineSubscription.Right == inlineMethodGroup &&
+                semanticModel.GetSymbolInfo(inlineMethodGroup).Symbol is IMethodSymbol &&
+                semanticModel.GetSymbolInfo(inlineSubscription.Left).Symbol is IEventSymbol inlineEventSymbol &&
+                EventReceiverOutlivesScope(inlineSubscription.Left, semanticModel))
+            {
+                ReportDiagnostic(context, invocation, inlineEventSymbol.Name, reportedSpans);
+            }
+
+            // _cache.Add(scope.ServiceProvider.GetRequiredService<T>()) — the resolution is an
+            // argument to a mutation method on a field/property-held container that outlives
+            // the scope.
+            if (consumption.Parent is ArgumentSyntax argumentShape &&
+                argumentShape.Parent is ArgumentListSyntax argumentList &&
+                argumentList.Parent is InvocationExpressionSyntax mutationInvocation &&
+                TryGetFieldCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
+            {
+                ReportDiagnostic(context, invocation, directContainerName, reportedSpans);
+            }
         }
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
@@ -251,7 +277,220 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             {
                 ReportDiagnostic(context, delegateParameterSource, delegateParameter.Name, reportedSpans);
             }
+
+            // _cache.Add(service) / _cache.Insert(0, service) — a tracked service or capturing
+            // delegate handed to a mutation method on a field/property-held container.
+            if (node is InvocationExpressionSyntax mutationCall &&
+                TryGetFieldCollectionMutation(mutationCall, semanticModel, out var containerName))
+            {
+                foreach (var argument in mutationCall.ArgumentList.Arguments)
+                {
+                    // The resolution must precede the mutation in document order — a local
+                    // reassigned to a scoped resolution only after the Add call escaped its
+                    // previous (untracked) value.
+                    if (TryGetTrackedLocalReference(
+                            argument.Expression, semanticModel, serviceVariables, out var collectionSource) &&
+                        collectionSource.SpanStart < mutationCall.SpanStart)
+                    {
+                        ReportDiagnostic(context, collectionSource, containerName, reportedSpans);
+                    }
+                    else if (TryGetCapturedDelegateSource(
+                                 argument.Expression,
+                                 semanticModel,
+                                 serviceVariables,
+                                 capturedDelegateVariables,
+                                 out var delegateCollectionSource) &&
+                             delegateCollectionSource.SpanStart < mutationCall.SpanStart)
+                    {
+                        ReportDiagnostic(context, delegateCollectionSource, containerName, reportedSpans);
+                    }
+                }
+            }
+
+            // publisher.Changed += service.Handle / += capturingDelegate — subscribing a handler
+            // bound to the scoped service onto an event whose owner outlives the scope keeps the
+            // service reachable (and invocable) after disposal.
+            if (node is AssignmentExpressionSyntax subscription &&
+                subscription.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                semanticModel.GetSymbolInfo(subscription.Left).Symbol is IEventSymbol eventSymbol &&
+                EventReceiverOutlivesScope(subscription.Left, semanticModel) &&
+                TryGetSubscribedServiceSource(
+                    subscription.Right,
+                    semanticModel,
+                    serviceVariables,
+                    capturedDelegateVariables,
+                    out var subscriptionSource) &&
+                subscriptionSource.SpanStart < subscription.SpanStart)
+            {
+                ReportDiagnostic(context, subscriptionSource, eventSymbol.Name, reportedSpans);
+            }
         }
+    }
+
+    private static readonly ImmutableHashSet<string> CollectionMutationMethodNames =
+        ImmutableHashSet.Create("Add", "Insert", "Enqueue", "Push", "TryAdd");
+
+    /// <summary>
+    /// Matches mutation calls on containers held by fields or properties — storage that outlives
+    /// the scope. Local containers stay quiet: they live and die with the scope unless they
+    /// escape through one of the other sinks.
+    /// </summary>
+    private static bool TryGetFieldCollectionMutation(
+        InvocationExpressionSyntax call,
+        SemanticModel semanticModel,
+        out string containerName)
+    {
+        containerName = string.Empty;
+
+        // `_cache.Add(...)` is a MemberAccessExpressionSyntax; `_cache?.Add(...)` is a
+        // MemberBindingExpressionSyntax whose receiver is the enclosing conditional access.
+        SimpleNameSyntax methodName;
+        ExpressionSyntax receiverExpression;
+        if (call.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            methodName = memberAccess.Name;
+            receiverExpression = memberAccess.Expression;
+        }
+        else if (call.Expression is MemberBindingExpressionSyntax memberBinding &&
+                 FindOwningConditionalAccess(call) is { } conditionalAccess)
+        {
+            methodName = memberBinding.Name;
+            receiverExpression = conditionalAccess.Expression;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (!CollectionMutationMethodNames.Contains(methodName.Identifier.ValueText))
+        {
+            return false;
+        }
+
+        // Mutating collection methods return void (List.Add, Insert, Enqueue, Push), bool
+        // (ConcurrentDictionary.TryAdd), or int (non-generic IList.Add). Value-returning Add
+        // shapes (ImmutableList.Add, fluent builders) hand back a new value instead of storing
+        // into the receiver, so the discarded result does not retain the service.
+        if (semanticModel.GetSymbolInfo(call).Symbol is not IMethodSymbol method ||
+            !(method.ReturnsVoid ||
+              method.ReturnType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Int32))
+        {
+            return false;
+        }
+
+        // The receiver must actually be a collection — an ordinary field-held object with a
+        // method named Insert/Add (a repository persisting data) is a method argument, which
+        // this rule documents as out of scope.
+        if (semanticModel.GetTypeInfo(receiverExpression).Type is not { } receiverType ||
+            !IsEnumerableLike(receiverType))
+        {
+            return false;
+        }
+
+        // The chain's ROOT must outlive the scope: wrapper.Items dies with a scope-local
+        // wrapper even though Items is a property.
+        var root = receiverExpression;
+        while (root is MemberAccessExpressionSyntax nestedAccess)
+        {
+            root = nestedAccess.Expression;
+        }
+
+        if (root != receiverExpression &&
+            root is not ThisExpressionSyntax &&
+            semanticModel.GetSymbolInfo(root).Symbol
+                is not (IFieldSymbol or IPropertySymbol or IParameterSymbol or INamedTypeSymbol))
+        {
+            return false;
+        }
+
+        var receiver = semanticModel.GetSymbolInfo(receiverExpression).Symbol;
+        if (receiver is IFieldSymbol or IPropertySymbol)
+        {
+            containerName = receiver.Name;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The nearest conditional access whose WhenNotNull contains the given node.</summary>
+    private static ConditionalAccessExpressionSyntax? FindOwningConditionalAccess(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(node.Span))
+            {
+                return conditionalAccess;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsEnumerableLike(ITypeSymbol type)
+    {
+        if (type.SpecialType == SpecialType.System_Collections_IEnumerable)
+        {
+            return true;
+        }
+
+        if (type is INamedTypeSymbol named && named.ConstructedFrom.SpecialType ==
+            SpecialType.System_Collections_Generic_IEnumerable_T)
+        {
+            return true;
+        }
+
+        return type.AllInterfaces.Any(i => i.SpecialType == SpecialType.System_Collections_IEnumerable);
+    }
+
+    /// <summary>
+    /// The subscription escapes only when the event's owner outlives the scope: the enclosing
+    /// instance (identifier/this form), or a receiver held by a field, property, or parameter.
+    /// A publisher local to the scope dies with it.
+    /// </summary>
+    private static bool EventReceiverOutlivesScope(ExpressionSyntax left, SemanticModel semanticModel)
+    {
+        if (left is MemberAccessExpressionSyntax memberAccess)
+        {
+            // Classify the ROOT of the receiver chain: wrapper.Publisher.Changed dies with a
+            // scope-local wrapper even though Publisher is a property.
+            var root = memberAccess.Expression;
+            while (root is MemberAccessExpressionSyntax nested)
+            {
+                root = nested.Expression;
+            }
+
+            if (root is ThisExpressionSyntax)
+            {
+                return true;
+            }
+
+            // A type receiver is a static event: it outlives every scope.
+            return semanticModel.GetSymbolInfo(root).Symbol
+                is IFieldSymbol or IPropertySymbol or IParameterSymbol or INamedTypeSymbol;
+        }
+
+        // Bare identifier: an event on the enclosing instance itself.
+        return left is IdentifierNameSyntax;
+    }
+
+    /// <summary>
+    /// The subscribed handler carries the scoped service when it is a method group on a tracked
+    /// service local (service.Handle) or a previously captured delegate local.
+    /// </summary>
+    private static bool TryGetSubscribedServiceSource(
+        ExpressionSyntax right,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> capturedDelegateVariables,
+        out InvocationExpressionSyntax source)
+    {
+        // Method groups on tracked service locals are recognized (with an IMethodSymbol gate,
+        // so delegate-valued properties that do not retain the service stay quiet) by the
+        // shared captured-delegate classification.
+        return TryGetCapturedDelegateSource(
+            right, semanticModel, serviceVariables, capturedDelegateVariables, out source);
     }
 
     private static bool IsEscapingParameter(IParameterSymbol parameter) =>
@@ -795,6 +1034,22 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // A method group on a tracked service local (service.Handle) converts to a delegate
+        // bound to the scoped instance — the same capture as a lambda closing over it. Unlike a
+        // lambda, the receiver binds at CONVERSION time, so the resolution must precede the
+        // method group in document order; a delegate created before the local was reassigned to
+        // the scoped resolution is still bound to the previous instance.
+        if (expression is MemberAccessExpressionSyntax methodGroup &&
+            methodGroup.Expression is IdentifierNameSyntax receiverIdentifier &&
+            semanticModel.GetSymbolInfo(methodGroup).Symbol is IMethodSymbol &&
+            semanticModel.GetSymbolInfo(receiverIdentifier).Symbol is ILocalSymbol receiverLocal &&
+            serviceVariables.TryGetValue(receiverLocal, out sourceInvocation) &&
+            sourceInvocation.SpanStart < methodGroup.SpanStart)
+        {
+            return true;
+        }
+
+        sourceInvocation = null!;
         return false;
     }
 
