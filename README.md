@@ -20,7 +20,7 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, cir
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
 - Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 20 focused diagnostics, with code fixes where safe and unambiguous.
+- Ships 22 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
