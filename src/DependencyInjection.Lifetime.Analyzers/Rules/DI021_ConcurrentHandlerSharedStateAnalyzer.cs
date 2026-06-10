@@ -329,6 +329,14 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     private static void AnalyzeObjectCreation(OperationAnalysisContext context)
     {
         var creation = (IObjectCreationOperation)context.Operation;
+        if (creation.Type is INamedTypeSymbol blockType &&
+            blockType.Name is "ActionBlock" or "TransformBlock" or "TransformManyBlock" &&
+            blockType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks.Dataflow")
+        {
+            AnalyzeDataflowBlockCreation(context, creation, blockType.Name);
+            return;
+        }
+
         if (creation.Type is not INamedTypeSymbol { Name: "Timer" } timerType ||
             timerType.ToDisplayString() != "System.Threading.Timer")
         {
@@ -373,6 +381,70 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             "period",
             timerInstance: GetCreationTargetSymbol(creation));
         AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax);
+    }
+
+    /// <summary>
+    /// TPL Dataflow execution blocks run their delegate sequentially by default
+    /// (MaxDegreeOfParallelism = 1). A block without options is silent; a traced options object
+    /// proving the knob above 1 (or Unbounded = -1) reports DI021; a traced object that never
+    /// sets the knob keeps the sequential default; anything unprovable is config-gated (DI022).
+    /// </summary>
+    private static void AnalyzeDataflowBlockCreation(
+        OperationAnalysisContext context,
+        IObjectCreationOperation creation,
+        string blockTypeName)
+    {
+        var optionsArgument = creation.Arguments.FirstOrDefault(a =>
+            a.Parameter?.Type?.ToDisplayString() == "System.Threading.Tasks.Dataflow.ExecutionDataflowBlockOptions");
+        if (optionsArgument is null)
+        {
+            return;
+        }
+
+        var trace = Unwrap(optionsArgument.Value) switch
+        {
+            IObjectCreationOperation { Syntax: BaseObjectCreationExpressionSyntax creationExpression } =>
+                OptionsTrace.ForInlineCreation(creationExpression),
+            ILocalReferenceOperation local => OptionsTrace.ForSymbol(local.Local, creation.Syntax.SpanStart),
+            IFieldReferenceOperation field => OptionsTrace.ForSymbol(field.Field),
+            IParameterReferenceOperation parameter =>
+                OptionsTrace.ForSymbol(parameter.Parameter, creation.Syntax.SpanStart),
+            IInvocationOperation helperCall when
+                TryGetSameTreeHelperDeclaration(helperCall.TargetMethod, creation.Syntax) is { } helper =>
+                OptionsTrace.ForHelper(helper),
+            _ => OptionsTrace.WithoutKnownOptions
+        };
+
+        // Only an options object whose construction we actually saw (inline creation or a
+        // same-tree helper's fresh creation) can keep the sequential default of 1 when the knob
+        // is never written. A parameter or field with no observed writes proves nothing — the
+        // caller may have set the knob.
+        var tracedToFreshCreation = trace.InlineCreation is not null || trace.HelperDeclaration is not null;
+        var knob = EvaluateTracedKnob(context, creation.Syntax, trace, "MaxDegreeOfParallelism");
+        var concurrency = knob switch
+        {
+            KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
+            KnobProof.ProvenSequential when trace.Traced => SinkConcurrency.Sequential,
+            KnobProof.NotFound when tracedToFreshCreation => SinkConcurrency.Sequential,
+            _ => SinkConcurrency.Unprovable
+        };
+
+        if (concurrency == SinkConcurrency.Sequential)
+        {
+            return;
+        }
+
+        var sink = new SinkContext(
+            concurrency,
+            $"{blockTypeName} (MaxDegreeOfParallelism is set above 1)",
+            blockTypeName,
+            "MaxDegreeOfParallelism");
+
+        var handlerArgument = creation.Arguments.FirstOrDefault(a => a.Parameter?.Ordinal == 0);
+        if (handlerArgument is not null)
+        {
+            AnalyzeHandlerValue(context, handlerArgument.Value, sink, creation.Syntax);
+        }
     }
 
     // ---------------------------------------------------------------------

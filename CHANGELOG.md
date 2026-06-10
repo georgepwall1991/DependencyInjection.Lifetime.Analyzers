@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.8] - 2026-06-10
+
+### Added
+
+- **DI021/DI022 TPL Dataflow sinks**: delegates passed to `ActionBlock<T>`, `TransformBlock<TIn,TOut>`, and `TransformManyBlock<TIn,TOut>` constructors now participate in concurrent-handler shared-state analysis. Execution blocks default to `MaxDegreeOfParallelism = 1`, so a block without options stays silent; a traced options object proving the knob above 1 (or `DataflowBlockOptions.Unbounded`) reports DI021; a fresh creation (inline or via a same-tree helper) that never sets the knob keeps the sequential default, while caller-provided parameters and fields with no observed writes are config-gated DI022 — the caller may have raised the knob. The full knob-proof machinery applies (inline creations, locals with consumption cutoffs, same-tree helper methods, escape/deferred-write poisons).
+
 ## [2.10.7] - 2026-06-10
 
 ### Added
