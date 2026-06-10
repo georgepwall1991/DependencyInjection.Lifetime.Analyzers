@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.6] - 2026-06-10
+
+### Changed
+
+- **DI014 wrapped-result disposal precision**: DI014 now treats root providers assigned or returned through parenthesized, provable upcast, or null-forgiving `BuildServiceProvider()` results as disposed or caller-owned when appropriate — including combinations with conditional-access creations such as `(services?.BuildServiceProvider())!`. Flows that pass the result through a user-defined conversion (explicit *or* implicit operator) or an unproven downcast (`(Wrapper)(object)...`, downcast from an interface) still report, because they are not proven to hand the root provider itself to the disposal or return site.
+
 ## [2.9.5] - 2026-06-09
 
 ### Changed
@@ -101,7 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **DI014 wrapped-result disposal precision**: DI014 now treats root providers assigned or returned through parenthesized, same-instance cast, or null-forgiving `BuildServiceProvider()` results as disposed or caller-owned when appropriate, while still reporting user-defined conversion wrappers that do not prove the root provider was disposed.
 - **DI019 nullable root-provider precision**: DI019 now recognizes nullable-known root provider surfaces used through the null-forgiving operator, such as `app.Services!.GetRequiredService<T>()`, so nullable annotations do not hide scoped root-resolution diagnostics.
 - **DI016 services-source unwrap precision**: DI016 now unwraps the null-forgiving operator (`builder.Services!`) and same-type `IServiceCollection` casts (`(IServiceCollection)builder.Services`) when resolving the registration receiver, helper return expressions, and local-variable initializers, so builder-style flows that suppress nullable warnings or assert the interface no longer hide `BuildServiceProvider()` misuse. Provider-factory methods that return `IServiceProvider` remain silent.
 

@@ -188,17 +188,20 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (returnedExpression.Parent is ReturnStatementSyntax)
+        if (returnedExpression.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax)
         {
-            return true;
-        }
-
-        if (returnedExpression.Parent is ArrowExpressionClauseSyntax)
-        {
-            return true;
+            // A user-defined conversion applied at the return boundary produces a different
+            // instance, so the caller receives the wrapper rather than the root provider.
+            return !IsUserDefinedConversionResult(returnedExpression, semanticModel);
         }
 
         return false;
+    }
+
+    private static bool IsUserDefinedConversionResult(SyntaxNode expression, SemanticModel semanticModel)
+    {
+        return expression is ExpressionSyntax expressionSyntax &&
+               semanticModel.GetConversion(expressionSyntax).IsUserDefined;
     }
 
     private static bool IsExplicitlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
@@ -1384,6 +1387,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
     {
         var assignedExpression = GetSameInstanceOuterExpression(creationSyntax, semanticModel);
 
+        // A user-defined conversion at the assignment boundary stores the wrapper, not the
+        // root provider, so disposing the target does not prove the provider was disposed.
+        if (IsUserDefinedConversionResult(assignedExpression, semanticModel))
+        {
+            return null;
+        }
+
         if (assignedExpression.Parent is EqualsValueClauseSyntax equalsValue &&
             equalsValue.Parent is VariableDeclaratorSyntax declarator)
         {
@@ -1462,10 +1472,10 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        // Only identity conversions and provable upcasts keep the same instance. A downcast
+        // (including through object or an interface) cannot be proven to yield the provider.
         return TypeDerivesFromOrEquals(sourceType, targetType) ||
-               TypeDerivesFromOrEquals(targetType, sourceType) ||
-               sourceType.AllInterfaces.Any(iface => SymbolEqualityComparer.Default.Equals(iface, targetType)) ||
-               targetType.AllInterfaces.Any(iface => SymbolEqualityComparer.Default.Equals(iface, sourceType));
+               sourceType.AllInterfaces.Any(iface => SymbolEqualityComparer.Default.Equals(iface, targetType));
     }
 
     private static bool TryGetDisposedTargetSymbol(
