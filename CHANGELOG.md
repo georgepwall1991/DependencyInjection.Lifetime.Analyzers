@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.7] - 2026-06-10
+
+### Added
+
+- **DI021 PLINQ `ForAll` sink**: delegates passed to `ParallelEnumerable.ForAll` now participate in concurrent-handler shared-state analysis — PLINQ partitions run concurrently by default, so a captured `DbContext` fails under load exactly like the covered `Parallel.*` shapes. A proven `WithDegreeOfParallelism(1)` on the query's own fluent chain suppresses (nearest setting wins; the walk follows receiver-position arguments so binary operators like `Concat`/`Zip`/`Join` do not hide the proof); unprovable degrees and untraceable queries keep the truthful concurrent default. All existing capture/guardrail machinery applies.
+
 ## [2.10.6] - 2026-06-10
 
 ### Fixed

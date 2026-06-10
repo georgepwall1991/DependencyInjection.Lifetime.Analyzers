@@ -212,6 +212,13 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     {
         var invocation = (IInvocationOperation)context.Operation;
         var method = invocation.TargetMethod;
+        if (method.Name == "ForAll" &&
+            method.ContainingType?.ToDisplayString() == "System.Linq.ParallelEnumerable")
+        {
+            AnalyzePlinqForAll(context, invocation);
+            return;
+        }
+
         if (method.Name is not ("For" or "ForEach" or "ForEachAsync" or "Invoke"))
         {
             return;
@@ -253,6 +260,70 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 AnalyzeHandlerValue(context, value, sink, invocation.Syntax);
             }
         }
+    }
+
+    /// <summary>
+    /// PLINQ ForAll runs partitions concurrently by default. Only a proven
+    /// WithDegreeOfParallelism(1) on this query's own chain makes execution sequential —
+    /// an unprovable degree or an untraceable query keeps the truthful default (concurrent).
+    /// </summary>
+    private static void AnalyzePlinqForAll(OperationAnalysisContext context, IInvocationOperation invocation)
+    {
+        var sourceArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Name == "source");
+        if (sourceArgument is not null && QueryChainProvesSequential(sourceArgument.Value))
+        {
+            return;
+        }
+
+        var sink = new SinkContext(
+            SinkConcurrency.Concurrent,
+            "PLINQ ForAll (partitions run concurrently)",
+            "PLINQ ForAll",
+            "WithDegreeOfParallelism");
+
+        var actionArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Name == "action");
+        if (actionArgument is not null)
+        {
+            AnalyzeHandlerValue(context, actionArgument.Value, sink, invocation.Syntax);
+        }
+    }
+
+    private static bool QueryChainProvesSequential(IOperation source)
+    {
+        var current = Unwrap(source);
+        while (current is IInvocationOperation chain)
+        {
+            if (chain.TargetMethod.Name == "WithDegreeOfParallelism" &&
+                chain.TargetMethod.ContainingType?.ToDisplayString() == "System.Linq.ParallelEnumerable")
+            {
+                // The nearest degree setting wins; constant 1 proves sequential, anything else
+                // (a higher constant, an unprovable expression) does not.
+                var degreeArgument = chain.Arguments.FirstOrDefault(
+                    a => a.Parameter?.Name == "degreeOfParallelism");
+                return degreeArgument is not null &&
+                       degreeArgument.Value.ConstantValue is { HasValue: true } constant &&
+                       TryGetIntegralConstant(constant.Value, out var degree) &&
+                       degree == 1;
+            }
+
+            // Walk the receiver-position argument of the fluent chain. Binary operators
+            // (Concat, Zip, Join) name it "first"/"outer" rather than "source"; only
+            // ParallelEnumerable links are followed.
+            if (chain.TargetMethod.ContainingType?.ToDisplayString() != "System.Linq.ParallelEnumerable")
+            {
+                return false;
+            }
+
+            var inner = chain.Arguments.FirstOrDefault(a => a.Parameter?.Ordinal == 0)?.Value;
+            if (inner is null)
+            {
+                return false;
+            }
+
+            current = Unwrap(inner);
+        }
+
+        return false;
     }
 
     private static void AnalyzeObjectCreation(OperationAnalysisContext context)
