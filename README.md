@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.10.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.10.1
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.1">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.1" />
 ```
 
 Then reference it from the project file:
@@ -945,6 +945,7 @@ public class MyMiddleware
 - `ServiceBusProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (when `MaxConcurrentCalls` is provably above 1)
 - `ServiceBusSessionProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (sessions are pumped concurrently by default)
 - `EventProcessorClient.ProcessEventAsync` / `ProcessErrorAsync` (partitions are processed concurrently)
+- RabbitMQ `EventingBasicConsumer.Received` / `AsyncEventingBasicConsumer.Received` / `ReceivedAsync` (when `ConsumerDispatchConcurrency` is provably above 1; otherwise reported as DI022, since the knob usually comes from configuration)
 - `System.Threading.Timer` callbacks with a finite period (callbacks can overlap)
 - `System.Timers.Timer.Elapsed` (elapsed events can overlap unless `AutoReset = false` or a `SynchronizingObject` is set)
 - `Parallel.For` / `ForEach` / `ForEachAsync` / `Invoke` bodies

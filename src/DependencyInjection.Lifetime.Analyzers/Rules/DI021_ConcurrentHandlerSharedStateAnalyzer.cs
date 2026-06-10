@@ -158,6 +158,33 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                     "partition count");
                 break;
 
+            // RabbitMQ.Client across the v6/v7 surface drift: v6 ships EventingBasicConsumer.Received
+            // (sync) and AsyncEventingBasicConsumer.Received (async); v7 renames the async event to
+            // ReceivedAsync. EventingBasicConsumer has no ReceivedAsync member, so the combined name
+            // set cannot over-match.
+            case "RabbitMQ.Client.Events.EventingBasicConsumer"
+                or "RabbitMQ.Client.Events.AsyncEventingBasicConsumer"
+                when eventName is "Received" or "ReceivedAsync":
+            {
+                // The dispatch pump is sequential by default (ConsumerDispatchConcurrency = 1), but
+                // the knob lives on the ConnectionFactory (v7: also per-channel options), typically
+                // several hops or methods away from the consumer — instance-correlated tracing is a
+                // v2 target. v1 uses the strengthen-only containing-type scan: a constant above 1
+                // proves the pump concurrent; nothing here can prove THIS consumer sequential, so
+                // everything else stays config-gated (DI022).
+                var knob = EvaluateTracedKnob(
+                    context, assignment.Syntax, OptionsTrace.Untraceable, "ConsumerDispatchConcurrency");
+                var consumerName = eventReference.Event.ContainingType!.Name;
+                sink = new SinkContext(
+                    knob == KnobProof.ProvenConcurrent
+                        ? SinkConcurrency.Concurrent
+                        : SinkConcurrency.Unprovable,
+                    $"{consumerName}.{eventName} (ConsumerDispatchConcurrency is set above 1)",
+                    $"{consumerName}.{eventName}",
+                    "ConsumerDispatchConcurrency");
+                break;
+            }
+
             case "System.Timers.Timer" when eventName == "Elapsed":
             {
                 if (IsTimersTimerSequential(context, assignment.Syntax, eventReference))
@@ -507,9 +534,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         foreach (var value in values)
         {
             var constant = semanticModel.GetConstantValue(value, context.CancellationToken);
-            if (constant.HasValue && constant.Value is int intValue)
+            if (constant.HasValue && TryGetIntegralConstant(constant.Value, out var knobValue))
             {
-                if (intValue != 1)
+                if (knobValue != 1)
                 {
                     // Above 1 is concurrent; below 1 (e.g. MaxDegreeOfParallelism = -1) is unlimited.
                     return KnobProof.ProvenConcurrent;
@@ -628,13 +655,34 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
 
             var constant = semanticModel.GetConstantValue(assignment.Right, context.CancellationToken);
-            if (constant is { HasValue: true, Value: int intValue } && intValue > 1)
+            if (constant.HasValue && TryGetIntegralConstant(constant.Value, out var knobValue) && knobValue > 1)
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Normalizes an integral constant to long regardless of its declared type. Knob properties
+    /// vary across SDKs (ServiceBus options use int, RabbitMQ.Client v7 declares
+    /// ConsumerDispatchConcurrency as ushort), so a proven constant must count whichever
+    /// integral type carries it.
+    /// </summary>
+    private static bool TryGetIntegralConstant(object? value, out long result)
+    {
+        switch (value)
+        {
+            case sbyte v: result = v; return true;
+            case byte v: result = v; return true;
+            case short v: result = v; return true;
+            case ushort v: result = v; return true;
+            case int v: result = v; return true;
+            case uint v: result = v; return true;
+            case long v: result = v; return true;
+            default: result = 0; return false;
+        }
     }
 
     /// <summary>

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-06-10
+
+### Added
+
+- **DI021/DI022 RabbitMQ consumer sinks**: `EventingBasicConsumer.Received` (v6 sync), `AsyncEventingBasicConsumer.Received` (v6 async), and `AsyncEventingBasicConsumer.ReceivedAsync` (v7) handlers now participate in concurrent-handler shared-state analysis — RabbitMQ consumers are among the most common .NET message-handler surfaces sharing a single `DbContext` across deliveries. The dispatch pump's `ConsumerDispatchConcurrency` knob lives on the `ConnectionFactory` (v7: also per-channel options), typically in another method or bound from configuration, so reports default to the config-gated DI022 Info tier; a constant knob above 1 in the containing type upgrades to the DI021 warning. Knob constants are recognized across integral types (RabbitMQ.Client v7 declares the property as `ushort`), consumer types match by fully-qualified name, and all existing guardrails apply (in-handler scopes, `IDbContextFactory<T>`, inline creation, serialization guards, whitelisted captures). Instance-correlated factory→connection→channel→consumer tracing for sequential proofs remains a v2 target.
+
 ## [2.10.0] - 2026-06-10
 
 ### Added
