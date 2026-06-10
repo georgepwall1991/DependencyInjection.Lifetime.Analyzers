@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-06-10
+
+### Changed
+
+- **DI024 channel-consumer loop shapes**: `await foreach (var item in reader.ReadAllAsync(token))` and `while (await reader.WaitToReadAsync(token))` now qualify as long-running execution loops — these are the canonical modern queue-worker shapes and were invisible to the 2.11.0 release, so a scope hoisted above a channel-draining loop went unreported. Both shapes are gated semantically on `System.Threading.Channels.ChannelReader<T>` (resolved through base types), so a repository-style `ReadAllAsync` (bounded read-everything-once enumeration) and plain `foreach` batches stay silent. Channel loops nested inside an outer cancellation loop are analyzed against locals declared in the enclosing loop body, so a scope created per outer iteration but hoisted above an unbounded inner channel drain reports, while a scope hoisted above both loops reports exactly once (at the outer loop). All existing tiers and suppressions apply unchanged inside the new loop shapes.
+
 ## [2.11.0] - 2026-06-10
 
 ### Added

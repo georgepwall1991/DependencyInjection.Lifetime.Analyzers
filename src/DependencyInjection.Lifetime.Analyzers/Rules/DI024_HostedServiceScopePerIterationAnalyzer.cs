@@ -117,9 +117,27 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             return;
         }
 
-        foreach (var loop in FindOutermostLongRunningLoops(method.Body, context.SemanticModel))
+        var qualifyingLoops = FindLongRunningLoops(method.Body, context.SemanticModel);
+        foreach (var loop in qualifyingLoops)
         {
-            AnalyzeLoop(context, wellKnownTypes, method, method.Body, loop, hoistedScopes, hoistedServices);
+            // A long-running loop nested inside another long-running loop (channel drain inside
+            // a cancellation loop) is analyzed against locals declared inside the enclosing
+            // loop's body only: locals hoisted above the enclosing loop are that loop's report.
+            var enclosing = qualifyingLoops
+                .Where(other => other != loop && GetLoopBody(other)?.Span.Contains(loop.Span) == true)
+                .OrderByDescending(other => other.SpanStart)
+                .FirstOrDefault();
+
+            // The boundary may be any statement (a using statement wrapping the nested loop
+            // declares a scope that spans the inner drain); the declaration walk understands
+            // using-statement variables.
+            var boundary = enclosing is null ? method.Body : GetLoopBody(enclosing);
+            if (boundary is null)
+            {
+                continue;
+            }
+
+            AnalyzeLoop(context, wellKnownTypes, method, boundary, loop, hoistedScopes, hoistedServices);
         }
     }
 
@@ -127,7 +145,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         SyntaxNodeAnalysisContext context,
         WellKnownTypes wellKnownTypes,
         MethodDeclarationSyntax method,
-        BlockSyntax methodBody,
+        SyntaxNode boundary,
         StatementSyntax loop,
         ConcurrentBag<HoistedScopeCandidate> hoistedScopes,
         ConcurrentBag<HoistedServiceCandidate> hoistedServices)
@@ -139,13 +157,19 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             return;
         }
 
-        // Scope locals declared before the loop, in a block enclosing it.
+        // Scope locals declared before the loop, in a block enclosing it. All visible scope
+        // locals participate in service-to-scope attribution, but only those declared within
+        // the boundary are this loop's report candidates: a scope hoisted above the enclosing
+        // long-running loop is that loop's report.
         var scopeLocals = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
+        var candidateScopes = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
 
         // Locals holding a service resolved before the loop: local -> (service type, the
         // resolution invocation, the hoisted scope local it was resolved from, if any).
         var serviceLocals = new Dictionary<ILocalSymbol, (ITypeSymbol ServiceType, InvocationExpressionSyntax Invocation, ILocalSymbol? SourceScope)>(SymbolEqualityComparer.Default);
 
+        var methodBody = method.Body!;
+        var declarations = new List<(ILocalSymbol Local, InvocationExpressionSyntax Invocation, bool WithinBoundary)>();
         foreach (var declarator in GetLocalsDeclaredBeforeLoop(methodBody, loop))
         {
             if (declarator.Initializer?.Value is not { } initializer ||
@@ -160,18 +184,36 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 continue;
             }
 
-            if (IsScopeCreation(initializerInvocation, semanticModel, wellKnownTypes))
+            declarations.Add((local, initializerInvocation,
+                boundary == methodBody || boundary.Span.Contains(declarator.Span)));
+        }
+
+        // Two passes: the upward block walk yields inner-block declarators before outer ones,
+        // so all scope locals must be known before service resolutions are attributed to them.
+        foreach (var (local, invocation, withinBoundary) in declarations)
+        {
+            if (IsScopeCreation(invocation, semanticModel, wellKnownTypes))
             {
-                scopeLocals[local] = initializerInvocation;
-            }
-            else if (TryGetResolution(initializerInvocation, semanticModel, out var serviceType))
-            {
-                var sourceScope = FindReferencedScopeLocal(initializerInvocation, semanticModel, scopeLocals);
-                serviceLocals[local] = (serviceType, initializerInvocation, sourceScope);
+                scopeLocals[local] = invocation;
+                if (withinBoundary)
+                {
+                    candidateScopes.Add(local);
+                }
             }
         }
 
-        if (scopeLocals.Count == 0 && serviceLocals.Count == 0)
+        foreach (var (local, invocation, withinBoundary) in declarations)
+        {
+            if (withinBoundary &&
+                !scopeLocals.ContainsKey(local) &&
+                TryGetResolution(invocation, semanticModel, out var serviceType))
+            {
+                var sourceScope = FindReferencedScopeLocal(invocation, semanticModel, scopeLocals);
+                serviceLocals[local] = (serviceType, invocation, sourceScope);
+            }
+        }
+
+        if (candidateScopes.Count == 0 && serviceLocals.Count == 0)
         {
             return;
         }
@@ -187,7 +229,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 continue;
             }
 
-            var isScopeLocal = scopeLocals.ContainsKey(local);
+            var isScopeLocal = candidateScopes.Contains(local);
             var isServiceLocal = serviceLocals.ContainsKey(local);
             if (!isScopeLocal && !isServiceLocal)
             {
@@ -238,6 +280,13 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             if (sourceScope is not null)
             {
+                if (!candidateScopes.Contains(sourceScope))
+                {
+                    // The service flows from a scope hoisted above the enclosing long-running
+                    // loop; that loop's analysis owns the report on the scope itself.
+                    continue;
+                }
+
                 if (!scopeUsage.TryGetValue(sourceScope, out var usage))
                 {
                     usage = new ScopeUsage();
@@ -379,13 +428,14 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
     }
 
     private static IEnumerable<VariableDeclaratorSyntax> GetLocalsDeclaredBeforeLoop(
-        BlockSyntax methodBody,
+        SyntaxNode boundary,
         StatementSyntax loop)
     {
-        // Walk from the loop up to the method body; in every enclosing block, locals declared in
-        // statements that precede the loop's enclosing statement are in scope at the loop.
+        // Walk from the loop up to the boundary block (the method body, or the enclosing
+        // long-running loop's body for nested loops); in every enclosing block, locals declared
+        // in statements that precede the loop's enclosing statement are in scope at the loop.
         SyntaxNode current = loop;
-        while (current != methodBody.Parent && current.Parent is not null)
+        while (current != boundary.Parent && current.Parent is not null)
         {
             // using (var scope = ...) { while (...) ... } — the using declaration's locals are
             // in scope for (and created once outside) the loop.
@@ -417,7 +467,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 }
             }
 
-            if (current.Parent == methodBody)
+            if (current.Parent == boundary)
             {
                 yield break;
             }
@@ -433,22 +483,20 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             WhileStatementSyntax whileStatement => whileStatement.Statement,
             DoStatementSyntax doStatement => doStatement.Statement,
             ForStatementSyntax forStatement => forStatement.Statement,
+            CommonForEachStatementSyntax forEachStatement => forEachStatement.Statement,
             _ => null
         };
     }
 
-    private static IEnumerable<StatementSyntax> FindOutermostLongRunningLoops(
+    private static List<StatementSyntax> FindLongRunningLoops(
         BlockSyntax methodBody,
         SemanticModel semanticModel)
     {
-        var qualifying = methodBody
+        return methodBody
             .DescendantNodes(node => node is not (LambdaExpressionSyntax or AnonymousMethodExpressionSyntax or LocalFunctionStatementSyntax))
             .OfType<StatementSyntax>()
             .Where(statement => IsLongRunningLoop(statement, semanticModel))
             .ToList();
-
-        return qualifying.Where(loop =>
-            !qualifying.Any(other => other != loop && GetLoopBody(other)?.Span.Contains(loop.Span) == true));
     }
 
     private static bool IsLongRunningLoop(StatementSyntax statement, SemanticModel semanticModel)
@@ -460,6 +508,15 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             ForStatementSyntax forStatement =>
                 forStatement.Condition is null ||
                 forStatement.Condition.IsKind(SyntaxKind.TrueLiteralExpression),
+
+            // await foreach (var item in reader.ReadAllAsync(token)) — the canonical channel
+            // consumer loop. Only ChannelReader<T> sources qualify: ReadAllAsync on other types
+            // (repositories, paginated APIs) is a bounded enumeration.
+            CommonForEachStatementSyntax forEachStatement =>
+                forEachStatement.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword) &&
+                UnwrapInvocation(forEachStatement.Expression) is { } sourceInvocation &&
+                IsChannelReaderMethod(sourceInvocation, semanticModel, "ReadAllAsync"),
+
             _ => false
         };
     }
@@ -482,9 +539,38 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                      GetInvokedName(invocation) == "WaitForNextTickAsync":
                 return true;
 
+            // while (await reader.WaitToReadAsync(token)) — channel consumer loop.
+            case AwaitExpressionSyntax awaitExpression
+                when UnwrapInvocation(awaitExpression.Expression) is { } invocation &&
+                     IsChannelReaderMethod(invocation, semanticModel, "WaitToReadAsync"):
+                return true;
+
             default:
                 return false;
         }
+    }
+
+    private static bool IsChannelReaderMethod(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        string methodName)
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
+            methodSymbol.Name != methodName)
+        {
+            return false;
+        }
+
+        for (var type = methodSymbol.ContainingType; type is not null; type = type.BaseType)
+        {
+            if (type.Name == "ChannelReader" &&
+                type.ContainingNamespace?.ToDisplayString() == "System.Threading.Channels")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? GetInvokedName(InvocationExpressionSyntax invocation)
