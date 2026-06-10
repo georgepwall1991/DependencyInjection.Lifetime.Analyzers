@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.9.5
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.9.6
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.5">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.6">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.5" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.9.6" />
 ```
 
 Then reference it from the project file:
@@ -654,7 +654,7 @@ services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 
 ## DI014: Root Service Provider Not Disposed
 
-**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop.
+**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, or null-forgiven.
 
 **Why it matters:** singleton disposables at root scope may never be cleaned up.
 

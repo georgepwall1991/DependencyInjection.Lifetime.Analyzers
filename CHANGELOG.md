@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.6] - 2026-06-10
+
+### Changed
+
+- **DI014 wrapped-result disposal precision**: DI014 now treats root providers assigned or returned through parenthesized, provable upcast, or null-forgiving `BuildServiceProvider()` results as disposed or caller-owned when appropriate — including combinations with conditional-access creations such as `(services?.BuildServiceProvider())!`. Flows that pass the result through a user-defined conversion (explicit *or* implicit operator) or an unproven downcast (`(Wrapper)(object)...`, downcast from an interface) still report, because they are not proven to hand the root provider itself to the disposal or return site.
+
 ## [2.9.5] - 2026-06-09
 
 ### Changed

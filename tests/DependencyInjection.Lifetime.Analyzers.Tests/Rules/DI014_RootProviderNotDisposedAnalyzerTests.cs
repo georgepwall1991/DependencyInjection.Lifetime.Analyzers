@@ -61,6 +61,100 @@ public class Program
     }
 
     [Fact]
+    public async Task BuildServiceProvider_NullForgivingExplicitDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        ServiceProvider? provider = services.BuildServiceProvider();
+        provider!.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_NullForgivingResultExplicitDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        ServiceProvider? provider = services.BuildServiceProvider()!;
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ParenthesizedResultExplicitDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = (services.BuildServiceProvider());
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_CastResultExplicitDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var provider = (ServiceProvider)services.BuildServiceProvider();
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_UserDefinedCastDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var wrapper = (ProviderWrapper)services.BuildServiceProvider();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static explicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 40));
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_DisposedInsideLambda_NoDiagnostic()
     {
         var source = Usings + @"
@@ -96,6 +190,28 @@ public class Program : IDisposable
     public void Dispose()
     {
         _provider?.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_NullForgivingDisposedInDispose_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        _provider!.Dispose();
     }
 }";
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
@@ -140,6 +256,200 @@ public class Program
     }
 }";
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_NullForgivingReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public IServiceProvider CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return services.BuildServiceProvider()!;
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ParenthesizedReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return (services.BuildServiceProvider());
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_CastReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return (IServiceProvider)services.BuildServiceProvider();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_UserDefinedCastReturnedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ProviderWrapper CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return (ProviderWrapper)services.BuildServiceProvider();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+    public static explicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 33));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ImplicitConversionReturnedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ProviderWrapper CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return services.BuildServiceProvider();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 16));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ImplicitConversionInitializerDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        ProviderWrapper wrapper = services.BuildServiceProvider();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 35));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ImplicitConversionAssignmentDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        ProviderWrapper wrapper;
+        wrapper = services.BuildServiceProvider();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(11, 19));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_DowncastThroughObjectReturnedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ProviderWrapper CreateProvider()
+    {
+        var services = new ServiceCollection();
+        return (ProviderWrapper)(object)services.BuildServiceProvider();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 41));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_DowncastFromInterfaceDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        var wrapper = (ProviderWrapper)(IServiceProvider)services.BuildServiceProvider();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IServiceProvider, IDisposable
+{
+    public object GetService(Type serviceType) => null!;
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(10, 58));
     }
 
     [Fact]
