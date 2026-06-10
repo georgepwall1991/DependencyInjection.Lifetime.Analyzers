@@ -16,6 +16,165 @@ public class DI004_UseAfterDisposeAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task ServiceUsedAfterOwnBranchDispose_BothBranchesDispose_ReportsDiagnostic()
+    {
+        // The else branch has its own dispose before the use — exclusivity with the then-branch
+        // dispose must not hide it.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool fast)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (fast)
+                    {
+                        scope.Dispose();
+                    }
+                    else
+                    {
+                        scope.Dispose();
+                        {|DI004:service.DoWork()|};
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ServiceUsedInSwitchSectionReachedByGotoFromDispose_ReportsDiagnostic()
+    {
+        // goto case chains the sections onto one execution path — they are not mutually
+        // exclusive.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(int mode)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    switch (mode)
+                    {
+                        case 0:
+                            scope.Dispose();
+                            goto case 1;
+                        case 1:
+                            {|DI004:service.DoWork()|};
+                            break;
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ServiceUsedAfterConditionalDispose_StillReportsDiagnostic()
+    {
+        // The dispose may have run on the taken branch — a use on the shared path after the
+        // conditional dispose is a possible use-after-dispose.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool done)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (done)
+                    {
+                        scope.Dispose();
+                    }
+
+                    {|DI004:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
     public async Task ServiceUsedAfterScopeDisposed_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -673,6 +832,273 @@ public class DI004_UseAfterDisposeAnalyzerTests
     #endregion
 
     #region Should Not Report Diagnostic
+
+    [Fact]
+    public async Task ServiceUsedInOtherSwitchSection_UnrelatedGotoChain_NoDiagnostic()
+    {
+        // The goto chain links two sections unrelated to the dispose — control cannot flow from
+        // the dispose section to the use section, so they stay mutually exclusive.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(int mode)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    switch (mode)
+                    {
+                        case 0:
+                            scope.Dispose();
+                            break;
+                        case 1:
+                            service.DoWork();
+                            break;
+                        case 2:
+                            goto case 3;
+                        case 3:
+                            break;
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ServiceReassignedInExclusiveBranchBeforeOwnDispose_NoDiagnostic()
+    {
+        // The local is reassigned to a caller-provided instance before this branch's dispose —
+        // tracking must observe the reassignment even in a branch exclusive with the first
+        // dispose.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool fast, IMyService existing)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (fast)
+                    {
+                        scope.Dispose();
+                    }
+                    else
+                    {
+                        service = existing;
+                        scope.Dispose();
+                        service.DoWork();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ServiceUsedInElseBranchOfConditionalDispose_NoDiagnostic()
+    {
+        // The dispose and the use sit in mutually exclusive branches — they cannot both run.
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool done)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (done)
+                    {
+                        scope.Dispose();
+                    }
+                    else
+                    {
+                        service.DoWork();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceUsedInThenBranch_DisposeInElse_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool keepWorking)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (keepWorking)
+                    {
+                        service.DoWork();
+                    }
+                    else
+                    {
+                        scope.Dispose();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceUsedInDifferentSwitchSectionThanDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(int mode)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    switch (mode)
+                    {
+                        case 0:
+                            scope.Dispose();
+                            break;
+                        case 1:
+                            service.DoWork();
+                            break;
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
 
     [Fact]
     public async Task ServiceUsedWithinScope_NoDiagnostic()

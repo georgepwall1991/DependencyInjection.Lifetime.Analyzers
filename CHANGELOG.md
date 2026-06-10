@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.5] - 2026-06-10
+
+### Fixed
+
+- **DI004 mutually-exclusive-branch false positive**: explicit-dispose tracking was linear and position-based, so a service use in the opposite arm of the same `if`/`else` as the `Dispose()` call — or in a different section of the same `switch` — was reported even though the two cannot both execute. The use-reporting pass now skips branches mutually exclusive with the dispose site; switch sections stay exclusive unless control can actually flow from the dispose's section to the use's section through `goto case`/`goto default` reachability (plain label gotos and unresolvable targets are conservatively treated as reaching everything; unrelated goto chains between other sections do not void the suppression), every dispose site participates — a branch mutually exclusive with the first dispose still reports a use after its own dispose — and alias/reassignment tracking observes every node regardless of branch gating, so a local reassigned to a caller-provided instance before its branch's dispose stays quiet. A use on the shared path after a conditional dispose still reports (the dispose may have run on the taken branch).
+
 ## [2.10.4] - 2026-06-10
 
 ### Fixed
