@@ -85,6 +85,49 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
         """;
 
+    /// <summary>
+    /// Source stubs mirroring RabbitMQ.Client across the v6/v7 surface drift: v6 ships
+    /// EventingBasicConsumer.Received (sync) and AsyncEventingBasicConsumer.Received (async);
+    /// v7 renames the async event to ReceivedAsync. One stub declares all three so each
+    /// event-name row is exercisable; the analyzer matches by fully-qualified consumer type
+    /// plus event name.
+    /// </summary>
+    private const string RabbitMqStubs = """
+        namespace RabbitMQ.Client
+        {
+            public interface IModel { }
+
+            public class ConnectionFactory
+            {
+                public int ConsumerDispatchConcurrency { get; set; } = 1;
+                public IModel CreateChannel() => null!;
+            }
+        }
+
+        namespace RabbitMQ.Client.Events
+        {
+            public delegate System.Threading.Tasks.Task AsyncEventHandler<in TEvent>(object sender, TEvent @event);
+
+            public class BasicDeliverEventArgs { }
+
+            public class EventingBasicConsumer
+            {
+                public EventingBasicConsumer(RabbitMQ.Client.IModel model) { }
+                public event System.EventHandler<BasicDeliverEventArgs> Received;
+            }
+
+            public class AsyncEventingBasicConsumer
+            {
+                public AsyncEventingBasicConsumer(RabbitMQ.Client.IModel model) { }
+                public event AsyncEventHandler<BasicDeliverEventArgs> Received;
+                public event AsyncEventHandler<BasicDeliverEventArgs> ReceivedAsync;
+            }
+        }
+
+        """;
+
+    private const string RabbitMqUsing = "using RabbitMQ.Client;\nusing RabbitMQ.Client.Events;\n";
+
     private const string EfCoreStubs = """
         namespace Microsoft.EntityFrameworkCore
         {
@@ -701,6 +744,291 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
             """;
 
         await VerifyAsync(source);
+    }
+
+    // ---------------------------------------------------------------------
+    // RabbitMQ consumer sinks (v6 Received / v7 ReceivedAsync)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task RabbitMq_EventingBasicConsumer_Received_DbContextField_ReportsInfo()
+    {
+        // The dispatch-concurrency knob lives on the ConnectionFactory, not the consumer, and
+        // defaults to config-bound wiring in real apps — unprovable, so the config-gated tier.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(IModel channel)
+                {
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        _db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_AsyncEventingBasicConsumer_ReceivedAsync_CapturedLocal_ReportsInfo()
+    {
+        // v7 surface: the async event was renamed to ReceivedAsync.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                public void Start(IModel channel)
+                {
+                    var db = new AppDbContext();
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI022:db|}.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_AsyncEventingBasicConsumer_Received_V6Async_ReportsInfo()
+    {
+        // v6 surface: the async consumer's event is still named Received.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(IModel channel)
+                {
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.Received += async (sender, args) =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_ConsumerDispatchConcurrencyAboveOne_ReportsWarning()
+    {
+        // A constant ConsumerDispatchConcurrency above 1 in the containing type proves the
+        // dispatch pump is concurrent, upgrading the config-gated Info to the full warning.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var factory = new ConnectionFactory { ConsumerDispatchConcurrency = 4 };
+                    var channel = factory.CreateChannel();
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_ConsumerDispatchConcurrencyUshortConstant_ReportsWarning()
+    {
+        // RabbitMQ.Client v7 declares ConsumerDispatchConcurrency as ushort, so the proven
+        // constant arrives as a ushort value, not int — it must still upgrade to DI021.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            namespace RabbitMQ.Client.V7
+            {
+                public class ConnectionFactory
+                {
+                    public ushort ConsumerDispatchConcurrency { get; set; } = 1;
+                    public RabbitMQ.Client.IModel CreateChannel() => null!;
+                }
+            }
+
+            public class OrderConsumer
+            {
+                private const ushort Concurrency = 4;
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var factory = new RabbitMQ.Client.V7.ConnectionFactory { ConsumerDispatchConcurrency = Concurrency };
+                    var channel = factory.CreateChannel();
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_SameNamedUserType_OtherNamespace_NoDiagnostic()
+    {
+        // Sinks match by fully-qualified name; a user-defined consumer with the same simple
+        // name must stay silent.
+        var source = BaseUsings + EfCoreStubs + """
+            namespace MyApp.Messaging
+            {
+                public class EventingBasicConsumer
+                {
+                    public event System.EventHandler<object> Received;
+                    public void Raise() => Received?.Invoke(this, new object());
+                }
+            }
+
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(MyApp.Messaging.EventingBasicConsumer consumer)
+                {
+                    consumer.Received += (sender, args) =>
+                    {
+                        _db.Add(args);
+                        _db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_DbContextFactoryCapture_NoDiagnostic()
+    {
+        // IDbContextFactory<T> is whitelisted: resolving a fresh context per delivery is the
+        // recommended pattern.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly Microsoft.EntityFrameworkCore.IDbContextFactory<AppDbContext> _factory;
+
+                public OrderConsumer(Microsoft.EntityFrameworkCore.IDbContextFactory<AppDbContext> factory)
+                {
+                    _factory = factory;
+                }
+
+                public void Start(IModel channel)
+                {
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        using var db = _factory.CreateDbContext();
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_InHandlerCreation_NoDiagnostic()
+    {
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                public void Start(IModel channel)
+                {
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        using var db = new AppDbContext();
+                        db.Add(args);
+                        db.SaveChanges();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task RabbitMq_LockGuardedUse_NoDiagnostic()
+    {
+        // The shared serialization-guard machinery applies to RabbitMQ sinks: a lock on a
+        // monitor shared from outside the handler serializes the captured context.
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+                private readonly object _gate = new object();
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(IModel channel)
+                {
+                    var consumer = new EventingBasicConsumer(channel);
+                    consumer.Received += (sender, args) =>
+                    {
+                        lock (_gate)
+                        {
+                            _db.Add(args);
+                            _db.SaveChanges();
+                        }
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
     }
 
     // ---------------------------------------------------------------------
