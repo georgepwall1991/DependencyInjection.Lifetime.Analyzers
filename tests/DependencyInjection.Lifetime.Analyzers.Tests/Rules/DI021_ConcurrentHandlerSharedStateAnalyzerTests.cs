@@ -163,6 +163,37 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
     private const string DataflowUsing = "using System.Threading.Tasks.Dataflow;\n";
 
+    /// <summary>
+    /// Source stubs mirroring Azure.Messaging.EventHubs.Primitives.EventProcessor&lt;TPartition&gt;
+    /// — the advanced batch-processing base type whose partition handlers run concurrently.
+    /// </summary>
+    private const string EventHubsBatchStubs = """
+        namespace Azure.Messaging.EventHubs
+        {
+            public class EventData { }
+        }
+
+        namespace Azure.Messaging.EventHubs.Primitives
+        {
+            public abstract class EventProcessorPartition { }
+
+            public abstract class EventProcessor<TPartition> where TPartition : EventProcessorPartition, new()
+            {
+                protected abstract System.Threading.Tasks.Task OnProcessingEventBatchAsync(
+                    System.Collections.Generic.IEnumerable<Azure.Messaging.EventHubs.EventData> events,
+                    TPartition partition,
+                    System.Threading.CancellationToken cancellationToken);
+
+                protected abstract System.Threading.Tasks.Task OnProcessingErrorAsync(
+                    System.Exception exception,
+                    TPartition partition,
+                    string operationDescription,
+                    System.Threading.CancellationToken cancellationToken);
+            }
+        }
+
+        """;
+
     private const string RabbitMqUsing = "using RabbitMQ.Client;\nusing RabbitMQ.Client.Events;\n";
 
     private const string EfCoreStubs = """
@@ -1949,6 +1980,116 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
 
+
+
+    // ---------------------------------------------------------------------
+    // EventHubs EventProcessor<TPartition> batch overrides
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task EventProcessorBatch_DbContextField_ReportsWarning()
+    {
+        // Partition batches are dispatched concurrently across partitions.
+        var source = "using System.Collections.Generic;\nusing Azure.Messaging.EventHubs;\nusing Azure.Messaging.EventHubs.Primitives;\n" + BaseUsings + EventHubsBatchStubs + EfCoreStubs + """
+            public class MyPartition : EventProcessorPartition { public MyPartition() { } }
+
+            public class BatchProcessor : EventProcessor<MyPartition>
+            {
+                private readonly AppDbContext _db;
+
+                public BatchProcessor(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                protected override async Task OnProcessingEventBatchAsync(
+                    IEnumerable<EventData> events, MyPartition partition, CancellationToken cancellationToken)
+                {
+                    foreach (var item in events)
+                    {
+                        {|DI021:_db|}.Add(item);
+                    }
+
+                    await _db.SaveChangesAsync(cancellationToken);
+                }
+
+                protected override Task OnProcessingErrorAsync(
+                    Exception exception, MyPartition partition, string operationDescription, CancellationToken cancellationToken)
+                    => Task.CompletedTask;
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task EventProcessorBatch_DbContextFactory_NoDiagnostic()
+    {
+        var source = "using System.Collections.Generic;\nusing Azure.Messaging.EventHubs;\nusing Azure.Messaging.EventHubs.Primitives;\n" + BaseUsings + EventHubsBatchStubs + EfCoreStubs + """
+            public class MyPartition : EventProcessorPartition { public MyPartition() { } }
+
+            public class BatchProcessor : EventProcessor<MyPartition>
+            {
+                private readonly Microsoft.EntityFrameworkCore.IDbContextFactory<AppDbContext> _factory;
+
+                public BatchProcessor(Microsoft.EntityFrameworkCore.IDbContextFactory<AppDbContext> factory)
+                {
+                    _factory = factory;
+                }
+
+                protected override async Task OnProcessingEventBatchAsync(
+                    IEnumerable<EventData> events, MyPartition partition, CancellationToken cancellationToken)
+                {
+                    using var db = _factory.CreateDbContext();
+                    foreach (var item in events)
+                    {
+                        db.Add(item);
+                    }
+
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+
+                protected override Task OnProcessingErrorAsync(
+                    Exception exception, MyPartition partition, string operationDescription, CancellationToken cancellationToken)
+                    => Task.CompletedTask;
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task EventProcessorBatch_SameNamedUserBaseType_NoDiagnostic()
+    {
+        // A user-defined EventProcessor<T> in another namespace is not the Azure SDK type.
+        var source = BaseUsings + EfCoreStubs + """
+            namespace MyApp.Processing
+            {
+                public abstract class EventProcessor<TPartition>
+                {
+                    protected abstract System.Threading.Tasks.Task OnProcessingEventBatchAsync(int[] events, TPartition partition);
+                }
+            }
+
+            public class BatchProcessor : MyApp.Processing.EventProcessor<string>
+            {
+                private readonly AppDbContext _db;
+
+                public BatchProcessor(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                protected override Task OnProcessingEventBatchAsync(int[] events, string partition)
+                {
+                    _db.Add(events);
+                    return _db.SaveChangesAsync();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
 
     // ---------------------------------------------------------------------
     // TPL Dataflow execution-block sinks
