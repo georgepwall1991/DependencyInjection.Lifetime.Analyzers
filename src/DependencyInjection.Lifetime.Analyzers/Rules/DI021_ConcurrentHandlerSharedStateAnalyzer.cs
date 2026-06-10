@@ -168,19 +168,47 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 or "RabbitMQ.Client.Events.AsyncEventingBasicConsumer"
                 when eventName is "Received" or "ReceivedAsync":
             {
-                // The dispatch pump is sequential by default (ConsumerDispatchConcurrency = 1), but
-                // the knob lives on the ConnectionFactory (v7: also per-channel options), typically
-                // several hops or methods away from the consumer — instance-correlated tracing is a
-                // v2 target. v1 uses the strengthen-only containing-type scan: a constant above 1
-                // proves the pump concurrent; nothing here can prove THIS consumer sequential, so
-                // everything else stays config-gated (DI022).
-                var knob = EvaluateTracedKnob(
-                    context, assignment.Syntax, OptionsTrace.Untraceable, "ConsumerDispatchConcurrency");
+                // The dispatch pump is sequential by default (ConsumerDispatchConcurrency = 1).
+                // When the consumer's own factory -> connection -> channel chain is traceable in
+                // the same tree, the knob is proven instance-correlated: a different factory's
+                // setting never contaminates this consumer, and a fresh factory that never sets
+                // the knob keeps the sequential default. Untraceable chains fall back to the
+                // strengthen-only containing-type scan (a constant above 1 anywhere is still
+                // evidence of concurrency) with the config-gated DI022 tier.
+                SinkConcurrency concurrency;
+                if (TryTraceRabbitConsumerChain(
+                        context, eventReference, out var chainTrace, out var freshFactory, out var channelOptionsOverride) &&
+                    !channelOptionsOverride)
+                {
+                    var chainKnob = EvaluateTracedKnob(
+                        context, assignment.Syntax, chainTrace, "ConsumerDispatchConcurrency");
+                    concurrency = chainKnob switch
+                    {
+                        KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
+                        KnobProof.ProvenSequential => SinkConcurrency.Sequential,
+                        KnobProof.NotFound when freshFactory => SinkConcurrency.Sequential,
+                        _ => SinkConcurrency.Unprovable
+                    };
+                }
+                else if (channelOptionsOverride)
+                {
+                    // Per-channel options can pin THIS channel back to sequential regardless of
+                    // the factory knob, so nothing in the type may upgrade past the config-gated
+                    // tier.
+                    concurrency = SinkConcurrency.Unprovable;
+                }
+                else
+                {
+                    var knob = EvaluateTracedKnob(
+                        context, assignment.Syntax, OptionsTrace.Untraceable, "ConsumerDispatchConcurrency");
+                    concurrency = knob == KnobProof.ProvenConcurrent
+                        ? SinkConcurrency.Concurrent
+                        : SinkConcurrency.Unprovable;
+                }
+
                 var consumerName = eventReference.Event.ContainingType!.Name;
                 sink = new SinkContext(
-                    knob == KnobProof.ProvenConcurrent
-                        ? SinkConcurrency.Concurrent
-                        : SinkConcurrency.Unprovable,
+                    concurrency,
                     $"{consumerName}.{eventName} (ConsumerDispatchConcurrency is set above 1)",
                     $"{consumerName}.{eventName}",
                     "ConsumerDispatchConcurrency");
@@ -494,6 +522,236 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             $"EventProcessor<TPartition>.{overridden.Name}",
             "partition count");
         AnalyzeHandlerBody(context, body, methodBody.Syntax, method, sink, methodBody.Syntax);
+    }
+
+    /// <summary>
+    /// Traces a RabbitMQ consumer's event receiver back through its own creation chain —
+    /// consumer ctor's channel argument, the channel's CreateModel/CreateChannel(Async) call,
+    /// the connection's CreateConnection(Async) call — to the ConnectionFactory the chain
+    /// actually used. Every link must be unique in the containing type (one initializer or
+    /// assignment) or the chain is untraceable. A CreateChannelOptions argument bails: it can
+    /// override the factory knob per channel.
+    /// </summary>
+    private static bool TryTraceRabbitConsumerChain(
+        OperationAnalysisContext context,
+        IEventReferenceOperation eventReference,
+        out OptionsTrace trace,
+        out bool freshFactory,
+        out bool channelOptionsOverride)
+    {
+        trace = OptionsTrace.Untraceable;
+        freshFactory = false;
+        channelOptionsOverride = false;
+        var anchor = eventReference.Syntax;
+        var semanticModel = context.Operation.SemanticModel;
+        if (semanticModel is null)
+        {
+            return false;
+        }
+
+        // 1. The consumer's creation expression.
+        ExpressionSyntax? consumerCreation;
+        var receiver = eventReference.Instance is null ? null : Unwrap(eventReference.Instance);
+        if (receiver is IObjectCreationOperation inlineConsumer)
+        {
+            consumerCreation = inlineConsumer.Syntax as ExpressionSyntax;
+        }
+        else
+        {
+            var consumerSymbol = receiver switch
+            {
+                ILocalReferenceOperation local => (ISymbol)local.Local,
+                IFieldReferenceOperation field => field.Field,
+                _ => null
+            };
+            if (consumerSymbol is null)
+            {
+                return false;
+            }
+
+            consumerCreation = FindSingleInitializerValue(context, anchor, consumerSymbol);
+        }
+
+        if (consumerCreation is not BaseObjectCreationExpressionSyntax consumerNew ||
+            consumerNew.ArgumentList?.Arguments.FirstOrDefault()?.Expression is not { } channelExpression)
+        {
+            return false;
+        }
+
+        // 2. The channel's creation invocation.
+        var channelCreation = ResolveToInvocation(context, anchor, channelExpression, semanticModel);
+        if (channelCreation is null)
+        {
+            return false;
+        }
+
+        var channelMethodName = channelCreation.Expression switch
+        {
+            MemberAccessExpressionSyntax channelAccess => channelAccess.Name.Identifier.ValueText,
+            _ => null
+        };
+        if (channelMethodName is not ("CreateModel" or "CreateChannel" or "CreateChannelAsync"))
+        {
+            return false;
+        }
+
+        // Per-channel options can override the factory knob — bail conservatively when an
+        // actual CreateChannelOptions argument is supplied (a cancellation token or a null
+        // literal is not an override), and tell the caller the fallback scan must not upgrade
+        // either.
+        foreach (var channelArgument in channelCreation.ArgumentList.Arguments)
+        {
+            if (channelArgument.Expression.IsKind(SyntaxKind.NullLiteralExpression) ||
+                channelArgument.Expression.IsKind(SyntaxKind.DefaultLiteralExpression))
+            {
+                continue;
+            }
+
+            if (semanticModel.GetTypeInfo(channelArgument.Expression, context.CancellationToken).Type
+                    ?.ToDisplayString() == "RabbitMQ.Client.CreateChannelOptions")
+            {
+                channelOptionsOverride = true;
+                return false;
+            }
+        }
+
+        var channelReceiver = ((MemberAccessExpressionSyntax)channelCreation.Expression).Expression;
+
+        // 3. CreateChannel lives on the factory itself; CreateModel/CreateChannelAsync live on a
+        //    connection whose creation must trace to the factory.
+        ExpressionSyntax? factoryExpression;
+        int consumptionPosition;
+        if (channelMethodName == "CreateChannel")
+        {
+            factoryExpression = channelReceiver;
+            consumptionPosition = channelCreation.SpanStart;
+        }
+        else
+        {
+            var connectionCreation = ResolveToInvocation(context, anchor, channelReceiver, semanticModel);
+            if (connectionCreation?.Expression is not MemberAccessExpressionSyntax connectionAccess ||
+                connectionAccess.Name.Identifier.ValueText is not ("CreateConnection" or "CreateConnectionAsync"))
+            {
+                return false;
+            }
+
+            factoryExpression = connectionAccess.Expression;
+            consumptionPosition = connectionCreation.SpanStart;
+        }
+
+        // 4. The factory itself: an inline creation or a symbol with a unique origin.
+        if (factoryExpression is BaseObjectCreationExpressionSyntax inlineFactory)
+        {
+            trace = OptionsTrace.ForInlineCreation(inlineFactory);
+            freshFactory = true;
+            return true;
+        }
+
+        if (factoryExpression is IdentifierNameSyntax factoryIdentifier &&
+            semanticModel.GetSymbolInfo(factoryIdentifier, context.CancellationToken).Symbol is { } factorySymbol &&
+            factorySymbol is ILocalSymbol or IFieldSymbol or IParameterSymbol)
+        {
+            // Writes after the chain consumed the factory belong to later reuse of the
+            // variable and must not break the fresh-default proof for THIS consumer.
+            freshFactory = FindSingleInitializerValue(context, anchor, factorySymbol, consumptionPosition)
+                is BaseObjectCreationExpressionSyntax;
+            trace = OptionsTrace.ForSymbol(
+                factorySymbol,
+                factorySymbol is ILocalSymbol or IParameterSymbol ? consumptionPosition : null);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves an expression to the invocation that produced it: directly, or through a
+    /// local/field symbol whose unique initializer (awaits unwrapped) is an invocation.
+    /// </summary>
+    private static InvocationExpressionSyntax? ResolveToInvocation(
+        OperationAnalysisContext context,
+        SyntaxNode anchor,
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        if (expression is InvocationExpressionSyntax direct)
+        {
+            return direct;
+        }
+
+        if (expression is not IdentifierNameSyntax identifier ||
+            semanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol is not { } symbol ||
+            symbol is not (ILocalSymbol or IFieldSymbol))
+        {
+            return null;
+        }
+
+        return FindSingleInitializerValue(context, anchor, symbol) as InvocationExpressionSyntax;
+    }
+
+    /// <summary>
+    /// The unique initializer or assignment value of a symbol within the containing type, with
+    /// awaits unwrapped. More than one write makes the origin ambiguous (null).
+    /// </summary>
+    private static ExpressionSyntax? FindSingleInitializerValue(
+        OperationAnalysisContext context,
+        SyntaxNode anchor,
+        ISymbol instance,
+        int? beforePosition = null)
+    {
+        var typeDeclaration = anchor.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+        var semanticModel = context.Operation.SemanticModel;
+        if (typeDeclaration is null || semanticModel is null)
+        {
+            return null;
+        }
+
+        ExpressionSyntax? single = null;
+        foreach (var declarator in typeDeclaration.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+        {
+            if (beforePosition is { } declaratorCutoff && declarator.SpanStart >= declaratorCutoff)
+            {
+                continue;
+            }
+
+            if (declarator.Initializer?.Value is { } value &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetDeclaredSymbol(declarator, context.CancellationToken), instance))
+            {
+                if (single is not null)
+                {
+                    return null;
+                }
+
+                single = value;
+            }
+        }
+
+        foreach (var assignmentNode in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (beforePosition is { } assignmentCutoff && assignmentNode.SpanStart >= assignmentCutoff)
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(assignmentNode.Left, context.CancellationToken).Symbol, instance))
+            {
+                if (single is not null)
+                {
+                    return null;
+                }
+
+                single = assignmentNode.Right;
+            }
+        }
+
+        while (single is AwaitExpressionSyntax awaited)
+        {
+            single = awaited.Expression;
+        }
+
+        return single;
     }
 
     // ---------------------------------------------------------------------
