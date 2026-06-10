@@ -747,6 +747,1171 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     // ---------------------------------------------------------------------
+    // Cross-method knob proofs: options built by same-type helper methods
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task ServiceBusProcessor_OptionsFromExpressionBodiedHelper_KnobAboveOne_ReportsWarning()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = CreateOptions();
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_OptionsFromBlockHelper_LocalWrites_KnobAboveOne_ReportsWarning()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions();
+                    options.MaxConcurrentCalls = 8;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_OptionsFromHelper_KnobOne_NoDiagnostic()
+    {
+        // A helper that provably pins MaxConcurrentCalls = 1 proves THIS processor sequential —
+        // the helper's fresh creation is instance-correlated by construction.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_OptionsFromHelper_ParameterDrivenKnob_ReportsInfo()
+    {
+        // The helper's knob value comes from a parameter — unprovable, stays config-gated.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions(int concurrency) =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = concurrency };
+
+                public void Start(ServiceBusClient client, int configured)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions(configured));
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_OptionsFromVirtualHelper_ReportsInfo()
+    {
+        // A virtual helper can be overridden — its body is not proof of what runs.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                protected virtual ServiceBusProcessorOptions CreateOptions() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperKnobOne_LaterLocalWriteAboveOne_ReportsWarning()
+    {
+        // Helper proves 1, but a later direct write on the traced local raises it — any
+        // constant above 1 wins.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = CreateOptions();
+                    options.MaxConcurrentCalls = 4;
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperReturnsField_ReportsInfo()
+    {
+        // The helper hands out a shared instance, not a fresh creation — its writes are not
+        // correlated to this processor, so nothing is proven.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+                private readonly ServiceBusProcessorOptions _shared = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private ServiceBusProcessorOptions CreateOptions() => _shared;
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task Parallel_OptionsFromHelper_MaxDegreeOne_NoDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static System.Threading.Tasks.ParallelOptions CreateOptions() =>
+                    new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 1 };
+
+                public void Run(int[] items)
+                {
+                    System.Threading.Tasks.Parallel.ForEach(items, CreateOptions(), item =>
+                    {
+                        _db.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_SequentialHelper_ReassignedFromConcurrentHelper_ReportsWarning()
+    {
+        // The initializer's sequential proof is stale after the local is reassigned from another
+        // helper; the replacement helper's constant 8 is what reaches the sink.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateSequential() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                private static ServiceBusProcessorOptions CreateConcurrent() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = CreateSequential();
+                    options = CreateConcurrent();
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_SequentialHelper_ReassignedOpaque_ReportsInfo()
+    {
+        // An opaque reassignment (config load, factory call outside the file's proof rules)
+        // invalidates the initializer's sequential proof — the sink is config-gated again.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateSequential() =>
+                    new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+
+                public virtual ServiceBusProcessorOptions LoadFromConfiguration() =>
+                    new ServiceBusProcessorOptions();
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = CreateSequential();
+                    options = LoadFromConfiguration();
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task Parallel_HelperLocalSequentialThenFreshReplacement_ReportsWarning()
+    {
+        // Inside the helper, the returned local is replaced by a fresh ParallelOptions whose
+        // MaxDegreeOfParallelism defaults to unlimited — the stale 1 must not prove sequential.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static System.Threading.Tasks.ParallelOptions CreateOptions()
+                {
+                    var options = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 1 };
+                    options = new System.Threading.Tasks.ParallelOptions();
+                    return options;
+                }
+
+                public void Run(int[] items)
+                {
+                    System.Threading.Tasks.Parallel.ForEach(items, CreateOptions(), item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_SequentialInitializer_FreshReplacement_ReportsInfo()
+    {
+        // Type-level variant of the stale-proof hole: the local's sequential initializer is
+        // replaced by a fresh default-configured options object before reaching the sink.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    options = new ServiceBusProcessorOptions();
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperWithDeferredLambdaWrite_ReportsInfo()
+    {
+        // The lambda's knob write is deferred — it is not part of constructing the returned
+        // options, so it must not upgrade to DI021; but it threatens the initializer's 1, so
+        // nothing is proven either way.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+                public static Action Later;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    Later = () => options.MaxConcurrentCalls = 8;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_LocalReusedOpaquelyAfterCreation_NoDiagnostic()
+    {
+        // The processor snapshots its options at creation; reusing the local afterwards cannot
+        // affect the already-created processor, so the pre-creation sequential proof stands.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public virtual ServiceBusProcessorOptions LoadFromConfiguration() =>
+                    new ServiceBusProcessorOptions();
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    var processor = client.CreateProcessor("queue", options);
+                    options = LoadFromConfiguration();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_KnobRaisedAfterCreation_NoDiagnostic()
+    {
+        // A knob write after the processor was created belongs to later reuse of the local,
+        // not to this processor.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    var processor = client.CreateProcessor("queue", options);
+                    options.MaxConcurrentCalls = 8;
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperConditionalSequentialReplacement_ReportsWarning()
+    {
+        // The sequential replacement is conditional — the concurrent initializer can still reach
+        // the sink, so the union of candidate values must keep the 8.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions(bool sequential)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                    if (sequential)
+                    {
+                        options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    }
+
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client, bool sequential)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions(sequential));
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_LocalConditionalSequentialReplacement_ReportsWarning()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client, bool sequential)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                    if (sequential)
+                    {
+                        options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    }
+
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperCompoundKnobWrite_ReportsInfo()
+    {
+        // `+= 1` makes the real value 2; the analyzer does not evaluate compound writes, so the
+        // knob is unprovable — never proven sequential by the stale constant 1.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    options.MaxConcurrentCalls += 1;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperStraightLineOverwriteToOne_NoDiagnostic()
+    {
+        // The straight-line write definitively overwrites the initializer's 8 before the
+        // options are returned — the processor is provably sequential.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                    options.MaxConcurrentCalls = 1;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_LocalStraightLineOverwriteToOne_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                    options.MaxConcurrentCalls = 1;
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperConditionalKnobRaise_ReportsWarning()
+    {
+        // A write inside a nested block is conditional: it joins the candidate union instead of
+        // overwriting, so the possible 8 still reports.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions(bool highLoad)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    if (highLoad)
+                    {
+                        options.MaxConcurrentCalls = 8;
+                    }
+
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client, bool highLoad)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions(highLoad));
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_ConcurrentHelperWithDeferredLambdaWrite_ReportsWarning()
+    {
+        // The deferred lambda write poisons sequential proofs but must not erase the
+        // construction-time concurrent constant — the returned options are configured with 8.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+                public static Action Later;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                    Later = () => options.MaxConcurrentCalls = 1;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_LocalFunctionMutatorDeclaredAfterSink_ReportsInfo()
+    {
+        // The local function is declared after the creation call but invoked before it —
+        // declaration position says nothing about execution order, so its write poisons the
+        // sequential proof instead of being span-filtered away.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    Raise();
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+
+                    void Raise() => options.MaxConcurrentCalls = 8;
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperLocalEscapesToMethod_ReportsInfo()
+    {
+        // The options escape to Tune before the return — the callee can raise the knob, so the
+        // initializer's 1 is no longer proof of sequential dispatch.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    Tune(options);
+                    return options;
+                }
+
+                private static void Tune(ServiceBusProcessorOptions options) =>
+                    options.MaxConcurrentCalls = 8;
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task TimersTimer_AutoResetFalse_ConditionalCompoundReenable_ReportsDiagnostic()
+    {
+        // The conditional compound write can re-enable overlapping callbacks, so the straight-line
+        // AutoReset = false is not sufficient proof of sequential elapsed events.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(bool allowOverlap)
+                {
+                    var timer = new System.Timers.Timer(1000);
+                    timer.AutoReset = false;
+                    if (allowOverlap)
+                    {
+                        timer.AutoReset |= true;
+                    }
+
+                    timer.Elapsed += (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        _db.SaveChanges();
+                    };
+                    timer.Start();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperWithUnrelatedNestedReturn_KnobAboveOne_ReportsWarning()
+    {
+        // The lambda's return belongs to the nested function, not the helper — the helper still
+        // has exactly one return, so its concurrent constant must be proven.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    Func<int> log = () => { return 0; };
+                    log();
+                    return new ServiceBusProcessorOptions { MaxConcurrentCalls = 8 };
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_AliasMutationAfterDefiniteWrite_ReportsInfo()
+    {
+        // The alias escape poisons the proof permanently — a later definite write on the
+        // original local must not restore a sequential proof the alias can still break.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions();
+                    var alias = options;
+                    options.MaxConcurrentCalls = 1;
+                    alias.MaxConcurrentCalls = 8;
+                    var processor = client.CreateProcessor("queue", options);
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperParenthesizedReturn_KnobOne_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    return (options);
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task TimersTimer_AutoResetTrueAtStart_LaterFalse_ReportsDiagnostic()
+    {
+        // The timer starts while AutoReset is still true — a later safe write does not undo the
+        // overlapping callbacks already enabled at Start(). Timer proofs have no consumption
+        // cutoff, so every write must prove the safe state.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var timer = new System.Timers.Timer(1000);
+                    timer.AutoReset = true;
+                    timer.Elapsed += (sender, args) =>
+                    {
+                        {|DI021:_db|}.Add(args);
+                        _db.SaveChanges();
+                    };
+                    timer.Start();
+                    timer.AutoReset = false;
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task Parallel_HelperConditionalSafeWrite_DefaultCandidateRemains_ReportsWarning()
+    {
+        // The initializer never sets MaxDegreeOfParallelism, so the unlimited default is itself
+        // a candidate; the conditional 1 must not become the only collected value.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static System.Threading.Tasks.ParallelOptions CreateOptions(bool sequential)
+                {
+                    var options = new System.Threading.Tasks.ParallelOptions();
+                    if (sequential)
+                    {
+                        options.MaxDegreeOfParallelism = 1;
+                    }
+
+                    return options;
+                }
+
+                public void Run(int[] items, bool sequential)
+                {
+                    System.Threading.Tasks.Parallel.ForEach(items, CreateOptions(sequential), item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_HelperIncrementsKnob_ReportsInfo()
+    {
+        // ++ is a write the assignment scan cannot evaluate — the resulting value is unknown,
+        // so the stale constant 1 must not prove sequential dispatch.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions()
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    options.MaxConcurrentCalls++;
+                    return options;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_KnobIncrementAfterCreation_NoDiagnostic()
+    {
+        // The increment happens after the processor snapshotted its options — later variable
+        // reuse, ignored exactly like post-consumption assignments.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var options = new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 };
+                    var processor = client.CreateProcessor("queue", options);
+                    options.MaxConcurrentCalls++;
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceBusProcessor_ParenthesizedExpressionBodiedHelper_KnobOne_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                private static ServiceBusProcessorOptions CreateOptions() =>
+                    (new ServiceBusProcessorOptions { MaxConcurrentCalls = 1 });
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", CreateOptions());
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    // ---------------------------------------------------------------------
     // RabbitMQ consumer sinks (v6 Received / v7 ReceivedAsync)
     // ---------------------------------------------------------------------
 
