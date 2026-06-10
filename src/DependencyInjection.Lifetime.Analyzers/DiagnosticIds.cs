@@ -113,4 +113,10 @@ public static class DiagnosticIds
     /// concurrency-configurable sink whose concurrency setting cannot be proven.
     /// </summary>
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
+
+    /// <summary>
+    /// DI024: Hosted service creates a scope (or resolves a scoped service) outside its
+    /// long-running execution loop instead of once per iteration.
+    /// </summary>
+    public const string HostedServiceScopePerIteration = "DI024";
 }

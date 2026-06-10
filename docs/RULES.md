@@ -33,6 +33,7 @@ For the latest full rule content, see:
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
+| [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 
 ---
 
@@ -882,3 +883,13 @@ DI021 stays quiet for scopes created inside the handler, `IDbContextFactory<TCon
 **Why it matters:** If the knob is ever raised above 1 this becomes the DI021 concurrency crash. Even with sequential dispatch, one instance accumulates state across all messages: an EF Core change tracker grows without bound, and a failed `SaveChanges` poisons every subsequent message. DI022 reports at Info severity because the concurrency claim is conditional; raise it per team policy with `dotnet_diagnostic.DI022.severity = warning`. When `MaxConcurrentCalls` is a compile-time constant above 1 the diagnostic upgrades to DI021; when it is provably 1, both rules stay silent. Knob proofs follow same-file non-virtual helper methods that return a fresh options creation (`var options = CreateOptions();`), so concurrency configured in a sibling factory method is proven too; virtual helpers, parameter-driven values, and shared-instance returns stay unproven.
 
 **Code Fix:** Yes. Same scope-per-invocation rewrite as DI021.
+
+## DI024: Hosted Service Creates Scope Outside Execution Loop
+
+**What it catches:** Two tiers. First, a `BackgroundService.ExecuteAsync` override or `IHostedService`/`IHostedLifecycleService` start method that creates an `IServiceScope` once before its long-running execution loop (`while (!token.IsCancellationRequested)`, `while (true)`, `for (;;)`, `PeriodicTimer` `WaitForNextTickAsync` loops) and uses it inside the loop — directly, or through a service resolved from it before the loop. Second, a service whose effective registration is provably scoped, resolved once before the loop from any provider and reused across iterations. Reported at the `CreateScope`/`CreateAsyncScope` or `GetRequiredService` call with the loop as an additional location.
+
+**Why it matters:** The hosted-service idiom is scope per iteration. A hoisted scope keeps the same scoped instances alive for the process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, and one failed iteration poisons all subsequent ones.
+
+**Guardrails:** Scopes created inside the loop (including inner batch loops reusing the outer iteration's scope), startup scopes consumed entirely before the loop, dispose-and-recreate scopes reassigned inside the loop, hoisted scopes whose every resolution is provably singleton, bounded loops, shutdown paths (`StopAsync` and the stopping/stopped lifecycle callbacks), and hoisted services with unprovable lifetimes all stay silent.
+
+**Code Fix:** No. Moving the scope into the loop body is a statement-level rewrite with disposal implications; apply it manually.

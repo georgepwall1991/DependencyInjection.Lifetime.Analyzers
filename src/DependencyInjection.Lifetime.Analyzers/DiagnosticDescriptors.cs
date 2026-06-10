@@ -314,4 +314,32 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A service whose registration is scoped is captured (through a field, closure, or enclosing parameter) into a handler that a framework invokes repeatedly. The single captured instance outlives the scope it was designed for and is reused across every invocation, accumulating state and breaking scoped-lifetime expectations. Resolve the service from a new IServiceScope inside the handler.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI024: Hosted service creates a scope outside its long-running execution loop.
+    /// </summary>
+    public static readonly DiagnosticDescriptor HostedServiceScopePerIteration = new(
+        id: DiagnosticIds.HostedServiceScopePerIteration,
+        title: "Create a scope per iteration in hosted service execution loops",
+        messageFormat: "Scope is created outside the execution loop of '{0}'; services resolved from it live for the whole service lifetime. Move CreateScope/CreateAsyncScope inside the loop body.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A hosted service that creates a single IServiceScope before its long-running execution loop reuses the same scoped service instances (such as an EF Core DbContext) for the entire process lifetime, accumulating state and serving stale data. Create the scope inside the loop body so each iteration gets fresh scoped services.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI024 (hoisted scoped-service tier): a scoped-registered service resolved once before the
+    /// execution loop and reused across iterations. Same ID as the hoisted-scope tier; reported at
+    /// compilation end because the lifetime proof needs the full registration picture.
+    /// </summary>
+    public static readonly DiagnosticDescriptor HostedServiceScopedServicePerIteration = new(
+        id: DiagnosticIds.HostedServiceScopePerIteration,
+        title: "Create a scope per iteration in hosted service execution loops",
+        messageFormat: "'{0}' is registered as scoped but resolved once outside the execution loop of '{1}' and reused across every iteration. Resolve it from a new scope inside the loop body.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A hosted service that resolves a scoped service once before its long-running execution loop reuses the same instance (such as an EF Core DbContext) for the entire process lifetime, accumulating state and serving stale data. Create a scope inside the loop body and resolve the service from it so each iteration gets a fresh instance.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

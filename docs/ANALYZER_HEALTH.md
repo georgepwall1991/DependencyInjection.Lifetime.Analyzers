@@ -3,7 +3,7 @@
 **Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
 **Test result:** 1467/1467 passing (verified this date, 0 skipped).
-**Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
+**Analyzers:** 22 classes / 23 rule IDs (DI001-DI022 plus DI024; DI021 and DI022 share one analyzer, DI023 is reserved for Task.Run/WhenAll fan-out)
 **Code fix providers:** 14
 
 ## Summary
@@ -32,6 +32,7 @@
 | DI020 | Middleware Scoped Service | Warn | 26 | -- | 9.0 | -- | 2.10.4 closed every audit gap: typeof-overload (positive + explicit-arg-suppressed), keyed dependencies both directions, endpoint-route builder, extension-method receiver path, conditional-access registration (new detection), and fixed the explicit-argument false positive (filled parameters were still reported) |
 | DI021 | Concurrent Handler Shared State | Warn | 133 | 16 | 8.8 | 8.5 | Non-thread-safe services (DbContext + derived, DbConnection/DbCommand/DbTransaction/DbDataReader + interfaces, IDbContextTransaction, HttpContext) captured via field/closure/enclosing-parameter into concurrently-invoked handlers (ServiceBus processors, EventProcessorClient, RabbitMQ consumers across the v6/v7 event drift, both Timer types, Parallel.*), including captured-scope in-handler resolution; serialization-guard suppressions (lock, SemaphoreSlim, Interlocked, timer re-arm, async-lock idiom) and proven-sequential escapes ship in v1 |
 | DI022 | Config-Gated Handler Capture | Info | (shared) | (shared) | 8.8 | 8.5 | New rule (same analyzer as DI021): the config-gated tier — sink concurrency knob unprovable at compile time (ServiceBusProcessor MaxConcurrentCalls); conditional wording, upgrades to DI021 when the knob is proven > 1, silent when proven 1 |
+| DI024 | Hosted Service Scope Per Iteration | Warn | 18 | -- | -- | -- | New rule (2.11.0): scope created (or scoped service resolved) once before a hosted service's long-running execution loop instead of per iteration; two tiers (hoisted scope, hoisted scoped service), all-singleton-resolution and dispose-and-recreate suppressions, registration-backed via RegistrationCollector at compilation end. Not yet scored — first hardening pass pending |
 
 `--` = no code fix exists for this rule.
 
@@ -227,7 +228,7 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 | PerformanceRegression | 7 | Baseline performance guards |
 | SampleDiagnosticsVerifier | 14 | SARIF contract (8) + verifier (2) + sample-docs freshness gates (4) |
 | RegistrationCollector (ServiceDescriptor) | 4 + 2 | Infrastructure suite (4) plus rule-level ServiceDescriptor registration tests (2) |
-| DiagnosticDescriptorSeverity | 3 + 1 Theory (23 cases) | Severity budget enforcement across all 22 rule IDs + DI012b |
+| DiagnosticDescriptorSeverity | 3 + 1 Theory (23 cases) | Severity budget enforcement across all 23 rule IDs + DI012b |
 | CompatibilitySmoke | 6 | Roslyn/package compatibility floor |
 | CodeFixInventoryParity | 3 | Fixer inventory stays in sync with shipped rules |
 | CrossRuleInteraction | 10 | Multi-rule scenario validation |
