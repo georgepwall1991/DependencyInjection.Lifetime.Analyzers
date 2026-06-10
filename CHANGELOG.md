@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-06-10
+
+### Changed
+
+- **DI021/DI022 cross-method knob proofs (same-tree helper methods)**: concurrency-knob evaluation now follows options built by helper methods — `var options = CreateOptions();` or `client.CreateProcessor("q", CreateOptions())` where the helper is non-virtual, singly-declared, and in the same file. A helper that provably returns a fresh creation with `MaxConcurrentCalls = 8` upgrades the config-gated DI022 Info to the DI021 warning; one that pins the knob to 1 silences the sink (the fresh creation is instance-correlated by construction). Supported helper shapes: expression-bodied `=> new Options {...}`, a single `return new Options {...};`, and a single returned local initialized with a creation (collecting its in-helper member writes). Stale proofs are invalidated: reassigning the options local from another helper re-derives the proof from the replacement, a fresh-creation replacement discards every value collected for the discarded instance (a stale `MaxDegreeOfParallelism = 1` can no longer silence a default-unlimited `ParallelOptions`), opaque reassignments make the knob unprovable, writes inside nested lambdas/local functions poison sequential proofs as unknown candidates (without erasing construction-time concurrent constants, and regardless of where the nested function is declared — declaration position says nothing about execution order), and writes or reassignments after the sink consumed the options (the SDK snapshots values at the creation call) are ignored as later variable reuse. Virtual/overridable helpers, parameter-driven knob values, multiple returns, and shared-instance returns likewise stay unproven (DI022) — reducing the Info-tier noise the health doc watchlists without weakening the instance-correlation principle. Applies to ServiceBus processor options and `ParallelOptions` alike.
+
 ## [2.10.1] - 2026-06-10
 
 ### Added

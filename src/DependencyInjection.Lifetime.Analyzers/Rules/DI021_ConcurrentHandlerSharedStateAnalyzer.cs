@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
@@ -316,6 +317,72 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     }
 
     /// <summary>
+    /// Result lattice for knob-write collection. Conditional replacements are handled as a UNION
+    /// of candidate values (branch-insensitive: every collected constant is a possible value, so
+    /// a constant above 1 anywhere still proves concurrency). <see cref="Unknown"/> records that
+    /// some candidate value is not statically known (a fresh replacement that never sets the
+    /// knob, a compound write) — it poisons sequential proofs without erasing concurrent
+    /// evidence. <see cref="Invalid"/> means instance identity was lost entirely.
+    /// </summary>
+    private enum KnobCollection
+    {
+        Provable,
+        Unknown,
+        Invalid
+    }
+
+    private static KnobCollection Worst(KnobCollection left, KnobCollection right) =>
+        (KnobCollection)Math.Max((int)left, (int)right);
+
+    /// <summary>
+    /// The set of values a knob may hold at the consumption point. Definite writes (top-level
+    /// statements in the block that declared the options local) overwrite the set; writes nested
+    /// in deeper blocks are conditional and join the union instead.
+    /// </summary>
+    private sealed class KnobValueState
+    {
+        public List<ExpressionSyntax> Values { get; } = new();
+
+        public bool HasUnknownCandidate { get; set; }
+
+        /// <summary>
+        /// Sticky poison for escapes and nested-function writes: an alias or deferred mutator can
+        /// change the knob at any time, so no later definite write may restore a sequential
+        /// proof. Unlike <see cref="HasUnknownCandidate"/>, this survives Overwrite.
+        /// </summary>
+        public bool Poisoned { get; set; }
+
+        /// <summary>
+        /// The creation that produced the instance never set the knob, so the type's default is
+        /// itself a candidate. Harmless while no constants are collected (NotFound semantics),
+        /// but a conditional write must not become the only collected value while the untaken
+        /// branch still leaves the default in play. A definite write supersedes the default.
+        /// </summary>
+        public bool HasDefaultCandidate { get; set; }
+
+        public bool IsUnknown =>
+            HasUnknownCandidate || Poisoned || (HasDefaultCandidate && Values.Count > 0);
+
+        public void Overwrite(List<ExpressionSyntax> replacements, bool unknown)
+        {
+            Values.Clear();
+            Values.AddRange(replacements);
+            HasUnknownCandidate = unknown;
+            HasDefaultCandidate = false;
+        }
+    }
+
+    /// <summary>
+    /// A write definitively replaces the knob value only when it is a top-level statement of the
+    /// very block that declared the options local — straight-line code in document order. Any
+    /// deeper nesting (if/loop/try) makes it a conditional candidate.
+    /// </summary>
+    private static bool IsDefiniteWrite(AssignmentExpressionSyntax assignment, BlockSyntax? declarationBlock) =>
+        declarationBlock is not null &&
+        assignment.Parent is ExpressionStatementSyntax statement &&
+        statement.Parent == declarationBlock;
+
+    /// <summary>
     /// The options instance correlated to a specific sink. Proofs are only trusted when the
     /// instance was traced from the sink itself; a sequential knob on some other options object
     /// in the same type must never silence this sink.
@@ -324,11 +391,18 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     {
         public static readonly OptionsTrace Untraceable = default;
 
-        private OptionsTrace(bool traced, BaseObjectCreationExpressionSyntax? inlineCreation, ISymbol? optionsSymbol)
+        private OptionsTrace(
+            bool traced,
+            BaseObjectCreationExpressionSyntax? inlineCreation,
+            ISymbol? optionsSymbol,
+            MethodDeclarationSyntax? helperDeclaration,
+            int? localCutoffPosition)
         {
             Traced = traced;
             InlineCreation = inlineCreation;
             OptionsSymbol = optionsSymbol;
+            HelperDeclaration = helperDeclaration;
+            LocalCutoffPosition = localCutoffPosition;
         }
 
         public bool Traced { get; }
@@ -337,15 +411,29 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         public ISymbol? OptionsSymbol { get; }
 
-        public static OptionsTrace ForInlineCreation(BaseObjectCreationExpressionSyntax creation) =>
-            new(traced: true, creation, optionsSymbol: null);
+        /// <summary>A same-tree non-virtual helper method whose fresh creation is the options instance.</summary>
+        public MethodDeclarationSyntax? HelperDeclaration { get; }
 
-        public static OptionsTrace ForSymbol(ISymbol symbol) =>
-            new(traced: true, inlineCreation: null, symbol);
+        /// <summary>
+        /// For local/parameter options symbols: the position where the sink consumed the options
+        /// (the processor creation or Parallel call). The SDK snapshots option values there, so
+        /// writes and reassignments after this position belong to later reuse of the variable,
+        /// not to this sink.
+        /// </summary>
+        public int? LocalCutoffPosition { get; }
+
+        public static OptionsTrace ForInlineCreation(BaseObjectCreationExpressionSyntax creation) =>
+            new(traced: true, creation, optionsSymbol: null, helperDeclaration: null, localCutoffPosition: null);
+
+        public static OptionsTrace ForSymbol(ISymbol symbol, int? localCutoffPosition = null) =>
+            new(traced: true, inlineCreation: null, symbol, helperDeclaration: null, localCutoffPosition);
+
+        public static OptionsTrace ForHelper(MethodDeclarationSyntax helper) =>
+            new(traced: true, inlineCreation: null, optionsSymbol: null, helper, localCutoffPosition: null);
 
         /// <summary>Sink traced, but no options argument or an opaque options expression.</summary>
         public static OptionsTrace WithoutKnownOptions { get; } =
-            new(traced: true, inlineCreation: null, optionsSymbol: null);
+            new(traced: true, inlineCreation: null, optionsSymbol: null, helperDeclaration: null, localCutoffPosition: null);
     }
 
     /// <summary>
@@ -400,9 +488,13 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             // target-typed `new() {...}` form.
             IObjectCreationOperation { Syntax: BaseObjectCreationExpressionSyntax creationExpression } =>
                 OptionsTrace.ForInlineCreation(creationExpression),
-            ILocalReferenceOperation local => OptionsTrace.ForSymbol(local.Local),
+            ILocalReferenceOperation local => OptionsTrace.ForSymbol(local.Local, creation.Syntax.SpanStart),
             IFieldReferenceOperation field => OptionsTrace.ForSymbol(field.Field),
-            IParameterReferenceOperation parameter => OptionsTrace.ForSymbol(parameter.Parameter),
+            IParameterReferenceOperation parameter =>
+                OptionsTrace.ForSymbol(parameter.Parameter, creation.Syntax.SpanStart),
+            IInvocationOperation helperCall when
+                TryGetSameTreeHelperDeclaration(helperCall.TargetMethod, eventReference.Syntax) is { } helper =>
+                OptionsTrace.ForHelper(helper),
             _ => OptionsTrace.WithoutKnownOptions
         };
     }
@@ -427,11 +519,326 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             // target-typed `new() {...}` form.
             IObjectCreationOperation { Syntax: BaseObjectCreationExpressionSyntax creationExpression } =>
                 OptionsTrace.ForInlineCreation(creationExpression),
-            ILocalReferenceOperation local => OptionsTrace.ForSymbol(local.Local),
+            ILocalReferenceOperation local => OptionsTrace.ForSymbol(local.Local, invocation.Syntax.SpanStart),
             IFieldReferenceOperation field => OptionsTrace.ForSymbol(field.Field),
-            IParameterReferenceOperation parameter => OptionsTrace.ForSymbol(parameter.Parameter),
+            IParameterReferenceOperation parameter =>
+                OptionsTrace.ForSymbol(parameter.Parameter, invocation.Syntax.SpanStart),
+            IInvocationOperation helperCall when
+                TryGetSameTreeHelperDeclaration(helperCall.TargetMethod, invocation.Syntax) is { } helper =>
+                OptionsTrace.ForHelper(helper),
             _ => OptionsTrace.WithoutKnownOptions
         };
+    }
+
+    /// <summary>
+    /// Resolves an options-helper invocation target to its declaration when its body is proof of
+    /// what runs: non-virtual (no override can substitute another body), a single declaration,
+    /// and declared in the same syntax tree as the sink (the analyzer only queries the sink's own
+    /// semantic model).
+    /// </summary>
+    private static MethodDeclarationSyntax? TryGetSameTreeHelperDeclaration(
+        IMethodSymbol? method,
+        SyntaxNode anchor)
+    {
+        if (method is null ||
+            method.IsVirtual ||
+            method.IsAbstract ||
+            method.IsOverride ||
+            method.DeclaringSyntaxReferences.Length != 1)
+        {
+            return null;
+        }
+
+        return method.DeclaringSyntaxReferences[0].GetSyntax() is MethodDeclarationSyntax declaration &&
+               declaration.SyntaxTree == anchor.SyntaxTree
+            ? declaration
+            : null;
+    }
+
+    /// <summary>
+    /// Collects knob writes from a helper method that provably returns a fresh options creation:
+    /// an expression-bodied `=> new Options {...}`, a single `return new Options {...};`, or a
+    /// single returned local whose one declaration is initialized with a creation (initializer
+    /// writes plus member writes on that local inside the helper). A returned shared instance, a
+    /// reassignment to anything but a fresh creation, or multiple returns contribute nothing —
+    /// the helper then proves neither direction.
+    /// </summary>
+    private static KnobCollection CollectHelperKnobValues(
+        OperationAnalysisContext context,
+        MethodDeclarationSyntax helper,
+        string knobName,
+        List<ExpressionSyntax> values)
+    {
+        if (helper.ExpressionBody is not null &&
+            UnwrapKnobExpression(helper.ExpressionBody.Expression) is BaseObjectCreationExpressionSyntax inlineCreation)
+        {
+            CollectInitializerValues(inlineCreation, knobName, values);
+            return KnobCollection.Provable;
+        }
+
+        var semanticModel = context.Operation.SemanticModel;
+        if (helper.Body is null || semanticModel is null)
+        {
+            return KnobCollection.Provable;
+        }
+
+        // Returns inside nested lambdas/local functions belong to those functions, not the helper.
+        var returns = helper.Body.DescendantNodes()
+            .OfType<ReturnStatementSyntax>()
+            .Where(r => !IsInsideNestedFunction(r, helper))
+            .ToList();
+        if (returns.Count != 1)
+        {
+            return KnobCollection.Provable;
+        }
+
+        var returnExpression = UnwrapKnobExpression(returns[0].Expression);
+
+        if (returnExpression is BaseObjectCreationExpressionSyntax returnedCreation)
+        {
+            CollectInitializerValues(returnedCreation, knobName, values);
+            return KnobCollection.Provable;
+        }
+
+        if (returnExpression is not IdentifierNameSyntax returnedIdentifier ||
+            semanticModel.GetSymbolInfo(returnedIdentifier, context.CancellationToken).Symbol
+                is not ILocalSymbol returnedLocal)
+        {
+            return KnobCollection.Provable;
+        }
+
+        var declarators = new List<VariableDeclaratorSyntax>();
+        foreach (var declarator in helper.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+        {
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetDeclaredSymbol(declarator, context.CancellationToken), returnedLocal))
+            {
+                declarators.Add(declarator);
+            }
+        }
+
+        if (declarators.Count != 1 ||
+            declarators[0].Initializer?.Value is not BaseObjectCreationExpressionSyntax localCreation)
+        {
+            return KnobCollection.Provable;
+        }
+
+        var declarationBlock = declarators[0]
+            .Ancestors()
+            .OfType<BlockSyntax>()
+            .FirstOrDefault();
+        var state = new KnobValueState();
+        CollectInitializerValues(localCreation, knobName, state.Values);
+        state.HasDefaultCandidate = state.Values.Count == 0;
+        if (HasKnobIncrement(helper, knobName, returnedLocal, semanticModel, context))
+        {
+            state.Poisoned = true;
+        }
+
+        // If the local escapes before the return (argument, alias initializer, ref/out — any use
+        // other than the return itself, a member-access receiver, or an assignment target), the
+        // callee or alias can change the knob, so sequential proofs are poisoned.
+        foreach (var reference in helper.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (reference == returnedIdentifier ||
+                (reference.Parent is MemberAccessExpressionSyntax receiverUse &&
+                 receiverUse.Expression == reference) ||
+                (reference.Parent is AssignmentExpressionSyntax assignmentTarget &&
+                 assignmentTarget.Left == reference))
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(reference, context.CancellationToken).Symbol, returnedLocal))
+            {
+                state.Poisoned = true;
+                break;
+            }
+        }
+        foreach (var assignment in helper.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            var targetsReturnedLocal =
+                (assignment.Left is IdentifierNameSyntax left &&
+                 SymbolEqualityComparer.Default.Equals(
+                     semanticModel.GetSymbolInfo(left, context.CancellationToken).Symbol, returnedLocal)) ||
+                (assignment.Left is MemberAccessExpressionSyntax leftMember &&
+                 SymbolEqualityComparer.Default.Equals(
+                     semanticModel.GetSymbolInfo(leftMember.Expression, context.CancellationToken).Symbol,
+                     returnedLocal));
+
+            // A write inside a nested lambda or local function is deferred — it is not part of
+            // constructing the returned options, and there is no telling when (or whether) it
+            // runs relative to the sink. It poisons sequential proofs as an unknown candidate
+            // but must not erase construction-time concurrent constants.
+            if (targetsReturnedLocal && IsInsideNestedFunction(assignment, helper))
+            {
+                state.Poisoned = true;
+                continue;
+            }
+
+            if (assignment.Left is IdentifierNameSyntax identifier &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol, returnedLocal))
+            {
+                if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    assignment.Right is BaseObjectCreationExpressionSyntax replacementCreation)
+                {
+                    var replacementValues = new List<ExpressionSyntax>();
+                    CollectInitializerValues(replacementCreation, knobName, replacementValues);
+                    if (IsDefiniteWrite(assignment, declarationBlock))
+                    {
+                        // A straight-line replacement discards the previous object entirely; a
+                        // replacement that never sets the knob leaves an unknowable default.
+                        state.Overwrite(replacementValues, unknown: replacementValues.Count == 0);
+                    }
+                    else
+                    {
+                        // A conditional replacement joins the union of candidate objects.
+                        state.Values.AddRange(replacementValues);
+                        state.HasUnknownCandidate |= replacementValues.Count == 0;
+                    }
+
+                    continue;
+                }
+
+                // Reassigned to something that is not a fresh creation: the returned instance is
+                // no longer correlated, so nothing about this knob is provable.
+                return KnobCollection.Invalid;
+            }
+
+            if (assignment.Left is MemberAccessExpressionSyntax memberAccess &&
+                memberAccess.Name.Identifier.ValueText == knobName &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(memberAccess.Expression, context.CancellationToken).Symbol,
+                    returnedLocal))
+            {
+                ApplyKnobWrite(assignment, declarationBlock, state);
+            }
+        }
+
+        values.AddRange(state.Values);
+        return state.IsUnknown ? KnobCollection.Unknown : KnobCollection.Provable;
+    }
+
+    /// <summary>
+    /// Applies one member write of the knob to the value state: a definite simple write
+    /// overwrites the set, a conditional simple write joins it, and compound writes (+=, |=, ...)
+    /// are statically unknowable.
+    /// </summary>
+    private static void ApplyKnobWrite(
+        AssignmentExpressionSyntax assignment,
+        BlockSyntax? declarationBlock,
+        KnobValueState state)
+    {
+        var definite = IsDefiniteWrite(assignment, declarationBlock);
+        if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+        {
+            if (definite)
+            {
+                state.Overwrite(new List<ExpressionSyntax> { assignment.Right }, unknown: false);
+            }
+            else
+            {
+                state.Values.Add(assignment.Right);
+            }
+        }
+        else if (definite)
+        {
+            state.Overwrite(new List<ExpressionSyntax>(), unknown: true);
+        }
+        else
+        {
+            state.HasUnknownCandidate = true;
+        }
+    }
+
+    /// <summary>
+    /// Detects ++/-- on the knob property of the traced instance anywhere in the scope. The
+    /// resulting value is not statically evaluated, so such an update permanently poisons
+    /// sequential proofs (sticky, like an escape — its position relative to consumption is not
+    /// modeled).
+    /// </summary>
+    private static bool HasKnobIncrement(
+        SyntaxNode scope,
+        string knobName,
+        ISymbol instance,
+        SemanticModel semanticModel,
+        OperationAnalysisContext context,
+        int? localCutoffPosition = null)
+    {
+        foreach (var node in scope.DescendantNodes())
+        {
+            var operand = node switch
+            {
+                PostfixUnaryExpressionSyntax postfix when
+                    postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
+                    postfix.IsKind(SyntaxKind.PostDecrementExpression) => postfix.Operand,
+                PrefixUnaryExpressionSyntax prefix when
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                    prefix.IsKind(SyntaxKind.PreDecrementExpression) => prefix.Operand,
+                _ => null
+            };
+
+            if (operand is not MemberAccessExpressionSyntax memberAccess ||
+                memberAccess.Name.Identifier.ValueText != knobName)
+            {
+                continue;
+            }
+
+            // Same position rules as assignments: nested-function updates poison regardless of
+            // declaration position, straight-line updates after the consumption cutoff are later
+            // variable reuse and are ignored.
+            if (!IsInsideNestedFunction(node, scope) &&
+                localCutoffPosition is { } cutoff &&
+                node.SpanStart >= cutoff)
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(memberAccess.Expression, context.CancellationToken).Symbol,
+                    instance))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Strips parentheses and the null-forgiving operator from an expression.</summary>
+    private static ExpressionSyntax? UnwrapKnobExpression(ExpressionSyntax? expression)
+    {
+        while (true)
+        {
+            if (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+            else if (expression is PostfixUnaryExpressionSyntax postfix &&
+                     postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                expression = postfix.Operand;
+            }
+            else
+            {
+                return expression;
+            }
+        }
+    }
+
+    private static bool IsInsideNestedFunction(SyntaxNode node, SyntaxNode boundary)
+    {
+        for (var current = node.Parent; current is not null && current != boundary; current = current.Parent)
+        {
+            if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -507,13 +914,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
 
         var values = new List<ExpressionSyntax>();
+        var collection = KnobCollection.Provable;
         if (trace.InlineCreation is not null)
         {
             CollectInitializerValues(trace.InlineCreation, knobName, values);
         }
         else if (trace.OptionsSymbol is not null)
         {
-            CollectInstancePropertyValues(context, anchor, trace.OptionsSymbol, knobName, values);
+            collection = CollectInstancePropertyValues(
+                context, anchor, trace.OptionsSymbol, knobName, values, trace.LocalCutoffPosition);
+        }
+        else if (trace.HelperDeclaration is not null)
+        {
+            collection = CollectHelperKnobValues(context, trace.HelperDeclaration, knobName, values);
         }
         else if (!trace.Traced)
         {
@@ -524,9 +937,16 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 : KnobProof.NotFound;
         }
 
+        if (collection == KnobCollection.Invalid)
+        {
+            return KnobProof.Unprovable;
+        }
+
         if (values.Count == 0)
         {
-            return KnobProof.NotFound;
+            // Unknown with no constants means a candidate object with an unknowable default
+            // exists — that must not degrade to NotFound, which some sinks treat as default.
+            return collection == KnobCollection.Unknown ? KnobProof.Unprovable : KnobProof.NotFound;
         }
 
         var anySequential = false;
@@ -550,7 +970,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
         }
 
-        if (anyUnprovable)
+        if (anyUnprovable || collection == KnobCollection.Unknown)
         {
             return KnobProof.Unprovable;
         }
@@ -584,49 +1004,199 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     /// symbol within the containing type: initializer object-creation properties, assignments of
     /// fresh object creations, and member assignments whose receiver resolves to the instance.
     /// </summary>
-    private static void CollectInstancePropertyValues(
+    private static KnobCollection CollectInstancePropertyValues(
         OperationAnalysisContext context,
         SyntaxNode anchor,
         ISymbol instance,
         string propertyName,
-        List<ExpressionSyntax> values)
+        List<ExpressionSyntax> values,
+        int? localCutoffPosition = null)
     {
         var typeDeclaration = anchor.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
         var semanticModel = context.Operation.SemanticModel;
         if (typeDeclaration is null || semanticModel is null)
         {
-            return;
+            return KnobCollection.Provable;
         }
+
+        var state = new KnobValueState();
+        BlockSyntax? declarationBlock = null;
 
         foreach (var declarator in typeDeclaration.DescendantNodes().OfType<VariableDeclaratorSyntax>())
         {
-            if (declarator.Initializer?.Value is BaseObjectCreationExpressionSyntax creation &&
-                SymbolEqualityComparer.Default.Equals(
+            if (!SymbolEqualityComparer.Default.Equals(
                     semanticModel.GetDeclaredSymbol(declarator, context.CancellationToken), instance))
             {
-                CollectInitializerValues(creation, propertyName, values);
+                continue;
+            }
+
+            // Definite-overwrite semantics are only sound when the consumption point is known
+            // (writes provably precede it). Timer proofs have no cutoff — Start() can run between
+            // writes — so they keep all-writes-must-be-safe union semantics.
+            if (instance is ILocalSymbol && localCutoffPosition is not null)
+            {
+                declarationBlock = declarator.Ancestors().OfType<BlockSyntax>().FirstOrDefault();
+            }
+
+            if (declarator.Initializer?.Value is BaseObjectCreationExpressionSyntax creation)
+            {
+                var before = state.Values.Count;
+                CollectInitializerValues(creation, propertyName, state.Values);
+                // Default-candidate tracking only applies to consumption-cutoff traces (options
+                // sinks). Timer proofs already demand that every write prove the safe state, and
+                // their documented proof shape is exactly a creation without the knob followed by
+                // a safe write.
+                state.HasDefaultCandidate |= localCutoffPosition is not null && state.Values.Count == before;
+            }
+            else if (declarator.Initializer?.Value is InvocationExpressionSyntax helperInvocation &&
+                     TryGetSameTreeHelperDeclaration(
+                         semanticModel.GetSymbolInfo(helperInvocation, context.CancellationToken).Symbol
+                             as IMethodSymbol,
+                         declarator) is { } helper)
+            {
+                var helperResult = CollectHelperKnobValues(context, helper, propertyName, state.Values);
+                if (helperResult == KnobCollection.Invalid)
+                {
+                    return KnobCollection.Invalid;
+                }
+
+                state.HasUnknownCandidate |= helperResult == KnobCollection.Unknown;
+            }
+        }
+
+        if (HasKnobIncrement(typeDeclaration, propertyName, instance, semanticModel, context, localCutoffPosition))
+        {
+            state.Poisoned = true;
+        }
+
+        // For locals, any pre-consumption use other than a member-access receiver or an
+        // assignment target lets the instance escape (argument, alias initializer, ref/out), and
+        // the escapee can change the knob before the sink consumes the options.
+        if (localCutoffPosition is { } escapeCutoff && instance is ILocalSymbol)
+        {
+            foreach (var reference in typeDeclaration.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (reference.SpanStart >= escapeCutoff ||
+                    (reference.Parent is MemberAccessExpressionSyntax receiverUse &&
+                     receiverUse.Expression == reference) ||
+                    (reference.Parent is AssignmentExpressionSyntax assignmentTarget &&
+                     assignmentTarget.Left == reference))
+                {
+                    continue;
+                }
+
+                if (SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(reference, context.CancellationToken).Symbol, instance))
+                {
+                    state.Poisoned = true;
+                    break;
+                }
             }
         }
 
         foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
+            // For locals, a write inside a nested lambda or local function executes at an
+            // unknowable time — declaration position says nothing about execution order (a local
+            // function declared after the creation call can run before it), so such writes are
+            // never span-filtered and never overwrite: they poison sequential proofs as unknown
+            // candidates when they target the traced instance.
+            if (localCutoffPosition is not null && IsInsideNestedFunction(assignment, typeDeclaration))
+            {
+                var targetsInstance =
+                    (assignment.Left is MemberAccessExpressionSyntax nestedMember &&
+                     nestedMember.Name.Identifier.ValueText == propertyName &&
+                     SymbolEqualityComparer.Default.Equals(
+                         semanticModel.GetSymbolInfo(nestedMember.Expression, context.CancellationToken).Symbol,
+                         instance)) ||
+                    SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol, instance);
+                if (targetsInstance)
+                {
+                    state.Poisoned = true;
+                }
+
+                continue;
+            }
+
+            // Writes and reassignments after the sink consumed the options belong to later reuse
+            // of the variable — the SDK snapshotted the values at the creation call.
+            if (localCutoffPosition is { } cutoff && assignment.SpanStart >= cutoff)
+            {
+                continue;
+            }
+
             if (assignment.Left is MemberAccessExpressionSyntax memberAccess &&
                 memberAccess.Name.Identifier.ValueText == propertyName &&
                 SymbolEqualityComparer.Default.Equals(
                     semanticModel.GetSymbolInfo(memberAccess.Expression, context.CancellationToken).Symbol,
                     instance))
             {
-                values.Add(assignment.Right);
+                ApplyKnobWrite(assignment, declarationBlock, state);
                 continue;
             }
 
-            if (assignment.Right is BaseObjectCreationExpressionSyntax creation &&
-                SymbolEqualityComparer.Default.Equals(
+            if (!SymbolEqualityComparer.Default.Equals(
                     semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol, instance))
             {
-                CollectInitializerValues(creation, propertyName, values);
+                continue;
+            }
+
+            if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                assignment.Right is BaseObjectCreationExpressionSyntax creation)
+            {
+                var replacementValues = new List<ExpressionSyntax>();
+                CollectInitializerValues(creation, propertyName, replacementValues);
+                if (IsDefiniteWrite(assignment, declarationBlock))
+                {
+                    // A straight-line replacement discards the previous object entirely; a
+                    // replacement that never sets the knob leaves an unknowable default.
+                    state.Overwrite(replacementValues, unknown: replacementValues.Count == 0);
+                }
+                else
+                {
+                    // A conditional replacement joins the union of candidate objects.
+                    state.Values.AddRange(replacementValues);
+                    state.HasUnknownCandidate |= replacementValues.Count == 0;
+                }
+            }
+            else if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                     assignment.Right is InvocationExpressionSyntax replacementInvocation &&
+                     TryGetSameTreeHelperDeclaration(
+                         semanticModel.GetSymbolInfo(replacementInvocation, context.CancellationToken).Symbol
+                             as IMethodSymbol,
+                         assignment) is { } replacementHelper)
+            {
+                var replacementValues = new List<ExpressionSyntax>();
+                var helperResult = CollectHelperKnobValues(
+                    context, replacementHelper, propertyName, replacementValues);
+                if (helperResult == KnobCollection.Invalid)
+                {
+                    return KnobCollection.Invalid;
+                }
+
+                var unknown = helperResult == KnobCollection.Unknown || replacementValues.Count == 0;
+                if (IsDefiniteWrite(assignment, declarationBlock))
+                {
+                    state.Overwrite(replacementValues, unknown);
+                }
+                else
+                {
+                    state.Values.AddRange(replacementValues);
+                    state.HasUnknownCandidate |= unknown;
+                }
+            }
+            else
+            {
+                // Reassigned to something that is neither a fresh creation nor a provable helper:
+                // the instance that reaches the sink is no longer the one whose writes were
+                // collected, so nothing about this knob is provable.
+                return KnobCollection.Invalid;
             }
         }
+
+        values.AddRange(state.Values);
+        return state.IsUnknown ? KnobCollection.Unknown : KnobCollection.Provable;
     }
 
     private static bool AnyKnobConstantAboveOneInType(
@@ -716,9 +1286,13 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         // Every write must prove the safe state: a later AutoReset = true (or an unprovable
         // value) re-enables overlapping callbacks, so one safe write is not sufficient proof.
+        // An Unknown/Invalid collection (compound write, escape, opaque reassignment) means some
+        // candidate value is not statically known and likewise voids the proof.
         var autoResetValues = new List<ExpressionSyntax>();
-        CollectInstancePropertyValues(context, anchor, instance, "AutoReset", autoResetValues);
-        if (autoResetValues.Count > 0 &&
+        var autoResetCollection = CollectInstancePropertyValues(
+            context, anchor, instance, "AutoReset", autoResetValues);
+        if (autoResetCollection == KnobCollection.Provable &&
+            autoResetValues.Count > 0 &&
             autoResetValues.All(value =>
                 semanticModel.GetConstantValue(value, context.CancellationToken)
                     is { HasValue: true, Value: false }))
@@ -727,8 +1301,11 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
 
         var synchronizingValues = new List<ExpressionSyntax>();
-        CollectInstancePropertyValues(context, anchor, instance, "SynchronizingObject", synchronizingValues);
-        if (synchronizingValues.Count > 0 && synchronizingValues.All(IsProvablyNonNull))
+        var synchronizingCollection = CollectInstancePropertyValues(
+            context, anchor, instance, "SynchronizingObject", synchronizingValues);
+        if (synchronizingCollection == KnobCollection.Provable &&
+            synchronizingValues.Count > 0 &&
+            synchronizingValues.All(IsProvablyNonNull))
         {
             return true;
         }
