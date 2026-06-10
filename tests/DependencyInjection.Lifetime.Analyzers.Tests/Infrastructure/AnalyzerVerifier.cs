@@ -117,6 +117,7 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
             ReferenceAssemblies = references,
         };
@@ -131,6 +132,7 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
             ReferenceAssemblies = references,
         };
@@ -151,6 +153,7 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
             ReferenceAssemblies = ReferenceAssembliesWithDi60
         };
@@ -168,6 +171,7 @@ public static class AnalyzerVerifier<TAnalyzer>
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             ReferenceAssemblies = ReferenceAssembliesWithDi60
         };
 

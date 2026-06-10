@@ -1996,6 +1996,304 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
 
 
+
+    // ---------------------------------------------------------------------
+    // Scoped-lifetime DI022 tier (registration-backed)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task ScopedRegisteredService_CapturedIntoConcurrentHandler_ReportsInfo()
+    {
+        // Not in the non-thread-safe catalog, but its registration is scoped: capturing it for
+        // the application lifetime reuses one instance across all invocations.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IEmailSender { void Send(object message); }
+            public class EmailSender : IEmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private readonly IEmailSender _email;
+
+                public Worker(IEmailSender email)
+                {
+                    _email = email;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_email|}.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IEmailSender, EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonRegisteredService_CapturedIntoConcurrentHandler_NoDiagnostic()
+    {
+        // A singleton is designed to be shared — no lifetime violation, and it is not in the
+        // non-thread-safe catalog.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IEmailSender { void Send(object message); }
+            public class EmailSender : IEmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private readonly IEmailSender _email;
+
+                public Worker(IEmailSender email)
+                {
+                    _email = email;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _email.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IEmailSender, EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task UnregisteredService_CapturedIntoConcurrentHandler_NoDiagnostic()
+    {
+        // No registration: nothing proves a lifetime violation, and the type is not in the
+        // catalog.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IEmailSender { void Send(object message); }
+
+            public class Worker
+            {
+                private readonly IEmailSender _email;
+
+                public Worker(IEmailSender email)
+                {
+                    _email = email;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _email.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedRegisteredService_LockGuardedUse_NoDiagnostic()
+    {
+        // The serialization guards apply to the scoped tier exactly like the catalog tier.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IEmailSender { void Send(object message); }
+            public class EmailSender : IEmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private readonly IEmailSender _email;
+                private readonly object _gate = new object();
+
+                public Worker(IEmailSender email)
+                {
+                    _email = email;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += args =>
+                    {
+                        lock (_gate)
+                        {
+                            _email.Send(args);
+                        }
+
+                        return Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IEmailSender, EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedOpenGenericRegisteredService_Captured_ReportsInfo()
+    {
+        // The closed IRepository<Order> resolves through the scoped open-generic registration.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IRepository<T> { void Save(T entity); }
+            public class Repository<T> : IRepository<T> { public void Save(T entity) { } }
+            public class Order { }
+
+            public class Worker
+            {
+                private readonly IRepository<Order> _orders;
+
+                public Worker(IRepository<Order> orders)
+                {
+                    _orders = orders;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_orders|}.Save(new Order());
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedRegisteredType_ManuallyConstructedCapture_NoDiagnostic()
+    {
+        // The captured instance was constructed manually — no scoped DI instance is being
+        // reused, even though the type is also registered scoped for other code paths.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class EmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private readonly EmailSender _email = new EmailSender();
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _email.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ScopedRegisteredType_CastManualConstructionCapture_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public interface IEmailSender { void Send(object message); }
+            public class EmailSender : IEmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private readonly IEmailSender _email = (IEmailSender)new EmailSender();
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _email.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IEmailSender, EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
     // ---------------------------------------------------------------------
     // EventHubs EventProcessor<TPartition> batch overrides
     // ---------------------------------------------------------------------
