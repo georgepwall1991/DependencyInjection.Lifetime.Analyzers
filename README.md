@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.10.6
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.10.7
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.6">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.7">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.6" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.10.7" />
 ```
 
 Then reference it from the project file:
@@ -949,6 +949,7 @@ public class MyMiddleware
 - `System.Threading.Timer` callbacks with a finite period (callbacks can overlap)
 - `System.Timers.Timer.Elapsed` (elapsed events can overlap unless `AutoReset = false` or a `SynchronizingObject` is set)
 - `Parallel.For` / `ForEach` / `ForEachAsync` / `Invoke` bodies
+- PLINQ `ForAll` bodies (partitions run concurrently unless `WithDegreeOfParallelism(1)` is proven on the query chain)
 
 It also catches the deferred variant: resolving from a **long-lived scope captured from outside the handler** (`_scope.ServiceProvider.GetRequiredService<AppDbContext>()` inside the handler still hands the same instance to every concurrent invocation).
 

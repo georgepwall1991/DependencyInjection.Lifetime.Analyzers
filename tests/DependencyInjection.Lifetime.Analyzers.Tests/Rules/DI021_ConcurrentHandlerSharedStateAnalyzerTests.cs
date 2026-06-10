@@ -1911,6 +1911,145 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
         await VerifyNoneAsync(source);
     }
 
+
+    // ---------------------------------------------------------------------
+    // PLINQ ForAll sinks
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task PlinqForAll_DbContextField_ReportsWarning()
+    {
+        // PLINQ partitions run concurrently by default.
+        var source = "using System.Linq;\n" + BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Run(int[] items)
+                {
+                    items.AsParallel().ForAll(item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task PlinqForAll_WithDegreeOfParallelismOne_NoDiagnostic()
+    {
+        // A proven single-degree query runs its partitions sequentially.
+        var source = "using System.Linq;\n" + BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Run(int[] items)
+                {
+                    items.AsParallel().WithDegreeOfParallelism(1).ForAll(item =>
+                    {
+                        _db.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task PlinqForAll_WithDegreeOfParallelismAboveOne_ReportsWarning()
+    {
+        var source = "using System.Linq;\n" + BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Run(int[] items)
+                {
+                    items.AsParallel().WithDegreeOfParallelism(8).ForAll(item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task PlinqForAll_InHandlerCreation_NoDiagnostic()
+    {
+        var source = "using System.Linq;\n" + BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                public void Run(int[] items)
+                {
+                    items.AsParallel().ForAll(item =>
+                    {
+                        using var db = new AppDbContext();
+                        db.Add(item);
+                        db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    [Fact]
+    public async Task PlinqForAll_SequentialChainThroughConcat_NoDiagnostic()
+    {
+        // Binary operators name their receiver parameter "first"/"outer", not "source" — the
+        // proven single-degree setting must still be found through them.
+        var source = "using System.Linq;\n" + BaseUsings + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Run(int[] items, int[] more)
+                {
+                    items.AsParallel().WithDegreeOfParallelism(1).Concat(more.AsParallel()).ForAll(item =>
+                    {
+                        _db.Add(item);
+                        _db.SaveChanges();
+                    });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
     // ---------------------------------------------------------------------
     // RabbitMQ consumer sinks (v6 Received / v7 ReceivedAsync)
     // ---------------------------------------------------------------------
