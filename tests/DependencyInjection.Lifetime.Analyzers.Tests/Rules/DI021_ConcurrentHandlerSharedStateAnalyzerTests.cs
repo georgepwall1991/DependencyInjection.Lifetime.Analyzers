@@ -126,6 +126,43 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
         """;
 
+    /// <summary>
+    /// Source stubs mirroring System.Threading.Tasks.Dataflow execution blocks. The analyzer
+    /// matches by fully-qualified name; MaxDegreeOfParallelism defaults to 1 (sequential).
+    /// </summary>
+    private const string DataflowStubs = """
+        namespace System.Threading.Tasks.Dataflow
+        {
+            public class DataflowBlockOptions
+            {
+                public const int Unbounded = -1;
+            }
+
+            public class ExecutionDataflowBlockOptions : DataflowBlockOptions
+            {
+                public int MaxDegreeOfParallelism { get; set; } = 1;
+            }
+
+            public class ActionBlock<TInput>
+            {
+                public ActionBlock(System.Action<TInput> action) { }
+                public ActionBlock(System.Action<TInput> action, ExecutionDataflowBlockOptions dataflowBlockOptions) { }
+                public ActionBlock(System.Func<TInput, System.Threading.Tasks.Task> action) { }
+                public ActionBlock(System.Func<TInput, System.Threading.Tasks.Task> action, ExecutionDataflowBlockOptions dataflowBlockOptions) { }
+                public bool Post(TInput item) => true;
+            }
+
+            public class TransformBlock<TInput, TOutput>
+            {
+                public TransformBlock(System.Func<TInput, TOutput> transform) { }
+                public TransformBlock(System.Func<TInput, TOutput> transform, ExecutionDataflowBlockOptions dataflowBlockOptions) { }
+            }
+        }
+
+        """;
+
+    private const string DataflowUsing = "using System.Threading.Tasks.Dataflow;\n";
+
     private const string RabbitMqUsing = "using RabbitMQ.Client;\nusing RabbitMQ.Client.Events;\n";
 
     private const string EfCoreStubs = """
@@ -1911,6 +1948,237 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
         await VerifyNoneAsync(source);
     }
 
+
+
+    // ---------------------------------------------------------------------
+    // TPL Dataflow execution-block sinks
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task ActionBlock_NoOptions_NoDiagnostic()
+    {
+        // MaxDegreeOfParallelism defaults to 1: an ActionBlock without options is sequential.
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        _db.Add(item);
+                        _db.SaveChanges();
+                    });
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ActionBlock_MaxDegreeAboveOne_ReportsWarning()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                    }, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 4 });
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ActionBlock_MaxDegreeUnbounded_ReportsWarning()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var options = new ExecutionDataflowBlockOptions
+                    {
+                        MaxDegreeOfParallelism = DataflowBlockOptions.Unbounded
+                    };
+                    var block = new ActionBlock<int>(async item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        await _db.SaveChangesAsync();
+                    }, options);
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ActionBlock_MaxDegreeOneExplicit_NoDiagnostic()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        _db.Add(item);
+                        _db.SaveChanges();
+                    }, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 1 });
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ActionBlock_UnprovableMaxDegree_ReportsInfo()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(int configured)
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        {|DI022:_db|}.Add(item);
+                        _db.SaveChanges();
+                    }, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = configured });
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task TransformBlock_MaxDegreeAboveOne_ReportsWarning()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var block = new TransformBlock<int, int>(item =>
+                    {
+                        {|DI021:_db|}.Add(item);
+                        _db.SaveChanges();
+                        return item;
+                    }, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 8 });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ActionBlock_InHandlerCreation_NoDiagnostic()
+    {
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                public void Start()
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        using var db = new AppDbContext();
+                        db.Add(item);
+                        db.SaveChanges();
+                    }, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 4 });
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    [Fact]
+    public async Task ActionBlock_CallerProvidedOptions_ReportsInfo()
+    {
+        // The options come from the caller — nothing proves the knob, so the sink is
+        // config-gated rather than assumed sequential.
+        var source = DataflowUsing + BaseUsings + DataflowStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ExecutionDataflowBlockOptions options)
+                {
+                    var block = new ActionBlock<int>(item =>
+                    {
+                        {|DI022:_db|}.Add(item);
+                        _db.SaveChanges();
+                    }, options);
+                    block.Post(1);
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
 
     // ---------------------------------------------------------------------
     // PLINQ ForAll sinks
