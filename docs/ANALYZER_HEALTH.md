@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
-**Test result:** 1408/1408 passing (verified this date, 0 skipped).
+**Test result:** 1415/1415 passing (verified this date, 0 skipped).
 **Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
 **Code fix providers:** 14
 
@@ -29,7 +29,7 @@
 | DI017 | Circular Dependency | Warn | 28 | -- | 8.8 | -- | Re-scored down (was 9.5): the algorithm is sophisticated (flow-aware registrations, mutations, keyed deps, memoization) but 28 tests over 1,319 lines is thin — `Replace` mutation handled in code yet untested, only 2 keyed tests, `Lazy<T>` parameters never modeled |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 58 | 16 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, conditional-access receiver classification (`host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases report; `httpContext?.RequestServices...` / `scope?.ServiceProvider...` stay quiet), transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, conditional-access receivers, and async-aware (`CreateAsyncScope`/`await using`) |
-| DI020 | Middleware Scoped Service | Warn | 19 | -- | 8.4 | -- | Re-scored down (was 9.3): new rule with real untested code paths — the non-generic `UseMiddleware(typeof(T))` branch has zero tests, zero keyed-service tests, and only `IApplicationBuilder` of the three recognized builder types is exercised |
+| DI020 | Middleware Scoped Service | Warn | 26 | -- | 9.0 | -- | 2.10.4 closed every audit gap: typeof-overload (positive + explicit-arg-suppressed), keyed dependencies both directions, endpoint-route builder, extension-method receiver path, conditional-access registration (new detection), and fixed the explicit-argument false positive (filled parameters were still reported) |
 | DI021 | Concurrent Handler Shared State | Warn | 102 | 16 | 8.8 | 8.5 | Non-thread-safe services (DbContext + derived, DbConnection/DbCommand/DbTransaction/DbDataReader + interfaces, IDbContextTransaction, HttpContext) captured via field/closure/enclosing-parameter into concurrently-invoked handlers (ServiceBus processors, EventProcessorClient, RabbitMQ consumers across the v6/v7 event drift, both Timer types, Parallel.*), including captured-scope in-handler resolution; serialization-guard suppressions (lock, SemaphoreSlim, Interlocked, timer re-arm, async-lock idiom) and proven-sequential escapes ship in v1 |
 | DI022 | Config-Gated Handler Capture | Info | (shared) | (shared) | 8.8 | 8.5 | New rule (same analyzer as DI021): the config-gated tier — sink concurrency knob unprovable at compile time (ServiceBusProcessor MaxConcurrentCalls); conditional wording, upgrades to DI021 when the knob is proven > 1, silent when proven 1 |
 
@@ -179,11 +179,11 @@ The scope-wrapping code fix is gated against scoped-service escape (assignment/a
 
 ### DI020 -- Middleware Scoped Service (Warning)
 
-**Analyzer: 8.4/10** (re-scored from 9.3, 2026-06-10; this section was previously missing) | Tests: 19
+**Analyzer: 9.0/10** (re-scored from 9.3 to 8.4 in the 2026-06-10 audit; raised to 9.0 after the 2.10.4 gap-closure pass) | Tests: 26
 
 Detects conventional middleware constructors that capture scoped services — direct and transitive via the shared `ScopedDependencyGraph` — for the application lifetime, with `Invoke`/`InvokeAsync` parameter remediation guidance. Constructor selection honors explicit `UseMiddleware` arguments, optional parameters, and greedy-overload resolution.
 
-**Why the re-score:** the rule is new and has real untested code paths, not just thin coverage. The non-generic `UseMiddleware(typeof(MyMiddleware), args)` branch (DI020_MiddlewareScopedServiceAnalyzer.cs:112-126) — a supported and common registration form — has zero tests. Keyed-service parameters route through `KeyedServiceHelpers` but no test exercises a `[FromKeyedServices]` middleware dependency. The receiver check recognizes three builder abstractions but only `IApplicationBuilder` is tested; `IEndpointRouteBuilder` and convention-builder registration are unverified. Conditional-access registration (`app?.UseMiddleware<T>()`) is also untested. Fundamentals are proven and the shared graph is hardened by DI019's suite, so this is coverage debt rather than suspected wrongness — but 9.3 assumed no untested branches, which is false. No code fix — moving a dependency to `Invoke` parameters changes the middleware's contract.
+**2.10.4 gap-closure pass:** the audit's untested paths are all covered now, and writing the tests flushed out two real issues — an explicit-argument false positive (a scoped parameter satisfied by a `UseMiddleware` argument was still reported; constructor selection now threads its argument-fill map to reporting, and a parameter must be explicitly supplied at EVERY registration site to stay quiet) and a conditional-access miss (`app?.UseMiddleware<T>()` is now recognized through the enclosing conditional access). Covered shapes: non-generic `UseMiddleware(typeof(T))`, keyed scoped dependencies (`[FromKeyedServices]` match reports, different-key singleton stays silent), `IEndpointRouteBuilder` receivers, and the extension-method (`ReducedFrom`) path. Remaining minor edge: implicit-conversion argument binding relies on `Compilation.HasImplicitConversion` without a dedicated test. No code fix — moving a dependency to `Invoke` parameters changes the middleware's contract.
 
 ### DI021 / DI022 -- Concurrent Handler Shared State (Warning / Info)
 
@@ -239,13 +239,13 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1408 (verified passing 2026-06-10) |
-| Analyzer tests | 1085 (per-rule 1064 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
+| Total tests | 1415 (verified passing 2026-06-10) |
+| Analyzer tests | 1092 (per-rule 1071 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
 | Code fix tests | 188 |
 | Infrastructure tests | 135 (112 facts + 23 severity theory cases) |
 | Analyzer mean score | 9.3/10 |
 | Fixer mean score | 8.9/10 |
-| Rules at 9+ | 16/22 (sub-9: DI002 8.8, DI004 8.7, DI017 8.8, DI020 8.4, DI021 8.8, DI022 8.8) |
+| Rules at 9+ | 17/22 (sub-9: DI002 8.8, DI004 8.7, DI017 8.8, DI021 8.8, DI022 8.8) |
 | Fixers at 8+ | 14/14 (100%) |
 | Rules needing pass | 5 analyzer passes (DI020, DI021/DI022 v2, DI002, DI004, DI017 — see Work Priority), 0 fixers |
 | TODO/FIXME in source | 0 (verified) |
@@ -412,7 +412,7 @@ Work should go where a high-importance rule has a low honest score. Combining th
 
 | Priority | Target | Importance | Health | What to do |
 |----------|--------|------------|--------|------------|
-| 1 | DI020 hardening | Tier 1 (#4) | 8.4 | Close the audit gaps before widening anything: tests + any fixes for the non-generic `UseMiddleware(typeof(T))` branch, keyed-service (`[FromKeyedServices]`) middleware dependencies, `IEndpointRouteBuilder`/convention-builder receivers, conditional-access registration. Smallest effort, highest-importance payoff. |
+| 1 | DI020 hardening | Tier 1 (#4) | 9.0 | Shipped 2.10.4: all audit gaps covered, explicit-argument FP fixed, conditional-access detection added. Maintenance-only pending real-world feedback. |
 | 2 | DI021/DI022 v2 | Tier 1 (#2) | 8.8 | RabbitMQ consumer sinks shipped in 2.10.1. Remaining v2 roadmap: PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; same-tree helper-method knob proofs shipped 2.10.2 — remaining proof work is the RabbitMQ factory→connection→channel→consumer instance chain and cross-tree wiring; `IDbContextFactory<TContext>` second code action. |
 | 3 | DI002 sink expansion | Tier 2 (#10) | 8.8 | Collection-mutation and event-subscription sinks shipped 2.10.3 (indexer was already covered and is now pinned). Remaining: tuple/anonymous-object composite returns — bounded and testable, lower frequency than the shipped shapes. |
 | 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.7 | Make explicit-dispose tracking branch-aware (port the DI001/DI014 disposal-proof approach instead of first-`Dispose()` position break); add branch-shape tests. Field-stored scopes can follow as a separate, larger pass if cross-boundary tracking is ever taken on. |
@@ -432,7 +432,7 @@ DI003/DI019 (Tier 1, scores 9.8/9.7) stay maintenance-only: they earned their sc
 
 Ordered by the Work Priority table above:
 
-1. **DI020 hardening pass** -- non-generic `UseMiddleware(typeof(T))` coverage, keyed-service middleware dependencies, endpoint-route/convention-builder receivers, conditional-access registration (Tier-1 rule at the lowest score in the suite)
+1. **DI020 hardening pass** -- shipped 2.10.4 (all audit gaps covered, explicit-argument FP fixed, conditional-access detection added)
 2. **DI021 v2 pass (continued)** -- PLINQ/Dataflow/EventHubs-batch sink rows (RabbitMQ shipped 2.10.1), scoped-lifetime DI022 tier, instance-correlated knob proofs, and an `IDbContextFactory<TContext>` second code action
 3. **DI002 sink expansion** -- collection/indexer/event/composite-return escape sinks
 4. **DI004 branch-aware explicit-dispose tracking** -- port the DI001/DI014 disposal-proof approach
