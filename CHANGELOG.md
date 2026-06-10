@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.6] - 2026-06-10
+
+### Fixed
+
+- **`Replace(...)` registrations were invisible**: `ServiceCollectionDescriptorExtensions.Replace(services, ServiceDescriptor.Scoped<TService, TImpl>())` recorded only the removal — the replacement descriptor itself was never collected as a registration, so a cycle (or captive, or resolution) introduced by the replacement evaded every rule. The shared `RegistrationCollector` now records the Replace descriptor as a registration ordered after its removal, mirroring runtime behavior. DI012 treats a Replace registration as a new baseline when at most one descriptor was active (intentional override semantics, no duplicate for Add-then-Replace), while a Replace after two or more active descriptors still reports — Replace removes only one matching descriptor, so one survives and the replacement overrides it, and the `new ServiceDescriptor(typeof(T), instance)` constructor shape registers as a singleton instance (its implicit MEDI lifetime), keeping DI015 quiet for dependencies provided by instance-based Replace.
+
+### Added
+
+- **DI017 test-density pass** (the health re-audit's last work-priority item): `Replace` mutations pinned in both directions (removing a cycle stays silent, introducing one reports), keyed-edge precision pinned (a dependency on a different key does not close a cycle; int `1` and string `"1"` keyed cycles report separately — regression guard for the PR #32 dedup fix), and `Lazy<T>` constructor parameters pinned as not modeled (no edge — silent, matching the default container's inability to resolve `Lazy<T>`).
+
 ## [2.10.5] - 2026-06-10
 
 ### Fixed

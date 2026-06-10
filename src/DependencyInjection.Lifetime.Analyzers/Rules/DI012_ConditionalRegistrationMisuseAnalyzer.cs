@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -120,8 +121,9 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
         var serviceTypeName = registrations[0].ServiceType.Name;
 
-        // Track the first Add* registration
+        // Track the first Add* registration and how many active descriptors the slot holds.
         OrderedRegistration? firstAddRegistration = null;
+        var activeDescriptorCount = 0;
 
         for (var i = 0; i < registrations.Count; i++)
         {
@@ -144,6 +146,29 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
             if (!current.IsTryAdd)
             {
+                // Replace removes ONE earlier descriptor before adding its own. With at most one
+                // prior descriptor that is intentional override semantics, not an accidental
+                // duplicate — but with two or more, a descriptor survives the removal and the
+                // replacement is still another override of it.
+                if (current.MethodName == "Replace")
+                {
+                    if (activeDescriptorCount >= 2 && firstAddRegistration is not null)
+                    {
+                        var replaceDiagnostic = Diagnostic.Create(
+                            DiagnosticDescriptors.DuplicateRegistration,
+                            current.Location,
+                            serviceTypeName,
+                            $"line {registrations[i - 1].Location.GetLineSpan().StartLinePosition.Line + 1}");
+                        context.ReportDiagnostic(replaceDiagnostic);
+                    }
+
+                    activeDescriptorCount = Math.Max(activeDescriptorCount - 1, 0) + 1;
+                    firstAddRegistration = current;
+                    continue;
+                }
+
+                activeDescriptorCount++;
+
                 // This is an Add* registration
                 if (firstAddRegistration is null)
                 {

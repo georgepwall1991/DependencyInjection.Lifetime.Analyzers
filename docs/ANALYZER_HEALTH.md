@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-10 (honesty re-audit: scores re-verified against source, four rules re-scored down, stale counts corrected, importance ranking added)
 **Version:** 2.10.0
-**Test result:** 1423/1423 passing (verified this date, 0 skipped).
+**Test result:** 1431/1431 passing (verified this date, 0 skipped).
 **Analyzers:** 21 classes / 22 rule IDs (DI001-DI022; DI021 and DI022 share one analyzer)
 **Code fix providers:** 14
 
@@ -21,12 +21,12 @@
 | DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.2 | 9 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
 | DI010 | Constructor Over-Injection | Info | 29 | -- | 9.7 | -- | Strongest info-level rule, public-constructor and factory-return precise |
 | DI011 | Service Provider Injection | Info | 28 | -- | 9.5 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
-| DI012 | Conditional Registration | Info | 32 | 8 | 9.2 | 9 | Complex flow, ignored keyed/non-keyed TryAdd fixer covers conditional-access (`services?.TryAdd*(...)`), embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
+| DI012 | Conditional Registration | Info | 35 | 8 | 9.2 | 9 | Complex flow, ignored keyed/non-keyed TryAdd fixer covers conditional-access (`services?.TryAdd*(...)`), embedded/top-level statement guardrails, and EF helper TryAdd-style preservation |
 | DI013 | Implementation Mismatch | Error | 59 | 14 | 9.5 | 9 | Variance-aware assignability, named-argument extraction, broad assists with instance retargeting/removal, embedded/top-level rewrite guardrails, and conditional-access (`services?.AddSingleton(...)`) standalone-removal support |
 | DI014 | Root Provider Not Disposed | Warn | 84 | 12 | 9.3 | 9 | Hardened: reliable local disposal proofs, branch ownership, direct/nested branch exits, explicit/async/finally cleanup, loop reassignment leaks, nearest-callable fixer guardrails, conditional-access creation (`services?.BuildServiceProvider()`) disposal/return proofs with using/await-using fixer support, and wrapped-result proofs (parenthesized, provable upcast, null-forgiving) that reject user-defined conversions and unproven downcasts |
-| DI015 | Unresolvable Dependency | Warn | 121 | 16 | 9.8 | 9.2 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered, conditional-access (`services?.AddXxx(...)`) self-bindings mirror the trigger shape |
+| DI015 | Unresolvable Dependency | Warn | 122 | 16 | 9.8 | 9.2 | One of strongest overall, EF factory/pooled-registration aware, FixAll-disabled lock covered, conditional-access (`services?.AddXxx(...)`) self-bindings mirror the trigger shape |
 | DI016 | BuildServiceProvider Misuse | Warn | 27 | -- | 9.4 | -- | Hardened: conditional-access receivers (`builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, chained `builder?.Services?.BuildServiceProvider()`) participate in detection alongside null-forgiving / cast unwrap and builder-flow precision |
-| DI017 | Circular Dependency | Warn | 28 | -- | 8.8 | -- | Re-scored down (was 9.5): the algorithm is sophisticated (flow-aware registrations, mutations, keyed deps, memoization) but 28 tests over 1,319 lines is thin — `Replace` mutation handled in code yet untested, only 2 keyed tests, `Lazy<T>` parameters never modeled |
+| DI017 | Circular Dependency | Warn | 33 | -- | 9.0 | -- | 2.10.6 closed the audit test-density debt and flushed out a real shared-collector bug (`Replace` descriptors were never registered, hiding introduced cycles from every rule); Replace pinned both directions, keyed permutations pinned (cross-key edges, int-vs-string dedup), `Lazy<T>` pinned as not modeled |
 | DI018 | Non-Instantiable Impl | Warn | 34 | -- | 9.2 | -- | Hardened: delegate-type registrations without a factory are reported (including the one-Type `AddSingleton(typeof(T))` self-binding overload, guarded to avoid the two-Type overload with a variable-typed implementation argument); the default container cannot populate (object, IntPtr) delegate constructors |
 | DI019 | Root Scoped Resolution | Warn | 58 | 16 | 9.7 | 9 | Root/scoped provider classification, known and nullable-root provider surface filtering, conditional-access receiver classification (`host?.Services...`, chained `app?.Services?...`, and `var sp = app?.Services;` aliases report; `httpContext?.RequestServices...` / `scope?.ServiceProvider...` stay quiet), transitive scoped graph, known framework scoped services, and full resolution-path messages (`A -> B -> C`) reconstructed from the dependency walk; scope-wrapping code fix gated against scoped-service escape (assignment/argument), type-receiver static calls, conditional-access receivers, and async-aware (`CreateAsyncScope`/`await using`) |
 | DI020 | Middleware Scoped Service | Warn | 26 | -- | 9.0 | -- | 2.10.4 closed every audit gap: typeof-overload (positive + explicit-arg-suppressed), keyed dependencies both directions, endpoint-route builder, extension-method receiver path, conditional-access registration (new detection), and fixed the explicit-argument false positive (filled parameters were still reported) |
@@ -157,9 +157,9 @@ Strong after builder-flow hardening. Covers assignable `IServiceCollection` abst
 
 ### DI017 -- Circular Dependency (Warning)
 
-**Analyzer: 8.8/10** (re-scored from 9.5, 2026-06-10) | Tests: 28
+**Analyzer: 9.0/10** (re-scored from 9.5 to 8.8 in the 2026-06-10 audit; raised to 9.0 after the 2.10.6 density pass) | Tests: 33
 
-**Why the re-score:** test density does not match algorithm complexity — 28 tests over 1,319 lines of flow-aware graph code, versus DI003's 120 tests at 9.8. Specific debt: `Replace` mutation is handled in `ApplyMutation` but has zero tests (the only mutation tests cover `RemoveAll`); keyed cycles have only 2 tests despite the PR #32 keyed-dedup bug history; and `Lazy<T>` constructor parameters are not modeled at all (likely silent today because `Lazy<T>` is unregistered in default MEDI, but that silence is incidental, not proven). Memoization is correctly keyed per registration instance including `Order`. Major hardening pass applied. Cycle detection now uses reachable, flow-aware effective registrations, honors `TryAdd` plus `RemoveAll` / `Replace` removal, analyzes high-confidence factory requests including `ActivatorUtilities.CreateInstance<T>(...)` and `GetServiceOrCreateInstance<T>(...)`, inherited keyed dependencies, open-generic activation, and registered `IEnumerable<T>` elements, and keeps ambiguous constructors, dynamic keys, opaque factories, unrelated service collections, uninvoked wrappers, and mixed factory bodies with extra unclassified invocations silent. `knownNoCycle` memoization remains in place for scale. No code fix -- breaking cycles requires architectural decisions.
+**2.10.6 density pass:** writing the audit's missing tests flushed out a real shared-infrastructure bug — `Replace(services, descriptor)` recorded only the removal, never the replacement descriptor, so a cycle introduced by Replace was invisible (now fixed in `RegistrationCollector`: the descriptor registers ordered after its removal, visible to every rule). Pinned: Replace in both directions, cross-key edges do not close cycles, int and string keyed cycles that stringify identically report separately (PR #32 dedup guard), and `Lazy<T>` parameters produce no edge (silent — matching the default container, which cannot resolve `Lazy<T>`; a deferred-edge model would be a feature, not a fix). Memoization is correctly keyed per registration instance including `Order`. Major hardening pass applied. Cycle detection now uses reachable, flow-aware effective registrations, honors `TryAdd` plus `RemoveAll` / `Replace` removal, analyzes high-confidence factory requests including `ActivatorUtilities.CreateInstance<T>(...)` and `GetServiceOrCreateInstance<T>(...)`, inherited keyed dependencies, open-generic activation, and registered `IEnumerable<T>` elements, and keeps ambiguous constructors, dynamic keys, opaque factories, unrelated service collections, uninvoked wrappers, and mixed factory bodies with extra unclassified invocations silent. `knownNoCycle` memoization remains in place for scale. No code fix -- breaking cycles requires architectural decisions.
 
 ### DI018 -- Non-Instantiable Implementation (Warning)
 
@@ -239,13 +239,13 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1423 (verified passing 2026-06-10) |
-| Analyzer tests | 1100 (per-rule 1079 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
+| Total tests | 1431 (verified passing 2026-06-10) |
+| Analyzer tests | 1108 (per-rule 1087 + cross-rule 10 + keyed 9 + ServiceDescriptor registration 2) |
 | Code fix tests | 188 |
 | Infrastructure tests | 135 (112 facts + 23 severity theory cases) |
 | Analyzer mean score | 9.3/10 |
 | Fixer mean score | 8.9/10 |
-| Rules at 9+ | 17/22 (sub-9: DI002 8.8, DI004 8.9, DI017 8.8, DI021 8.8, DI022 8.8) |
+| Rules at 9+ | 18/22 (sub-9: DI002 8.8, DI004 8.9, DI021 8.8, DI022 8.8) |
 | Fixers at 8+ | 14/14 (100%) |
 | Rules needing pass | 5 analyzer passes (DI020, DI021/DI022 v2, DI002, DI004, DI017 — see Work Priority), 0 fixers |
 | TODO/FIXME in source | 0 (verified) |
@@ -416,7 +416,7 @@ Work should go where a high-importance rule has a low honest score. Combining th
 | 2 | DI021/DI022 v2 | Tier 1 (#2) | 8.8 | RabbitMQ consumer sinks shipped in 2.10.1. Remaining v2 roadmap: PLINQ, TPL Dataflow, EventHubs batch sinks; scoped-lifetime DI022 tier via RegistrationCollector; same-tree helper-method knob proofs shipped 2.10.2 — remaining proof work is the RabbitMQ factory→connection→channel→consumer instance chain and cross-tree wiring; `IDbContextFactory<TContext>` second code action. |
 | 3 | DI002 sink expansion | Tier 2 (#10) | 8.8 | Collection-mutation and event-subscription sinks shipped 2.10.3 (indexer was already covered and is now pinned). Remaining: tuple/anonymous-object composite returns — bounded and testable, lower frequency than the shipped shapes. |
 | 4 | DI004 dispose-flow precision | Tier 2 (#6) | 8.9 | Shipped 2.10.5: mutually-exclusive-branch uses no longer report; branch-shape tests added. Field-stored scopes remain a separate, larger pass if cross-boundary tracking is ever taken on. |
-| 5 | DI017 test density | Tier 3 (#14) | 8.8 | Cheapest item: this is test debt, not suspected wrongness. Add `Replace` mutation tests, keyed permutations (mixed keyed/unkeyed edges, int-vs-string keys), and a `Lazy<T>` parameter test pinning current behavior. |
+| 5 | DI017 test density | Tier 3 (#14) | 9.0 | Shipped 2.10.6 — and the "test debt, not suspected wrongness" assumption was wrong: the Replace tests found a real collector bug (replacement descriptors were never registered). |
 
 DI003/DI019 (Tier 1, scores 9.8/9.7) stay maintenance-only: they earned their scores with 120/58 tests and repeated hardening; new work there should be feedback-driven, not speculative.
 
@@ -436,5 +436,5 @@ Ordered by the Work Priority table above:
 2. **DI021 v2 pass (continued)** -- PLINQ/Dataflow/EventHubs-batch sink rows (RabbitMQ shipped 2.10.1), scoped-lifetime DI022 tier, instance-correlated knob proofs, and an `IDbContextFactory<TContext>` second code action
 3. **DI002 sink expansion** -- collection/indexer/event/composite-return escape sinks
 4. **DI004 branch-aware explicit-dispose tracking** -- shipped 2.10.5 (mutually-exclusive branch skip)
-5. **DI017 test-density pass** -- `Replace` mutation, keyed permutations, `Lazy<T>` behavior pin
+5. **DI017 test-density pass** -- shipped 2.10.6 (found and fixed the invisible-Replace-descriptor collector bug)
 6. **Watch EF/options real-world feedback** -- add only source-backed registration modeling tweaks that can be guarded across DI003, DI015, and DI019
