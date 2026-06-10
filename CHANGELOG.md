@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.9] - 2026-06-10
+
+### Added
+
+- **DI002 composite-construction return escapes**: scoped services smuggled out through returned tuples (`return (service, count);`) and anonymous objects (`return new { Service = service };`) now report — for tracked locals, capturing delegates, and direct resolutions nested in the composite — recursing through nested composites. Returned object creations with initializer assignments (`return new Holder { Service = service };`) were already detected through the property-assignment sink and are now pinned. Composites consumed inside the scope stay quiet. This closes the last named DI002 audit-debt item.
+
 ## [2.10.8] - 2026-06-10
 
 ### Added
