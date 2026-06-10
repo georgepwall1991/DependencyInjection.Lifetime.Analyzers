@@ -274,4 +274,28 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "Middleware are typically instantiated once and live for the application lifetime. Injecting scoped services into the constructor will capture them for the entire application lifetime, which can lead to threading issues or stale data. Move scoped dependencies to the 'Invoke' or 'InvokeAsync' method instead.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI021: Non-thread-safe service shared across concurrent handler invocations.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ConcurrentHandlerSharedState = new(
+        id: DiagnosticIds.ConcurrentHandlerSharedState,
+        title: "Non-thread-safe service shared across concurrent handler invocations",
+        messageFormat: "'{0}' is shared across concurrent invocations of {1}; concurrent use of a {2} fails at runtime. Resolve it from a new scope inside the handler, or use a per-invocation factory.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A non-thread-safe service (such as an EF Core DbContext) that is created or resolved once and then captured into a handler that a framework invokes concurrently (message processors, timers, Parallel.* bodies) will be used by multiple invocations at the same time. Resolve the service from a new IServiceScope created inside the handler, or inject a per-invocation factory such as IDbContextFactory<TContext>.");
+
+    /// <summary>
+    /// DI022: Service instance reused across handler invocations of a concurrency-configurable sink.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ConcurrentHandlerConfigGatedSharedState = new(
+        id: DiagnosticIds.ConcurrentHandlerConfigGatedSharedState,
+        title: "Service instance reused across handler invocations",
+        messageFormat: "'{0}' is captured once and reused across all invocations of {1}. If {2} is raised above 1 this becomes a concurrency crash; even sequentially, one instance accumulates state across all messages. Resolve it per invocation instead.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "A non-thread-safe service is captured once and reused across every invocation of a handler whose concurrency is controlled by configuration that cannot be proven at compile time (for example ServiceBusProcessor with MaxConcurrentCalls bound from configuration). If the concurrency setting is ever raised above 1 this becomes a runtime concurrency failure, and even with sequential dispatch a single instance accumulates state (change tracking, failed-operation poisoning) across all messages. Resolve the service from a new IServiceScope inside the handler.");
 }

@@ -31,6 +31,8 @@ For the latest full rule content, see:
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 | [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | Yes |
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
+| [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
+| [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
 
 ---
 
@@ -823,3 +825,60 @@ public class MyMiddleware
 ```
 
 **Code Fix:** No. Moving dependencies to the `InvokeAsync` method may require significant architectural changes.
+
+---
+
+## DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations
+
+**What it catches:** A documented non-thread-safe service (EF Core `DbContext` and derived contexts, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their interfaces, `IDbContextTransaction`, `HttpContext`) created or resolved once and then captured — through a field, a closure over an outer local, or an enclosing method parameter — into a handler that a framework invokes concurrently: `ServiceBusProcessor`/`ServiceBusSessionProcessor` message and error handlers, `EventProcessorClient` event handlers, `System.Threading.Timer` callbacks with a finite period, `System.Timers.Timer.Elapsed`, and `Parallel.For`/`ForEach`/`ForEachAsync`/`Invoke` bodies. Resolving from a long-lived scope captured from outside the handler is reported too — it hands the same instance to every concurrent invocation.
+
+**Why it matters:** This is the deferred form of the captive dependency. The lifetimes can look correct, but one instance is shared across overlapping invocations and fails at runtime ("A second operation was started on this context instance before a previous operation completed"). It works in development with one message at a time and fails under production load.
+
+> **Explain Like I'm Ten:** One pencil shared by the whole class works fine while pupils write one at a time. The moment everyone writes at once, the pencil snaps.
+
+**Problem:**
+
+```csharp
+public class OrderProcessor : BackgroundService
+{
+    private readonly AppDbContext _db; // resolved once
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _processor.ProcessMessageAsync += HandleAsync; // invoked concurrently
+        await _processor.StartProcessingAsync(stoppingToken);
+    }
+
+    private async Task HandleAsync(ProcessSessionMessageEventArgs args)
+    {
+        _db.Add(args);                // one DbContext, N concurrent handlers
+        await _db.SaveChangesAsync();
+    }
+}
+```
+
+**Better pattern:**
+
+```csharp
+private async Task HandleAsync(ProcessSessionMessageEventArgs args)
+{
+    await using var scope = _scopeFactory.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Add(args);
+    await db.SaveChangesAsync();
+}
+```
+
+DI021 stays quiet for scopes created inside the handler, `IDbContextFactory<TContext>` usage, instances created inline, proven-sequential configurations (`MaxConcurrentCalls = 1`, `MaxConcurrentSessions = 1`, `MaxDegreeOfParallelism = 1`, one-shot timers, `AutoReset = false`), and handlers that explicitly serialize themselves (`lock`, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
+
+**Code Fix:** Yes. Rewrites the handler to resolve the service from a new scope per invocation, plumbs `IServiceScopeFactory` through the constructor when needed, and removes the now-dead captured field.
+
+---
+
+## DI022: Service Instance Reused Across Handler Invocations
+
+**What it catches:** The same capture shape as DI021, but on a sink whose concurrency is controlled by a configuration knob that cannot be proven at compile time — canonically `ServiceBusProcessor` where `MaxConcurrentCalls` comes from configuration or is left at its default of 1.
+
+**Why it matters:** If the knob is ever raised above 1 this becomes the DI021 concurrency crash. Even with sequential dispatch, one instance accumulates state across all messages: an EF Core change tracker grows without bound, and a failed `SaveChanges` poisons every subsequent message. DI022 reports at Info severity because the concurrency claim is conditional; raise it per team policy with `dotnet_diagnostic.DI022.severity = warning`. When `MaxConcurrentCalls` is a compile-time constant above 1 the diagnostic upgrades to DI021; when it is provably 1, both rules stay silent.
+
+**Code Fix:** Yes. Same scope-per-invocation rewrite as DI021.

@@ -104,6 +104,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Dependency graph correctness | `DI017` |
 | Root-provider lifetime validation | `DI019` |
 | Middleware lifetime validation | `DI020` |
+| Concurrency-unsafe captures in message handlers, timers, and parallel loops | `DI021`, `DI022` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -134,6 +135,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI018: Non-Instantiable Implementation Type](#di018-non-instantiable-implementation-type)
 - [DI019: Scoped Service Resolved From Root Provider](#di019-scoped-service-resolved-from-root-provider)
 - [DI020: Middleware Captures Scoped Service In Constructor](#di020-middleware-captures-scoped-service-in-constructor)
+- [DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations)
+- [DI022: Service Instance Reused Across Handler Invocations](#di022-service-instance-reused-across-handler-invocations)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -162,6 +165,8 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI018](#di018-non-instantiable-implementation-type) | Non-instantiable implementation type | Warning | No |
 | [DI019](#di019-scoped-service-resolved-from-root-provider) | Scoped service resolved from root provider | Warning | Yes |
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
+| [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
+| [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
 
 ---
 
@@ -933,9 +938,80 @@ public class MyMiddleware
 
 ---
 
+## DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations
+
+**What it catches:** A documented non-thread-safe service (EF Core `DbContext` and derived contexts, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their interfaces, `IDbContextTransaction`, `HttpContext`) that is created or resolved once and then captured — through a field, a closure over an outer local, or an enclosing method parameter — into a handler that a framework invokes **concurrently**:
+
+- `ServiceBusProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (when `MaxConcurrentCalls` is provably above 1)
+- `ServiceBusSessionProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (sessions are pumped concurrently by default)
+- `EventProcessorClient.ProcessEventAsync` / `ProcessErrorAsync` (partitions are processed concurrently)
+- `System.Threading.Timer` callbacks with a finite period (callbacks can overlap)
+- `System.Timers.Timer.Elapsed` (elapsed events can overlap unless `AutoReset = false` or a `SynchronizingObject` is set)
+- `Parallel.For` / `ForEach` / `ForEachAsync` / `Invoke` bodies
+
+It also catches the deferred variant: resolving from a **long-lived scope captured from outside the handler** (`_scope.ServiceProvider.GetRequiredService<AppDbContext>()` inside the handler still hands the same instance to every concurrent invocation).
+
+**Why it matters:** This is the deferred form of the captive dependency. The lifetimes can look correct — a scope was even created — but one instance is shared across overlapping invocations and fails at runtime with errors like *"A second operation was started on this context instance before a previous operation completed."* It works in dev (one message at a time) and explodes under production load.
+
+**Problem:**
+
+```csharp
+public class OrderProcessor : BackgroundService
+{
+    private readonly AppDbContext _db;                 // resolved once
+    private readonly ServiceBusSessionProcessor _processor;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _processor.ProcessMessageAsync += HandleAsync; // invoked concurrently
+        await _processor.StartProcessingAsync(stoppingToken);
+    }
+
+    private async Task HandleAsync(ProcessSessionMessageEventArgs args)
+    {
+        _db.Add(args);                 // DI021: one DbContext, N concurrent handlers
+        await _db.SaveChangesAsync();  // "A second operation was started on this context"
+    }
+}
+```
+
+**Better pattern:**
+
+```csharp
+private async Task HandleAsync(ProcessSessionMessageEventArgs args)
+{
+    await using var scope = _scopeFactory.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Add(args);
+    await db.SaveChangesAsync();
+}
+```
+
+DI021 stays quiet for handlers that already do the right thing: a scope created **inside** the handler, `IDbContextFactory<TContext>` usage, instances created inline, and handlers that explicitly serialize themselves (`lock`, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
+
+**Code Fix:** Yes. Rewrites the handler to resolve the service from a new scope per invocation, plumbs `IServiceScopeFactory` through the constructor when needed, and removes the now-dead captured field.
+
+---
+
+## DI022: Service Instance Reused Across Handler Invocations
+
+**What it catches:** The same capture shape as DI021, but on a sink whose concurrency is controlled by a configuration knob that cannot be proven at compile time — canonically `ServiceBusProcessor` where `MaxConcurrentCalls` comes from configuration or is left at its default.
+
+**Why it matters:** If the knob is ever raised above 1 this becomes the DI021 concurrency crash. Even with sequential dispatch, one instance accumulates state across all messages: an EF Core change tracker grows without bound, and a failed `SaveChanges` poisons every subsequent message. DI022 reports at **Info** severity because the concurrency claim is conditional; teams that want it louder can raise it with one line:
+
+```ini
+dotnet_diagnostic.DI022.severity = warning
+```
+
+When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnostic upgrades to DI021 (Warning). When it is provably 1, both rules stay silent.
+
+**Code Fix:** Yes. Same scope-per-invocation rewrite as DI021.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI020`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI022`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

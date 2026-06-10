@@ -102,4 +102,15 @@ public static class DiagnosticIds
     /// DI020: Middleware captures scoped dependency in constructor.
     /// </summary>
     public const string MiddlewareScopedService = "DI020";
+
+    /// <summary>
+    /// DI021: Non-thread-safe service shared across concurrent handler invocations.
+    /// </summary>
+    public const string ConcurrentHandlerSharedState = "DI021";
+
+    /// <summary>
+    /// DI022: Service instance captured once and reused across handler invocations of a
+    /// concurrency-configurable sink whose concurrency setting cannot be proven.
+    /// </summary>
+    public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 }
