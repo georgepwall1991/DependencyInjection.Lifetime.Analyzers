@@ -74,6 +74,350 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
     }
 
     [Fact]
+    public async Task Middleware_NonGenericTypeOfRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware(typeof(MyMiddleware));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_NonGenericTypeOfRegistration_ExplicitArgumentFillsScopedParameter_NoDiagnostic()
+    {
+        // The scoped-looking parameter is satisfied by the explicit UseMiddleware argument, not
+        // resolved from the container at pipeline-build time.
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(RequestDelegate next, IScopedService scoped)
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app, IScopedService preBuilt)
+                {
+                    app.UseMiddleware(typeof(MyMiddleware), preBuilt);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_KeyedScopedConstructorDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+                        namespace Microsoft.Extensions.DependencyInjection
+            {
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public class FromKeyedServicesAttribute : Attribute
+                {
+                    public object Key { get; }
+                    public FromKeyedServicesAttribute(object key) { Key = key; }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+
+                    public static IServiceCollection AddKeyedSingleton<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(
+                    RequestDelegate next,
+                    [FromKeyedServices("tenant")] IScopedService [|scoped|])
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("tenant");
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_KeyedDependency_DifferentKeyRegisteredSingleton_NoDiagnostic()
+    {
+        // The keyed lookup must match the parameter's key: the scoped registration uses another
+        // key, and the matching key is a singleton.
+        var source = Usings + """
+                        namespace Microsoft.Extensions.DependencyInjection
+            {
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public class FromKeyedServicesAttribute : Attribute
+                {
+                    public object Key { get; }
+                    public FromKeyedServicesAttribute(object key) { Key = key; }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+
+                    public static IServiceCollection AddKeyedSingleton<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(
+                    RequestDelegate next,
+                    [FromKeyedServices("global")] IScopedService scoped)
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IScopedService, ScopedService>("tenant");
+                    services.AddKeyedSingleton<IScopedService, ScopedService>("global");
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_RegisteredOnEndpointRouteBuilder_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.AspNetCore.Routing
+            {
+                public interface IEndpointRouteBuilder
+                {
+                    IEndpointRouteBuilder UseMiddleware<TMiddleware>(params object[] args);
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints)
+                {
+                    endpoints.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_ConditionalAccessRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder? app)
+                {
+                    app?.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_ExtensionMethodRegistration_ReportsDiagnostic()
+    {
+        // The real SDK ships UseMiddleware as an extension method — the receiver type comes from
+        // the reduced method's first parameter. Self-contained stubs: the builder interface
+        // declares no instance UseMiddleware, so the extension is what binds.
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using Microsoft.AspNetCore.Http;
+            using Microsoft.AspNetCore.Builder;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+                public delegate Task RequestDelegate(HttpContext context);
+            }
+
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public interface IApplicationBuilder { }
+
+                public static class UseMiddlewareExtensions
+                {
+                    public static IApplicationBuilder UseMiddleware<TMiddleware>(this IApplicationBuilder app, params object[] args) => app;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+                private readonly IScopedService _scoped;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                    _scoped = scoped;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task Middleware_WithInheritedInvokeAndScopedConstructorDependency_ReportsDiagnostic()
     {
         var source = Usings + """

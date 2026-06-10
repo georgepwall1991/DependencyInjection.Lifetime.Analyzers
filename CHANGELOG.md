@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.4] - 2026-06-10
+
+### Fixed
+
+- **DI020 explicit-argument false positive**: a scoped-typed constructor parameter satisfied by an explicit `UseMiddleware` argument (`app.UseMiddleware<MyMiddleware>(preBuilt)` / `app.UseMiddleware(typeof(MyMiddleware), preBuilt)`) was still reported, even though ActivatorUtilities binds the supplied argument and never resolves that parameter from the container. Constructor selection now threads its argument-fill map through to reporting; a parameter explicitly supplied at every registration site stays quiet, while one unfilled site still reports.
+
+### Added
+
+- **DI020 conditional-access registration**: `app?.UseMiddleware<MyMiddleware>()` on builder-typed instance members is now recognized (the receiver resolves through the enclosing conditional access). Extension-method registrations already worked through the reduced-method parameter type and are now pinned by tests.
+- **DI020 audit-gap coverage**: the 2026-06-10 health re-audit's untested paths are now all covered — non-generic `UseMiddleware(typeof(T))` (positive and explicit-argument-suppressed), keyed scoped dependencies (`[FromKeyedServices]` reporting on key match, silent for a different-key singleton), `IEndpointRouteBuilder` registrations, and the extension-method (`ReducedFrom`) receiver path.
+
 ## [2.10.3] - 2026-06-10
 
 ### Added

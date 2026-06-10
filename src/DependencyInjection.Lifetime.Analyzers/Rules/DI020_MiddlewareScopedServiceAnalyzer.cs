@@ -68,6 +68,21 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         });
     }
 
+    /// <summary>The nearest conditional access whose WhenNotNull contains the given node.</summary>
+    private static ConditionalAccessExpressionSyntax? FindOwningConditionalAccess(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull.Span.Contains(node.Span))
+            {
+                return conditionalAccess;
+            }
+        }
+
+        return null;
+    }
+
     private static bool TryGetMiddlewareUsage(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
@@ -84,9 +99,16 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         var originalSymbol = symbol.ReducedFrom ?? symbol;
         var receiverType = symbol.ReducedFrom is not null
             ? originalSymbol.Parameters.FirstOrDefault()?.Type
-            : invocation.Expression is MemberAccessExpressionSyntax memberAccess
-                ? semanticModel.GetTypeInfo(memberAccess.Expression).Type
-                : null;
+            : invocation.Expression switch
+            {
+                MemberAccessExpressionSyntax memberAccess =>
+                    semanticModel.GetTypeInfo(memberAccess.Expression).Type,
+                // app?.UseMiddleware<T>() — the receiver is the enclosing conditional access's
+                // expression.
+                MemberBindingExpressionSyntax when FindOwningConditionalAccess(invocation) is { } conditional =>
+                    semanticModel.GetTypeInfo(conditional.Expression).Type,
+                _ => null
+            };
         if (receiverType is null)
         {
             return false;
@@ -188,20 +210,29 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             // Each observed argument shape can select a different constructor, so consider them all and
             // analyze each distinct selected constructor once (so non-selectable overloads stay quiet
             // and no real capture is hidden by argument-shape ordering).
-            var selectedConstructors = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+            var selectedConstructors = new Dictionary<IMethodSymbol, List<bool[]>>(SymbolEqualityComparer.Default);
             foreach (var argumentTypes in pair.Value)
             {
                 var selected = SelectActivatedConstructor(
-                    type, argumentTypes, resolutionEngine, requestDelegateType, context.Compilation);
-                if (selected is not null)
+                    type, argumentTypes, resolutionEngine, requestDelegateType, context.Compilation, out var filled);
+                if (selected is null)
                 {
-                    selectedConstructors.Add(selected);
+                    continue;
                 }
+
+                if (!selectedConstructors.TryGetValue(selected, out var fills))
+                {
+                    fills = new List<bool[]>();
+                    selectedConstructors[selected] = fills;
+                }
+
+                fills.Add(filled);
             }
 
-            foreach (var constructor in selectedConstructors)
+            foreach (var pairSelected in selectedConstructors)
             {
-                AnalyzeConstructorDependencies(context, type, constructor, scopedGraph, requestDelegateType);
+                AnalyzeConstructorDependencies(
+                    context, type, pairSelected.Key, pairSelected.Value, scopedGraph, requestDelegateType);
             }
         }
     }
@@ -210,13 +241,24 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         INamedTypeSymbol middlewareType,
         IMethodSymbol constructor,
+        List<bool[]> argumentFills,
         ScopedDependencyGraph scopedGraph,
         INamedTypeSymbol? requestDelegateType)
     {
-        foreach (var parameter in constructor.Parameters)
+        for (var index = 0; index < constructor.Parameters.Length; index++)
         {
+            var parameter = constructor.Parameters[index];
             if (requestDelegateType is not null &&
                 SymbolEqualityComparer.Default.Equals(parameter.Type, requestDelegateType))
+            {
+                continue;
+            }
+
+            // A parameter filled by an explicit UseMiddleware argument at EVERY registration
+            // site is never resolved from the container at pipeline-build time; one unfilled
+            // site is enough to capture from DI.
+            var parameterIndex = index;
+            if (argumentFills.Count > 0 && argumentFills.All(filled => filled[parameterIndex]))
             {
                 continue;
             }
@@ -255,12 +297,15 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         ImmutableArray<ITypeSymbol?> suppliedArgumentTypes,
         DependencyResolutionEngine resolutionEngine,
         INamedTypeSymbol? requestDelegateType,
-        Compilation compilation)
+        Compilation compilation,
+        out bool[] argumentFill)
     {
         IMethodSymbol? selected = null;
+        argumentFill = System.Array.Empty<bool>();
         foreach (var constructor in ConstructorSelection.GetConstructorsToAnalyze(middlewareType))
         {
-            if (!IsConstructorSelectable(constructor, suppliedArgumentTypes, resolutionEngine, requestDelegateType, compilation))
+            if (!IsConstructorSelectable(
+                    constructor, suppliedArgumentTypes, resolutionEngine, requestDelegateType, compilation, out var filled))
             {
                 continue;
             }
@@ -268,6 +313,7 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             if (selected is null || constructor.Parameters.Length > selected.Parameters.Length)
             {
                 selected = constructor;
+                argumentFill = filled;
             }
         }
 
@@ -279,10 +325,12 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         ImmutableArray<ITypeSymbol?> suppliedArgumentTypes,
         DependencyResolutionEngine resolutionEngine,
         INamedTypeSymbol? requestDelegateType,
-        Compilation compilation)
+        Compilation compilation,
+        out bool[] argumentFill)
     {
         var parameters = constructor.Parameters;
         var filledByArgument = new bool[parameters.Length];
+        argumentFill = filledByArgument;
 
         // ActivatorUtilities binds the explicit UseMiddleware arguments to constructor parameters
         // first -- in order, to the next assignable unfilled parameter -- and only then fills the
