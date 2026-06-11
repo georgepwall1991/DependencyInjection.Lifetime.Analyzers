@@ -2258,6 +2258,46 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
 
     [Fact]
+    public async Task ScopedRegisteredType_PropertyInitializerManualConstructionCapture_NoDiagnostic()
+    {
+        // The captured instance is manually constructed in a property initializer — the
+        // scoped tier must see property EqualsValueClause initializers, not only field
+        // declarators and assignments.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class EmailSender { public void Send(object message) { } }
+
+            public class Worker
+            {
+                private EmailSender Email { get; } = new EmailSender();
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 8
+                    });
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        Email.Send(args);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<EmailSender>();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+
+    [Fact]
     public async Task ScopedRegisteredType_CastManualConstructionCapture_NoDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """

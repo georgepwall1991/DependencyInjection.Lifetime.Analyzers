@@ -184,6 +184,16 @@ public sealed class DI021_ScopePerInvocationCodeFixProvider : CodeFixProvider
             return null;
         }
 
+        // Partial types: the constructor count, the plumbing target, and the
+        // dead-field-removal reference scan all see a single declaration; a constructor or
+        // field reference in another part would make the rewrite produce a null factory at
+        // runtime or remove a still-used field. This applies even when a scope-factory
+        // field already exists — the dead-field removal still scans only one declaration.
+        if (typeSymbol.DeclaringSyntaxReferences.Length > 1)
+        {
+            return null;
+        }
+
         var existingFactory = typeSymbol.GetMembers()
             .OfType<IFieldSymbol>()
             .FirstOrDefault(f => !f.IsStatic && f.Type.ToDisplayString() == ScopeFactoryTypeName);
@@ -209,6 +219,18 @@ public sealed class DI021_ScopePerInvocationCodeFixProvider : CodeFixProvider
             }
 
             if (typeSymbol.GetMembers().Any(m => m.Name is "_scopeFactory" or "scopeFactory"))
+            {
+                return null;
+            }
+
+            // Constructor parameters and locals are not type members but collide with the
+            // plumbed `scopeFactory` parameter all the same.
+            var plumbedConstructor = declaredConstructors[0];
+            if (plumbedConstructor.ParameterList.Parameters.Any(
+                    parameter => parameter.Identifier.ValueText is "_scopeFactory" or "scopeFactory") ||
+                plumbedConstructor.Body!.DescendantNodes()
+                    .OfType<VariableDeclaratorSyntax>()
+                    .Any(declarator => declarator.Identifier.ValueText is "_scopeFactory" or "scopeFactory"))
             {
                 return null;
             }

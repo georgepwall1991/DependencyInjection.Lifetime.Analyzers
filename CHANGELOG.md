@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.6] - 2026-06-11
+
+### Fixed
+
+- **DI021 fixer non-compiling/behavior-breaking output**: plumbing `IServiceScopeFactory` into a constructor that already had a parameter or local named `scopeFactory` produced a duplicate name (non-compiling) — the collision check inspected type members only, and ctor parameters/locals are not members. Partial types are now refused outright: the constructor count, the plumbing target, and the dead-field-removal reference scan all operate on a single declaration, so a constructor or field reference in another part would leave a second construction path with a null factory or remove a still-used field.
+- **DI022 scoped-tier false positive on property initializers**: a manually constructed instance captured via a property initializer (`private EmailSender Email { get; } = new EmailSender();`) reported as a reused scoped DI instance — the single-origin scan only enumerated field declarators and assignments. Property `EqualsValueClause` initializers now participate, matching the existing field-initializer suppression.
+
 ## [2.11.5] - 2026-06-11
 
 ### Changed
