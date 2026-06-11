@@ -730,7 +730,11 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
 
     private static bool CanUseAsImplementationCandidate(INamedTypeSymbol type) =>
         IsSourceDeclared(type) &&
-        type.TypeKind is TypeKind.Class or TypeKind.Struct &&
+        // Structs violate the generic registration's class constraint and have no
+        // container-activatable constructor in the typeof form; generic definitions
+        // cannot be rendered (typeof(Repo<T>) with an undefined T does not compile).
+        type.TypeKind is TypeKind.Class &&
+        !type.IsGenericType &&
         !type.IsAbstract &&
         !type.IsStatic;
 

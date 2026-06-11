@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.4] - 2026-06-11
+
+### Fixed
+
+- **DI013 instance-registration false positive (Error severity)**: an instance argument whose declared type is a base type or interface — `IService instance = new Service(); services.AddSingleton(typeof(Service), instance);` — reported an Error on correct code, because the mismatch check judged the instance by its static type while the runtime type can be any subtype. DI013 is the package's only Error-severity rule, so zero false positives is non-negotiable: instance-backed registrations (including all `ServiceDescriptor` shapes) now report only when the runtime type is provably known — the argument is an object creation (unwrapped through parentheses and runtime-object-preserving casts, so `(IService)new Service()` is also correctly judged by its created type while user-defined conversion operators, which produce a different object, are never unwrapped), or its static type is sealed or a value type. The conservative flip side — a non-sealed-class-typed local that genuinely holds an incompatible instance — stays silent and is documented as a known false-negative direction.
+- **DI013 fixer non-compiling candidates**: the implementation-candidate scan offered generic type definitions, emitting `typeof(Repo<T>)` with an undefined `T` (non-compiling), and structs, which violate the generic registration's class constraint and have no container-activatable constructor in the typeof form. Both are now excluded from candidate offers.
+
 ## [2.11.3] - 2026-06-11
 
 ### Fixed

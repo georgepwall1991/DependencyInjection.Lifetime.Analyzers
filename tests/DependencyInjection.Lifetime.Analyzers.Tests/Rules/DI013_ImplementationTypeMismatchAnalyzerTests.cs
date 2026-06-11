@@ -835,6 +835,154 @@ public class Startup
     }
 
     [Fact]
+    public async Task InstanceRegistration_InterfaceTypedLocal_RuntimeTypeMatches_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        IService instance = new Service();
+        services.AddSingleton(typeof(Service), instance);
+    }
+}";
+        // The local's static type (IService) is not implicitly convertible to the service
+        // type (Service), but the runtime type is unknown from the static type alone —
+        // the only Error-severity rule must not fire on correct code.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InstanceRegistration_SealedTypedLocal_Mismatch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class Unrelated {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        Unrelated instance = new Unrelated();
+        {|#0:services.AddSingleton(typeof(IService), instance)|};
+    }
+}";
+        // Sealed static type: the runtime type is provably Unrelated — still an Error.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("Unrelated", "IService"));
+    }
+
+    [Fact]
+    public async Task InstanceRegistration_UpcastCreation_RuntimeTypeMatches_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(Service), (IService)new Service());
+    }
+}";
+        // The cast's static type is IService but the creation proves the runtime type
+        // is exactly Service — registration is correct.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InstanceRegistration_CastCreation_Mismatch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class WrongService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(typeof(IService), (object)new WrongService())|};
+    }
+}";
+        // Unwrapping the cast reaches the creation: runtime type provably WrongService.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("WrongService", "IService"));
+    }
+
+    [Fact]
+    public async Task InstanceRegistration_NonSealedTypedLocal_Mismatch_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class Helper {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        Helper instance = new Helper();
+        services.AddSingleton(typeof(IService), instance);
+    }
+}";
+        // Conservative: the local's static type is a non-sealed class, so a subtype
+        // implementing IService could be assigned at runtime. Error severity demands
+        // a provably-known runtime type before reporting.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InstanceRegistration_UserDefinedConversion_RuntimeTypeMatches_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class Service : IService {}
+public class Convertible
+{
+    public static explicit operator Service(Convertible value) => new Service();
+}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(IService), (Service)new Convertible());
+    }
+}";
+        // The cast invokes a user-defined conversion operator: the registered instance is the
+        // Service the operator returns, not the Convertible operand. The cast must not be
+        // unwrapped — the static type (Service) implements IService, so this is correct code.
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptor_InstanceRegistration_InterfaceTypedLocal_NoDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public class Service : IService {}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        IService instance = new Service();
+        services.Add(ServiceDescriptor.Singleton(typeof(Service), instance));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task TryAddSingleton_Valid_NoDiagnostic()
     {
         var source = Usings + @"
