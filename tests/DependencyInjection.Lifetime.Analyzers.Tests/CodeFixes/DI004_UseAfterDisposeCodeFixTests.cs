@@ -817,4 +817,309 @@ public class DI004_UseAfterDisposeCodeFixTests
                     .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed),
                 "DI004_MoveUseIntoScope");
     }
+
+    [Fact]
+    public async Task Suppress_UnbracedEmbeddedStatement_WrapsEnclosingStatement()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool flag)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    if (flag) {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool flag)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+            #pragma warning disable DI004
+                    if (flag) service.DoWork();
+            #pragma warning restore DI004
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // Wrapping the embedded statement itself would put the pragma mid-line (CS1040);
+        // the suppression must wrap the enclosing line-starting statement.
+        await CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                    .WithLocation(0)
+                    .WithArguments("service"),
+                fixedSource,
+                "DI004_Suppress");
+    }
+
+    [Fact]
+    public async Task Suppress_SingleLineBracedBlock_WrapsEnclosingStatement()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool flag)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    if (flag) { {|#0:service.DoWork()|}; }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool flag)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+            #pragma warning disable DI004
+                    if (flag) { service.DoWork(); }
+            #pragma warning restore DI004
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The hoist walks through the same-line block to the enclosing if statement.
+        await CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                    .WithLocation(0)
+                    .WithArguments("service"),
+                fixedSource,
+                "DI004_Suppress");
+    }
+
+    [Fact]
+    public async Task Suppress_SameLineSwitchLabel_WrapsSwitchStatement()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(int kind)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    switch (kind)
+                    {
+                        case 1: {|#0:service.DoWork()|}; break;
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(int kind)
+                {
+                    IMyService service;
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+            #pragma warning disable DI004
+                    switch (kind)
+                    {
+                        case 1: service.DoWork(); break;
+                    }
+            #pragma warning restore DI004
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A statement on the same line as its case label cannot carry the pragma — hoist
+        // to the switch (Codex review regression).
+        await CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+            .VerifyCodeFixAsync(
+                source,
+                CodeFixVerifier<DI004_UseAfterDisposeAnalyzer, DI004_UseAfterDisposeCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                    .WithLocation(0)
+                    .WithArguments("service"),
+                fixedSource,
+                "DI004_Suppress");
+    }
 }

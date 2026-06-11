@@ -184,7 +184,7 @@ Repository and unit-of-work abstractions are reported when their registered life
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()`, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()`, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Uses in branches mutually exclusive with the disposal — whether the dispose is explicit or a `using` statement/declaration — stay quiet, and `out` arguments are writes rather than uses (the rewritten local is fresh afterwards), while `ref` arguments still report.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -211,7 +211,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases.
+**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases. The pragma suppression always lands on a line-starting statement, so embedded unbraced statements compile.
 
 ---
 
