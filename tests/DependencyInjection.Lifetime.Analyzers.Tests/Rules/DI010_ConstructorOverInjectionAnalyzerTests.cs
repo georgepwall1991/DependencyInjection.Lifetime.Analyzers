@@ -1311,4 +1311,218 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
     }
 
     #endregion
+
+    #region Cross-File Method-Group Factories
+
+    private const string CrossFileDependencyTypes = """
+        public interface IDep1 { }
+        public class Dep1 : IDep1 { }
+        public interface IDep2 { }
+        public class Dep2 : IDep2 { }
+        public interface IDep3 { }
+        public class Dep3 : IDep3 { }
+        public interface IDep4 { }
+        public class Dep4 : IDep4 { }
+        public interface IDep5 { }
+        public class Dep5 : IDep5 { }
+
+        public interface IMyService { }
+        public class MyService : IMyService
+        {
+            public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+        }
+
+        """;
+
+    [Fact]
+    public async Task FactoryMethodGroup_DeclaredInSecondFile_ReturningOverInjectedConstruction_ReportsDiagnostic()
+    {
+        var startup = Usings + """
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(Factories.Create);
+                }
+            }
+            """;
+
+        var factories = Usings + CrossFileDependencyTypes + """
+            public static class Factories
+            {
+                public static MyService Create(IServiceProvider sp)
+                {
+                    return new MyService(
+                        (IDep1)sp.GetService(typeof(IDep1)),
+                        (IDep2)sp.GetService(typeof(IDep2)),
+                        (IDep3)sp.GetService(typeof(IDep3)),
+                        (IDep4)sp.GetService(typeof(IDep4)),
+                        (IDep5)sp.GetService(typeof(IDep5)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            [("Startup.cs", startup), ("Factories.cs", factories)],
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithSpan("Startup.cs", 12, 9, 12, 57)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task FactoryMethodGroup_DeclaredInSecondFile_ReturningActivatorUtilitiesCreateInstance_ReportsDiagnostic()
+    {
+        var startup = Usings + """
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService>(Factories.Create);
+                }
+            }
+            """;
+
+        var factories = Usings + CrossFileDependencyTypes + """
+            public static class Factories
+            {
+                public static MyService Create(IServiceProvider sp)
+                {
+                    return ActivatorUtilities.CreateInstance<MyService>(sp);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            [("Startup.cs", startup), ("Factories.cs", factories)],
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithSpan("Startup.cs", 12, 9, 12, 57)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task FactoryMethodGroup_DeclaredInSecondFile_ReturningSmallConstruction_NoDiagnostic()
+    {
+        var startup = Usings + """
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IMyService>(Factories.Create);
+                }
+            }
+            """;
+
+        var factories = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1) { }
+            }
+
+            public static class Factories
+            {
+                public static MyService Create(IServiceProvider sp)
+                {
+                    return new MyService((IDep1)sp.GetService(typeof(IDep1)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            [("Startup.cs", startup), ("Factories.cs", factories)]);
+    }
+
+    #endregion
+
+    #region Primary Constructors
+
+    [Fact]
+    public async Task PrimaryConstructor_WithFiveDependencies_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IMyService { }
+            public class MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithSpan(26, 9, 26, 52)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
+    public async Task PrimaryConstructor_WithFourDependencies_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+
+            public interface IMyService { }
+            public class MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4) : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    #endregion
 }

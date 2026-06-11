@@ -4479,6 +4479,55 @@ public class DI015_UnresolvableDependencyAnalyzerTests
 
     #endregion
 
+    #region Cross-File Method-Group Factories
+
+    [Fact]
+    public async Task FactoryMethodGroup_DeclaredInSecondFile_WithMissingDependency_ReportsDiagnostic()
+    {
+        var startup = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(Factories.Create);
+                }
+            }
+            """;
+
+        var factories = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMissingDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IMissingDependency dependency) { }
+            }
+
+            public static class Factories
+            {
+                public static MyService Create(IServiceProvider sp)
+                {
+                    return new MyService(sp.GetRequiredService<IMissingDependency>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            [("Startup.cs", startup), ("Factories.cs", factories)],
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithSpan("Factories.cs", 16, 30, 16, 73)
+                .WithArguments("IMyService", "IMissingDependency"));
+    }
+
+    #endregion
+
     private static async Task<ImmutableArray<Diagnostic>> GetDiagnosticsAsync(
         string source,
         params MetadataReference[] additionalReferences)
