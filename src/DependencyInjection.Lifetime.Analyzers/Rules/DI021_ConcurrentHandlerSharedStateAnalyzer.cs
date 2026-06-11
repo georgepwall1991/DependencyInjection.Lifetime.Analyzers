@@ -770,6 +770,28 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
         }
 
+        foreach (var property in typeDeclaration.DescendantNodes().OfType<PropertyDeclarationSyntax>())
+        {
+            if (beforePosition is { } propertyCutoff && property.SpanStart >= propertyCutoff)
+            {
+                continue;
+            }
+
+            // `public EmailSender Email { get; } = new EmailSender();` — property initializers
+            // are EqualsValueClauses on the property declaration, not variable declarators.
+            if (property.Initializer?.Value is { } propertyValue &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetDeclaredSymbol(property, context.CancellationToken), instance))
+            {
+                if (single is not null)
+                {
+                    return null;
+                }
+
+                single = propertyValue;
+            }
+        }
+
         foreach (var assignmentNode in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
             if (beforePosition is { } assignmentCutoff && assignmentNode.SpanStart >= assignmentCutoff)

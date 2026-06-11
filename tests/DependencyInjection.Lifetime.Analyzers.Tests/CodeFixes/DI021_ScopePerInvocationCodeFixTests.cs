@@ -828,4 +828,164 @@ public class DI021_ScopePerInvocationCodeFixTests
                     .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
                 EquivalenceKey);
     }
+
+    [Fact]
+    public async Task ConstructorParameterNamedScopeFactory_NoFixOffered()
+    {
+        // The single constructor already declares a parameter named `scopeFactory`:
+        // plumbing would add a duplicate parameter name, which does not compile.
+        var source = "using Azure.Messaging.ServiceBus;\n" + Usings + Stubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+                private readonly string _name;
+
+                public Worker(AppDbContext db, string scopeFactory)
+                {
+                    _db = db;
+                    _name = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
+                EquivalenceKey);
+    }
+
+    [Fact]
+    public async Task ConstructorLocalNamedScopeFactory_NoFixOffered()
+    {
+        // The single constructor declares a local named `scopeFactory`: the plumbed
+        // parameter would collide with it.
+        var source = "using Azure.Messaging.ServiceBus;\n" + Usings + Stubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    var scopeFactory = db.ToString();
+                    _ = scopeFactory;
+                    _db = db;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
+                EquivalenceKey);
+    }
+
+    [Fact]
+    public async Task PartialType_FieldReferencedInOtherPart_NoFixOffered()
+    {
+        // The dead-field-removal scan and constructor count only see the declaring part:
+        // a reference or constructor in another partial declaration would make the rewrite
+        // remove a still-used field or leave a second construction path unplumbed.
+        var source = "using Azure.Messaging.ServiceBus;\n" + Usings + Stubs + """
+            public partial class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+
+            public partial class Worker
+            {
+                public void Flush()
+                {
+                    _db.SaveChanges();
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
+                EquivalenceKey);
+    }
+
+    [Fact]
+    public async Task PartialType_WithExistingFactory_FieldReferencedInOtherPart_NoFixOffered()
+    {
+        // Even with an IServiceScopeFactory field already present, the dead-field-removal
+        // scan only sees the annotated part — refuse partials on this path too
+        // (Codex review regression).
+        var source = "using Azure.Messaging.ServiceBus;\n" + Usings + Stubs + """
+            public partial class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly AppDbContext _db;
+
+                public Worker(IServiceScopeFactory scopeFactory, AppDbContext db)
+                {
+                    _scopeFactory = scopeFactory;
+                    _db = db;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        _db.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+
+            public partial class Worker
+            {
+                public void Flush()
+                {
+                    _db.SaveChanges();
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
+                EquivalenceKey);
+    }
 }
