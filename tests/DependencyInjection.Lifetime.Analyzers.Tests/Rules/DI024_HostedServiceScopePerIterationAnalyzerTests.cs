@@ -868,6 +868,652 @@ public class DI024_HostedServiceScopePerIterationAnalyzerTests
     }
 
     [Fact]
+    public async Task ScopeField_AssignedInStartAsync_UsedInExecuteLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public override Task StartAsync(CancellationToken cancellationToken)
+                {
+                    _scope = [|_scopeFactory.CreateScope()|];
+                    return base.StartAsync(cancellationToken);
+                }
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AssignedInConstructor_UsedInExecuteLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AssignedInExecuteAsyncBeforeLoop_UsedInLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    _scope = [|_scopeFactory.CreateScope()|];
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedServiceField_ResolvedInConstructor_UsedInExecuteLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IWorker _worker;
+
+                public PollingService(IServiceProvider provider) => _worker = [|provider.GetRequiredService<IWorker>()|];
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await _worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_LazyCoalesceAssignedInStartAsync_UsedInExecuteLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public override Task StartAsync(CancellationToken cancellationToken)
+                {
+                    _scope ??= [|_scopeFactory.CreateScope()|];
+                    return base.StartAsync(cancellationToken);
+                }
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_LazyCoalesceAssignedInsideLoop_ReportsDiagnostic()
+    {
+        // ??= inside the loop creates the scope on the first iteration and reuses it forever —
+        // it is lazy hoisting, not dispose-and-recreate.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        _scope ??= [|_scopeFactory.CreateScope()|];
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_PartialClass_FieldInOtherPart_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public partial class PollingService
+            {
+                private readonly IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+            }
+
+            public partial class PollingService : BackgroundService
+            {
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_PartialClass_AcrossFiles_ReportsDiagnostic()
+    {
+        var executionPart = Usings + """
+            public partial class PollingService : BackgroundService
+            {
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        var fieldPart = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public partial class PollingService
+            {
+                private readonly IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(
+            new[] { ("/0/Test0.cs", executionPart), ("/0/Test1.cs", fieldPart) });
+    }
+
+    [Fact]
+    public async Task ScopeField_PartialClass_HelperAssignmentInOtherPart_NoDiagnostic()
+    {
+        // The helper in the other part may reassign per iteration; cross-part sites must
+        // disqualify exactly like same-part sites.
+        var source = Usings + """
+            public partial class PollingService
+            {
+                private IServiceScope _scope;
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                private void RecreateScope()
+                {
+                    _scope?.Dispose();
+                    _scope = _scopeFactory.CreateScope();
+                }
+            }
+
+            public partial class PollingService : BackgroundService
+            {
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        RecreateScope();
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AssignedOnlyAfterLoop_NoDiagnostic()
+    {
+        // The only creation runs after the loop exits; nothing hoisted feeds the loop.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope?.ServiceProvider.GetRequiredService<IWorker>();
+                        await Task.Delay(1000, stoppingToken);
+                    }
+
+                    _scope = _scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_NullClearedInStopAsync_StillReportsDiagnostic()
+    {
+        // A teardown `_scope = null` is a clear, not a competing creation; the hoisted scope
+        // still feeds every loop iteration.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+
+                public override Task StopAsync(CancellationToken cancellationToken)
+                {
+                    _scope?.Dispose();
+                    _scope = null;
+                    return base.StopAsync(cancellationToken);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_NullForgivingClearInStopAsync_StillReportsDiagnostic()
+    {
+        // `_scope = null!;` and `= default(T)` are teardown clears too.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+
+                public override Task StopAsync(CancellationToken cancellationToken)
+                {
+                    _scope?.Dispose();
+                    _scope = null!;
+                    return base.StopAsync(cancellationToken);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AssignedOnlyInStartedAsync_LoopInStartAsync_NoDiagnostic()
+    {
+        // StartedAsync runs after StartAsync completes; its creation cannot feed the
+        // StartAsync loop.
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostedLifecycleService : IHostedService
+                {
+                    Task StartingAsync(CancellationToken cancellationToken);
+                    Task StartedAsync(CancellationToken cancellationToken);
+                    Task StoppingAsync(CancellationToken cancellationToken);
+                    Task StoppedAsync(CancellationToken cancellationToken);
+                }
+            }
+
+            public class PollingService : IHostedLifecycleService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public async Task StartAsync(CancellationToken cancellationToken)
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var worker = _scope?.ServiceProvider.GetRequiredService<IWorker>();
+                        await Task.Delay(1000, cancellationToken);
+                    }
+                }
+
+                public Task StartedAsync(CancellationToken cancellationToken)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    return Task.CompletedTask;
+                }
+
+                public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_MultipleAssignments_ReportsAtTheDominatingSite()
+    {
+        // The StartedAsync assignment appears first in the file but runs after the StartAsync
+        // loop starts; the report must land on the assignment that actually feeds the loop.
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostedLifecycleService : IHostedService
+                {
+                    Task StartingAsync(CancellationToken cancellationToken);
+                    Task StartedAsync(CancellationToken cancellationToken);
+                    Task StoppingAsync(CancellationToken cancellationToken);
+                    Task StoppedAsync(CancellationToken cancellationToken);
+                }
+            }
+
+            public class PollingService : IHostedLifecycleService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public Task StartedAsync(CancellationToken cancellationToken)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    return Task.CompletedTask;
+                }
+
+                public async Task StartAsync(CancellationToken cancellationToken)
+                {
+                    _scope = [|_scopeFactory.CreateScope()|];
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(cancellationToken);
+                    }
+                }
+
+                public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+                public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_NullClearedInLoopErrorBranch_StillReportsDiagnostic()
+    {
+        // An error-branch `_scope = null` is a clear, not a per-iteration recreate; the
+        // constructor-created scope is still hoisted.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                            await worker.DoWorkAsync(stoppingToken);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            _scope = null;
+                        }
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_NullClearedBeforeLoop_NoDiagnostic()
+    {
+        // The clear runs after the creation and before the loop: the created scope instance
+        // never feeds the loop, so there is nothing hoisted to report.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = scopeFactory.CreateScope();
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    _scope.Dispose();
+                    _scope = null;
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = _scope?.ServiceProvider.GetRequiredService<IWorker>();
+                        await Task.Delay(1000, stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_ReassignedInsideLoop_NoDiagnostic()
+    {
+        // Dispose-and-recreate through a field still gives each iteration a fresh scope.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        _scope.Dispose();
+                        _scope = _scopeFactory.CreateScope();
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+
+                    _scope.Dispose();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AssignedInHelperMethod_NoDiagnostic()
+    {
+        // A helper that reassigns the field may be invoked per iteration; the assignment site
+        // is not provably hoisted, so stay silent.
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                private void RecreateScope()
+                {
+                    _scope?.Dispose();
+                    _scope = _scopeFactory.CreateScope();
+                }
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        RecreateScope();
+                        var worker = _scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceFieldWithUnknownRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IUnknownThing
+            {
+                Task RunAsync(CancellationToken token);
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IUnknownThing _thing;
+
+                public PollingService(IServiceProvider provider) => _thing = provider.GetRequiredService<IUnknownThing>();
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await _thing.RunAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeField_AllResolutionsProvenSingleton_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IClock { }
+            public class Clock : IClock { }
+
+            public static class SingletonRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IClock, Clock>();
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScope _scope;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scope = scopeFactory.CreateScope();
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var clock = _scope.ServiceProvider.GetRequiredService<IClock>();
+                        await Task.Delay(1000, stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task HoistedSingletonService_ResolvedFromInjectedProvider_NoDiagnostic()
     {
         var source = Usings + """

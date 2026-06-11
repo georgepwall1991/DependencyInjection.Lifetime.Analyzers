@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.2] - 2026-06-11
+
+### Changed
+
+- **DI024 field-stored hoisted scopes and services**: a scope created in the constructor or `StartAsync` and stored in a field, then used inside the execution loop, is the same bug as the hoisted local — worse, because the scope also outlives the method — and was previously invisible. Fields qualify only when provably hoisted: every assignment (including the field initializer) is a scope creation (or a resolution of one service type), and every assignment site lives in a field initializer, a constructor, or a hosted execution method — an assignment in any helper method or property disqualifies the field, because the helper may run per iteration. `??=` lazy initialization qualifies as a hoisted assignment, and a `??=` inside the loop reports rather than suppressing — the first iteration's scope is reused forever, which is lazy hoisting, not dispose-and-recreate. Partial hosted services are fully covered: fields, assignments, and execution methods are collected across every partial declaration (including other files), so a field in one part used by a loop in another reports, and a helper-method assignment in any part disqualifies. Teardown clears (`_scope = null`, `= null!`, `= default`, `= default(T)` in `StopAsync`) are neutral rather than disqualifying, and an assignment must dominate the loop — textually before it, or in an earlier-or-equal lifecycle stage (constructor -> StartingAsync -> StartAsync -> StartedAsync -> ExecuteAsync); a field whose only creation runs after the loop, in a later stage (StartedAsync feeding a StartAsync loop), or whose closest pre-loop write is a null clear, stays silent. With multiple assignments the diagnostic lands on the site that actually feeds the loop, and in-loop error-branch null clears do not suppress as dispose-and-recreate. Field-stored scopes share all existing suppressions (all-singleton resolutions, dispose-and-recreate reassignment inside the loop — including `this._scope = ...` — and registration gating for service fields), service fields resolved from a hoisted scope field attribute to the scope's report, and a field used by loops in multiple execution methods reports once at its creation site. `BackgroundService.StartAsync` overrides are now recognized as execution-loop entry points (the interface mapping previously only matched direct implementations).
+
 ## [2.11.1] - 2026-06-10
 
 ### Changed
