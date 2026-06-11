@@ -448,4 +448,41 @@ public class Program
 
         await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
     }
+
+    [Fact]
+    public async Task Fixes_ExplicitlyTypedInterfaceDeclaration_RewritesTypeToVar()
+    {
+        var test = @"
+using System;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        IServiceProvider provider = services.BuildServiceProvider();
+    }
+}";
+
+        var fixtest = @"
+using System;
+using Microsoft.Extensions.DependencyInjection;
+
+public class Program
+{
+    public void Main()
+    {
+        var services = new ServiceCollection();
+        using var provider = services.BuildServiceProvider();
+    }
+}";
+
+        // `using IServiceProvider provider = ...` does not compile — IServiceProvider
+        // implements neither IDisposable nor IAsyncDisposable.
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+            .WithLocation(10, 37);
+
+        await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+    }
 }

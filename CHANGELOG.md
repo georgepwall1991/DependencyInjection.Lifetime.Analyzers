@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.8] - 2026-06-11
+
+### Fixed
+
+- **DI014 tracked-local return false positive**: `var provider = services.BuildServiceProvider(); … return provider;` reported a leak — the return proof only matched the creation expression's direct return/arrow parent, but returning the tracked local is the same ownership transfer. Returns of the tracked local (parentheses and null-forgiving unwrapped) now count, guarded by the existing intervening-reassignment check so a reassigned-then-returned local still reports the first creation, and by every-path/unguarded-exit/repeated-creation checks: a return nested in a branch the creation does not share, a throw/early-exit not preceded by a dominating dispose of the local, or a creation that re-runs inside a loop the return sits after (every overwritten instance leaks) all keep the diagnostic.
+- **DI014 same-loop dispose false positive**: create-and-dispose within one loop iteration, switch section, or catch clause reported a leak (the same blind spot DI001 fixed in 2.11.7); the disposal proof now exempts constructs containing the creation, with an unguarded-exit guard so `continue`/`break` paths that skip the dispose — plus `yield` suspensions, `goto`/`goto case` jumps, and conditional `return`/`throw` exits not preceded by a dominating dispose — still report.
+- **DI014 fixer non-compiling output**: the `using`/`await using` rewrite kept explicitly declared types, so `IServiceProvider provider = services.BuildServiceProvider();` became `using IServiceProvider provider = …` — `IServiceProvider` implements neither disposal interface. The fixer now rewrites the declared type to `var` when (and only when) the type does not implement the disposal interface the pattern needs, so `ServiceProvider`-typed declarations keep their explicit type.
+
 ## [2.11.7] - 2026-06-11
 
 ### Fixed
