@@ -83,6 +83,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // Case 2b: Result is stored in a local that is later returned — the same ownership
+        // transfer as returning the creation expression directly.
+        if (IsTrackedLocalReturned(invocation, semanticModel))
+        {
+            return true;
+        }
+
         // Case 3: Result is assigned to a variable that is later disposed
         if (IsExplicitlyDisposed(invocation, semanticModel))
         {
@@ -477,10 +484,223 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                      DoStatementSyntax or
                      CatchClauseSyntax)
             {
+                // Create-and-dispose within the same iteration/section/catch is the canonical
+                // per-iteration shape: the construct re-runs creation before each dispose.
+                // HasUnguardedExitBetween separately rejects continue/break/yield/goto/
+                // return/throw paths that skip the dispose without a dominating dispose
+                // first. A dispose whose construct does not contain the creation stays
+                // rejected.
+                if (current.Span.Contains(creationSyntax.Span) &&
+                    !HasUnguardedExitBetween(creationSyntax, disposeSyntax, variableSymbol, semanticModel))
+                {
+                    current = current.Parent;
+                    continue;
+                }
+
                 return false;
             }
 
             current = current.Parent;
+        }
+
+        return true;
+    }
+
+    private static bool IsTrackedLocalReturned(IInvocationOperation invocation, SemanticModel semanticModel)
+    {
+        var creationExpression = GetCreationExpression(invocation.Syntax);
+        var assignmentTarget = GetAssignmentTarget(creationExpression, semanticModel);
+        if (assignmentTarget?.targetSymbol is not ILocalSymbol localSymbol)
+        {
+            return false;
+        }
+
+        var searchRoot = GetExecutableBoundary(creationExpression) ?? GetContainingBlock(creationExpression);
+        if (searchRoot is null)
+        {
+            return false;
+        }
+
+        foreach (var returnStatement in searchRoot.DescendantNodes().OfType<ReturnStatementSyntax>())
+        {
+            if (returnStatement.SpanStart <= creationExpression.SpanStart ||
+                !SharesExecutableBoundary(returnStatement, creationExpression))
+            {
+                continue;
+            }
+
+            var returned = returnStatement.Expression;
+            while (returned is ParenthesizedExpressionSyntax parenthesized)
+            {
+                returned = parenthesized.Expression;
+            }
+
+            while (returned is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression)
+            {
+                returned = suppression.Operand;
+            }
+
+            if (returned is not IdentifierNameSyntax identifier ||
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol, localSymbol))
+            {
+                continue;
+            }
+
+            if (HasInterveningReassignment(creationExpression, returnStatement, localSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            // Ownership transfers only when the return runs on every path after the creation:
+            // a return nested in a branch the creation does not share (if/switch/loop/catch)
+            // leaves the fall-through path holding an undisposed provider.
+            if (!ReturnIsOnEveryPathAfterCreation(returnStatement, creationExpression))
+            {
+                continue;
+            }
+
+            // An exit between creation and the return (throw, early return, goto, loop jump)
+            // can run before ownership transfers and leak the provider on that path.
+            if (HasUnguardedExitBetween(creationExpression, returnStatement, localSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            // A creation that re-runs inside a loop the return sits after leaks every
+            // overwritten instance; only the last one transfers to the caller.
+            if (CreationMayRunRepeatedlyBeforeDispose(creationExpression, returnStatement))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasUnguardedExitBetween(
+        SyntaxNode creationExpression,
+        SyntaxNode returnStatement,
+        ISymbol localSymbol,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in creationExpression.SyntaxTree.GetRoot().DescendantNodes(
+            Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(creationExpression.Span.End, returnStatement.SpanStart)))
+        {
+            if (descendant is not (ThrowStatementSyntax or ThrowExpressionSyntax or ReturnStatementSyntax
+                or GotoStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax or YieldStatementSyntax) ||
+                descendant.SpanStart <= creationExpression.Span.End ||
+                descendant.Span.End >= returnStatement.SpanStart ||
+                !SharesExecutableBoundary(descendant, creationExpression))
+            {
+                continue;
+            }
+
+            // A break/continue only bypasses the return when the construct it exits or
+            // restarts contains the return; a jump inside a nested loop the return sits
+            // after re-enters the path to the return.
+            if (descendant is ContinueStatementSyntax or BreakStatementSyntax &&
+                !JumpTargetContains(descendant, returnStatement))
+            {
+                continue;
+            }
+
+            // A dispose of the local that dominates the exit (no branch between them the
+            // exit does not share) closes ownership on that path; a dispose in an unrelated
+            // conditional branch does not guard the exit.
+            var disposedBeforeExit = false;
+            foreach (var candidate in creationExpression.SyntaxTree.GetRoot().DescendantNodes(
+                Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(creationExpression.Span.End, descendant.SpanStart)))
+            {
+                if (candidate is InvocationExpressionSyntax disposeCandidate &&
+                    candidate.Span.End <= descendant.SpanStart &&
+                    TryGetDisposedTargetSymbol(disposeCandidate, semanticModel, out var disposedSymbol) &&
+                    SymbolEqualityComparer.Default.Equals(disposedSymbol, localSymbol) &&
+                    DisposeDominatesExit(disposeCandidate, descendant, creationExpression))
+                {
+                    disposedBeforeExit = true;
+                    break;
+                }
+            }
+
+            if (!disposedBeforeExit)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool JumpTargetContains(SyntaxNode jumpStatement, SyntaxNode target)
+    {
+        for (SyntaxNode? current = jumpStatement.Parent; current is not null; current = current.Parent)
+        {
+            var isLoop = current is ForStatementSyntax or ForEachStatementSyntax or
+                         ForEachVariableStatementSyntax or WhileStatementSyntax or DoStatementSyntax;
+            var isTarget = isLoop || (jumpStatement is BreakStatementSyntax && current is SwitchStatementSyntax);
+            if (!isTarget)
+            {
+                continue;
+            }
+
+            return current.Span.Contains(target.Span);
+        }
+
+        return true;
+    }
+
+    private static bool DisposeDominatesExit(SyntaxNode disposeSyntax, SyntaxNode exitSyntax, SyntaxNode creationExpression)
+    {
+        var boundary = GetExecutableBoundary(creationExpression);
+        for (var current = disposeSyntax.Parent; current is not null && current != boundary; current = current.Parent)
+        {
+            if (current is IfStatementSyntax or
+                ElseClauseSyntax or
+                SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                if (!current.Span.Contains(exitSyntax.Span))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ReturnIsOnEveryPathAfterCreation(SyntaxNode returnStatement, SyntaxNode creationExpression)
+    {
+        var boundary = GetExecutableBoundary(creationExpression);
+        for (var current = returnStatement.Parent; current is not null && current != boundary; current = current.Parent)
+        {
+            if (current is IfStatementSyntax or
+                ElseClauseSyntax or
+                SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                if (!current.Span.Contains(creationExpression.Span))
+                {
+                    return false;
+                }
+            }
         }
 
         return true;

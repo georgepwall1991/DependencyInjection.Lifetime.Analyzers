@@ -546,7 +546,7 @@ For instance-backed registrations (`AddSingleton(typeof(IService), instance)` an
 
 ## DI014: Root Service Provider Not Disposed
 
-**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, or null-forgiven.
+**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, or null-forgiven — including a provider stored in a local and returned later (ownership transfer), and create-and-dispose within the same loop iteration, switch section, or catch clause (a `continue`/`break` that skips the dispose still reports).
 
 **Why it matters:** singleton disposables at root scope may never be cleaned up.
 
@@ -567,7 +567,7 @@ using var provider = services.BuildServiceProvider();
 var service = provider.GetRequiredService<IMyService>();
 ```
 
-**Code Fix:** Yes. Adds disposal pattern for simple local declarations with no existing manual disposal code. Conditional or otherwise partial manual-disposal flows stay diagnostic-only so the ownership rewrite remains deliberate.
+**Code Fix:** Yes. Adds disposal pattern for simple local declarations with no existing manual disposal code; declared types that do not implement the required disposal interface (e.g. `IServiceProvider`) are rewritten to `var` so the emitted `using` compiles. Conditional or otherwise partial manual-disposal flows stay diagnostic-only so the ownership rewrite remains deliberate.
 
 ---
 

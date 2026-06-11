@@ -76,12 +76,28 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         // Capture leading trivia (indentation, comments) from the start of the statement
         var leadingTrivia = localDeclaration.GetLeadingTrivia();
 
+        var originalDeclaration = localDeclaration;
+        var isAsync = IsAsyncMethod(localDeclaration);
+
+        // An explicitly typed declaration only carries using/await using when the declared
+        // type implements the required disposal interface; `IServiceProvider` implements
+        // neither, so the emitted code would not compile. Rewrite such types to var — the
+        // initializer's ServiceProvider implements both. Types that already satisfy the
+        // pattern (e.g. ServiceProvider) keep their explicit declaration.
+        if (localDeclaration.Declaration.Type is { IsVar: false } declaredType &&
+            !await DeclaredTypeSupportsDisposalAsync(document, declaredType, isAsync, cancellationToken).ConfigureAwait(false))
+        {
+            localDeclaration = localDeclaration.WithDeclaration(
+                localDeclaration.Declaration.WithType(
+                    SyntaxFactory.IdentifierName("var").WithTriviaFrom(declaredType)));
+        }
+
         // Remove leading trivia from the original statement so it doesn't end up after 'using'
         var declarationWithoutTrivia = localDeclaration.WithoutLeadingTrivia();
 
         LocalDeclarationStatementSyntax newLocalDeclaration;
 
-        if (IsAsyncMethod(localDeclaration))
+        if (isAsync)
         {
             // await using var ...
             // Apply leading trivia to 'await'
@@ -105,9 +121,38 @@ public sealed class DI014_RootProviderNotDisposedCodeFixProvider : CodeFixProvid
         // Preserve trailing trivia
         newLocalDeclaration = newLocalDeclaration.WithTrailingTrivia(localDeclaration.GetTrailingTrivia());
 
-        editor.ReplaceNode(localDeclaration, newLocalDeclaration);
+        editor.ReplaceNode(originalDeclaration, newLocalDeclaration);
 
         return editor.GetChangedDocument();
+    }
+
+    private static async Task<bool> DeclaredTypeSupportsDisposalAsync(
+        Document document,
+        TypeSyntax declaredType,
+        bool isAsync,
+        CancellationToken cancellationToken)
+    {
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (semanticModel?.GetTypeInfo(declaredType, cancellationToken).Type is not { } typeSymbol)
+        {
+            return false;
+        }
+
+        var requiredInterface = isAsync ? "System.IAsyncDisposable" : "System.IDisposable";
+        if (typeSymbol.ToDisplayString() == requiredInterface)
+        {
+            return true;
+        }
+
+        foreach (var implemented in typeSymbol.AllInterfaces)
+        {
+            if (implemented.ToDisplayString() == requiredInterface)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsAsyncMethod(SyntaxNode node)

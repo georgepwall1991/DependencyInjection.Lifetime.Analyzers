@@ -2178,4 +2178,312 @@ public class Program
 
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task TrackedLocal_ReturnedLater_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create()
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        services.AddSingleton<object>();
+        return provider;
+    }
+}";
+        // Returning the tracked local transfers ownership to the caller, exactly like
+        // returning the creation expression directly.
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_ReassignedBeforeReturn_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create()
+    {
+        var services = new ServiceCollection();
+        var provider = [|services.BuildServiceProvider()|];
+        provider = services.BuildServiceProvider();
+        return provider;
+    }
+}";
+        // The returned value is the second provider; the first creation still leaks.
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateAndDispose_InsideSameLoopIteration_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(int count)
+    {
+        var services = new ServiceCollection();
+        while (count-- > 0)
+        {
+            var provider = services.BuildServiceProvider();
+            provider.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_ContinueBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(int count)
+    {
+        var services = new ServiceCollection();
+        while (count-- > 0)
+        {
+            var provider = [|services.BuildServiceProvider()|];
+            if (count % 2 == 0)
+            {
+                continue;
+            }
+
+            provider.Dispose();
+        }
+    }
+}";
+        // The continue skips the dispose for that iteration — the same-construct
+        // exemption must not hide it.
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_ReturnedOnOneBranchOnly_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool giveAway)
+    {
+        var services = new ServiceCollection();
+        var provider = [|services.BuildServiceProvider()|];
+        if (giveAway)
+        {
+            return provider;
+        }
+
+        return null;
+    }
+}";
+        // Ownership transfers only on the returning branch; the fall-through path drops
+        // the provider undisposed (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_ThrowBeforeReturn_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool fail)
+    {
+        var services = new ServiceCollection();
+        var provider = [|services.BuildServiceProvider()|];
+        if (fail)
+        {
+            throw new InvalidOperationException();
+        }
+
+        return provider;
+    }
+}";
+        // The throw path leaks the provider before ownership transfers
+        // (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_DisposeThenThrowBeforeReturn_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool fail)
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        if (fail)
+        {
+            provider.Dispose();
+            throw new InvalidOperationException();
+        }
+
+        return provider;
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_UnrelatedConditionalDispose_ThrowBeforeReturn_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool cleanup, bool fail)
+    {
+        var services = new ServiceCollection();
+        var provider = [|services.BuildServiceProvider()|];
+        if (cleanup)
+        {
+            provider.Dispose();
+        }
+
+        if (fail)
+        {
+            throw new InvalidOperationException();
+        }
+
+        return provider;
+    }
+}";
+        // The dispose sits in a branch the throw does not share: cleanup == false &&
+        // fail == true still leaks (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_NestedLoopBreakBeforeReturn_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(int count)
+    {
+        var services = new ServiceCollection();
+        var provider = services.BuildServiceProvider();
+        for (var i = 0; i < count; i++)
+        {
+            if (i == 1)
+            {
+                break;
+            }
+        }
+
+        return provider;
+    }
+}";
+        // The break exits the nested loop only; execution still reaches the return
+        // (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TrackedLocal_AssignedInLoop_ReturnedAfterLoop_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool again)
+    {
+        var services = new ServiceCollection();
+        IServiceProvider provider = null;
+        while (again)
+        {
+            provider = [|services.BuildServiceProvider()|];
+        }
+
+        return provider;
+    }
+}";
+        // Every iteration before the last overwrites and leaks a root provider; only the
+        // final instance transfers to the caller (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInSwitchSection_GotoCaseBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(int kind)
+    {
+        var services = new ServiceCollection();
+        switch (kind)
+        {
+            case 1:
+                var provider = [|services.BuildServiceProvider()|];
+                if (kind > 0)
+                {
+                    goto default;
+                }
+
+                provider.Dispose();
+                break;
+            default:
+                break;
+        }
+    }
+}";
+        // The goto jumps past the dispose; the same-construct exemption must not hide it
+        // (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_ConditionalReturnBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(int count, bool fail)
+    {
+        var services = new ServiceCollection();
+        while (count-- > 0)
+        {
+            var provider = [|services.BuildServiceProvider()|];
+            if (fail)
+            {
+                return;
+            }
+
+            provider.Dispose();
+        }
+    }
+}";
+        // The conditional return leaks the provider before the same-iteration dispose runs
+        // (Codex review regression).
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_DisposeThenReturn_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(int count, bool fail)
+    {
+        var services = new ServiceCollection();
+        while (count-- > 0)
+        {
+            var provider = services.BuildServiceProvider();
+            if (fail)
+            {
+                provider.Dispose();
+                return;
+            }
+
+            provider.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }
