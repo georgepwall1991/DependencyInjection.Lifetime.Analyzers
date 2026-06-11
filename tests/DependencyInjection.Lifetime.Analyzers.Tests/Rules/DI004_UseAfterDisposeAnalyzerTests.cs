@@ -2747,5 +2747,828 @@ public class DI004_UseAfterDisposeAnalyzerTests
         await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    #region Using-Path Mutual Exclusivity And Out Arguments
+
+    [Fact]
+    public async Task UseInBranchOppositeUsingDeclaration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? TryGetCached() => null;
+
+                public void ProcessWork()
+                {
+                    var service = TryGetCached();
+                    if (service is null)
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        service.DoWork();
+                    }
+                    else
+                    {
+                        service.DoWork();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The else branch never sees the scope's instance — the using's dispose cannot
+        // have run on that path.
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task UseAfterIfContainingUsingDeclaration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(bool resolve)
+                {
+                    IMyService? service = null;
+                    if (resolve)
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    {|#0:service?.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The shared path after the if can hold the disposed instance — keep reporting.
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task OutArgumentRewrite_AfterDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    TryReplace(out service);
+                    service.DoWork();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // An out argument writes the local — it is not a use of the disposed instance,
+        // and the rewritten local refers to a fresh instance afterwards.
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RefArgument_AfterDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Mutate(ref IMyService service) { }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    Mutate(ref {|#0:service|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A ref argument reads the current (disposed) instance — still a use.
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task OutArgumentWithSameCallRead_AfterDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement, IMyService current)
+                {
+                    replacement = current;
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    TryReplace(out service, {|#0:service|});
+                    service.DoWork();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The out-write lands only after the call: the second argument still reads the
+        // disposed instance (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task ConditionalOutRewrite_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork(bool refresh)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    if (refresh)
+                    {
+                        TryReplace(out service);
+                    }
+
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The out-rewrite only runs on one branch; the shared-path use can still see the
+        // disposed instance (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task OutRewriteInIfCondition_SharedPathUse_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    if (TryReplace(out service))
+                    {
+                    }
+
+                    service.DoWork();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The out-call sits in the condition: it runs before any branching, so the local
+        // is rewritten on every path (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OutRewriteShortCircuitedInCondition_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork(bool refresh)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    if (refresh && TryReplace(out service))
+                    {
+                    }
+
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The short-circuited out-call may never run — the disposed instance can still
+        // reach the shared-path use (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task OutRewriteInDoWhileCondition_BreakSkipsIt_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    do
+                    {
+                        break;
+                    }
+                    while (TryReplace(out service));
+
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A break reaches the next statement without ever evaluating the do-while
+        // condition (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task CapturedDelegateInvokedAfterDominatingOutRewrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    Action handler = () => service.DoWork();
+                    scope.Dispose();
+                    TryReplace(out service);
+                    handler();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The closure observes the reassigned local: after the dominating out-rewrite the
+        // delegate sees the fresh instance (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OutRewriteInsideTryWithCatch_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    try
+                    {
+                        TryReplace(out service);
+                    }
+                    catch (Exception)
+                    {
+                    }
+
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // The out-call may throw before assigning while the catch swallows it — the later
+        // use can still see the disposed instance (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task ConditionalAccessOutRewrite_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class Rewriter
+            {
+                public bool TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return true;
+                }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork(Rewriter? maybeRewriter)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    maybeRewriter?.TryReplace(out service);
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A null receiver skips the out-assignment entirely — the disposed instance can
+        // still reach the later use (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task CoalescedOutRewrite_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public object TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return new object();
+                }
+
+                public void ProcessWork(object? maybeResult)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    _ = maybeResult ?? TryReplace(out service);
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A non-null left operand skips the coalesced rewrite (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    [Fact]
+    public async Task CoalesceAssignedOutRewrite_SharedPathUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public object TryReplace(out IMyService replacement)
+                {
+                    replacement = new MyService();
+                    return new object();
+                }
+
+                public void ProcessWork(object? maybe)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    scope.Dispose();
+                    maybe ??= TryReplace(out service);
+                    {|#0:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        // A non-null target skips the ??= right-hand side (Codex review regression).
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UseAfterScopeDisposed)
+                .WithLocation(0)
+                .WithArguments("service"));
+    }
+
+    #endregion
+
     #endregion
 }

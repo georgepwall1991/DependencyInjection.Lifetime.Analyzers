@@ -269,6 +269,12 @@ public sealed class DI004_UseAfterDisposeCodeFixProvider : CodeFixProvider
         }
 
         var sourceText = await document.GetTextAsync(cancellationToken).ConfigureAwait(false);
+
+        // A pragma directive must be the first non-whitespace token on its line: an
+        // embedded statement (`if (flag) service.DoWork();`) starts mid-line, so wrap the
+        // enclosing line-starting statement instead.
+        statement = HoistToLineStart(statement, sourceText);
+
         var leadingTrivia = statement.GetLeadingTrivia();
         var indentation = leadingTrivia.LastOrDefault(t => t.IsKind(SyntaxKind.WhitespaceTrivia));
         var newLine = GetPreferredEndOfLine(sourceText);
@@ -309,6 +315,36 @@ public sealed class DI004_UseAfterDisposeCodeFixProvider : CodeFixProvider
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         return document.WithSyntaxRoot(root.ReplaceNode(statement, newStatement));
+    }
+
+    private static StatementSyntax HoistToLineStart(StatementSyntax statement, SourceText sourceText)
+    {
+        while (true)
+        {
+            var line = sourceText.Lines.GetLineFromPosition(statement.SpanStart);
+            var prefix = sourceText.ToString(TextSpan.FromBounds(line.Start, statement.SpanStart));
+            if (string.IsNullOrWhiteSpace(prefix))
+            {
+                return statement;
+            }
+
+            switch (statement.Parent)
+            {
+                case StatementSyntax parentStatement:
+                    statement = parentStatement;
+                    continue;
+                case ElseClauseSyntax { Parent: StatementSyntax elseParent }:
+                    statement = elseParent;
+                    continue;
+                case SwitchSectionSyntax { Parent: StatementSyntax switchParent }:
+                    // `case 1: service.DoWork();` — the section is not a statement, so hoist
+                    // to the switch itself.
+                    statement = switchParent;
+                    continue;
+                default:
+                    return statement;
+            }
+        }
     }
 
     private static SyntaxTrivia GetPreferredEndOfLine(SourceText sourceText)

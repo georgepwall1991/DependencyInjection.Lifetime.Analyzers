@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.10] - 2026-06-11
+
+### Fixed
+
+- **DI004 using-path mutual-exclusivity false positive**: the 2.10.5 guard — a use only reports when some dispose site precedes it on a shared path — never ran for `using`-statement/declaration scopes, so a use in the branch opposite the `using` block still reported. Both using paths now pass their construct as the dispose site; shared-path uses after the construct keep reporting.
+- **DI004 `out`-argument false positive**: any identifier argument counted as a use regardless of ref kind, so `TryReplace(out service)` after a dispose reported — and because the out-write never cleared tracking, the false positive cascaded to every later legitimate use of the rewritten local. Out arguments are no longer uses; the tracking clear is deferred until the call completes (a same-call read like `TryReplace(out service, service)` still reports) and only applies when the out-call dominates later uses — a rewrite inside one branch keeps the shared-path use reported, while an out-call in the construct's condition (`if (TryReplace(out service))`) runs before branching and does clear — unless short-circuited behind `&&`/`||`/`??`/`??=`/`?:` or sitting in a `do-while` condition a `break` can skip. A dominating out-rewrite also releases delegates that captured the local — the closure observes the reassignment — while an out-call inside a try with catch handlers (it may throw before assigning while the catch swallows) or behind a conditional access (a null receiver skips the assignment) never dominates. `ref` arguments still report because the callee reads the current (disposed) value.
+- **DI004 fixer CS1040 on embedded statements**: the pragma suppression wrapped the diagnosed statement directly, landing `#pragma` mid-line for unbraced embedded statements (`if (flag) service.DoWork();`). The suppression now hoists to the enclosing line-starting statement, including through switch sections for same-line case-label statements (single-line braced blocks already hoisted correctly and are pinned).
+
 ## [2.11.9] - 2026-06-11
 
 ### Fixed

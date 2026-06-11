@@ -193,6 +193,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         }
 
         var usingEndPosition = usingStmt.Span.End;
+        // The using statement is the dispose site: a use in a mutually exclusive branch
+        // never sees the disposed instance.
         ReportUsageAfterPosition(
             context,
             executableBody,
@@ -200,7 +202,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             serviceVariables,
             capturedDelegateVariables,
             usingEndPosition,
-            reportedSpans);
+            reportedSpans,
+            new List<SyntaxNode> { usingStmt });
     }
 
     private static void AnalyzeUsingDeclaration(
@@ -264,6 +267,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         }
 
         var blockEndPosition = containingBlock.Span.End;
+        // The declaration's containing block is the dispose site: a use in a mutually
+        // exclusive branch never sees the disposed instance.
         ReportUsageAfterPosition(
             context,
             executableBody,
@@ -271,7 +276,8 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
             serviceVariables,
             capturedDelegateVariables,
             blockEndPosition,
-            reportedSpans);
+            reportedSpans,
+            new List<SyntaxNode> { localDecl });
     }
 
     private static void AnalyzeExplicitScopeDisposals(
@@ -365,6 +371,98 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
     /// branch containing <paramref name="dispose"/>: the opposite arm of the same if/else, or a
     /// different section of the same switch. Such a pair cannot both execute on one path.
     /// </summary>
+    private static bool OutWriteDominatesLaterUses(SyntaxNode outInvocation, SyntaxNode executableBody)
+    {
+        // A conditional out-write only refreshes the local on its own branch; the
+        // fall-through path still holds the disposed instance, so tracking is kept
+        // (the out argument itself is still never a use).
+        if (outInvocation.FirstAncestorOrSelf<StatementSyntax>() is { } containingStatement &&
+            IsShortCircuited(outInvocation, containingStatement))
+        {
+            return false;
+        }
+
+        for (SyntaxNode? current = outInvocation.Parent; current is not null && current != executableBody; current = current.Parent)
+        {
+            // An out-call inside the construct's condition runs before any branching, so it
+            // rewrites the local on every path that reaches code after the construct.
+            var conditionSpan = current switch
+            {
+                IfStatementSyntax ifStatement => ifStatement.Condition.Span,
+                WhileStatementSyntax whileStatement => whileStatement.Condition.Span,
+                SwitchStatementSyntax switchStatement => switchStatement.Expression.Span,
+                ForStatementSyntax { Condition: { } forCondition } => forCondition.Span,
+                _ => default(Microsoft.CodeAnalysis.Text.TextSpan?)
+            };
+            if (conditionSpan is { } span && span.Contains(outInvocation.Span) &&
+                !IsShortCircuited(outInvocation, current))
+            {
+                current = current.Parent is ElseClauseSyntax elseClause ? elseClause : current;
+                continue;
+            }
+
+            if (current is IfStatementSyntax or
+                ElseClauseSyntax or
+                SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ConditionalAccessExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                return false;
+            }
+
+            // Inside a try with handlers the out-call may throw before assigning while the
+            // catch swallows the exception and execution continues to the later use.
+            if (current is TryStatementSyntax tryStatement &&
+                tryStatement.Catches.Count > 0 &&
+                tryStatement.Block.Span.Contains(outInvocation.Span))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsShortCircuited(SyntaxNode outInvocation, SyntaxNode conditionOwner)
+    {
+        // The right operand of && / || (and the arms of ?:) may never evaluate, so an
+        // out-call there does not rewrite the local on every path.
+        for (SyntaxNode? current = outInvocation.Parent; current is not null && current != conditionOwner; current = current.Parent)
+        {
+            if (current is BinaryExpressionSyntax binary &&
+                (binary.IsKind(SyntaxKind.LogicalAndExpression) ||
+                 binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                 binary.IsKind(SyntaxKind.CoalesceExpression)) &&
+                binary.Right.Span.Contains(outInvocation.Span))
+            {
+                return true;
+            }
+
+            if (current is ConditionalExpressionSyntax conditional &&
+                !conditional.Condition.Span.Contains(outInvocation.Span))
+            {
+                return true;
+            }
+
+            // `maybe ??= TryReplace(out service)` skips the RHS when maybe is non-null.
+            if (current is AssignmentExpressionSyntax coalesceAssignment &&
+                coalesceAssignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                coalesceAssignment.Right.Span.Contains(outInvocation.Span))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsInMutuallyExclusiveBranch(SyntaxNode use, SyntaxNode dispose)
     {
         for (SyntaxNode? current = dispose.Parent; current is not null; current = current.Parent)
@@ -534,6 +632,10 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             if (node is InvocationExpressionSyntax invocationWithTrackedArgument)
             {
+                // The out-write only lands after the entire argument list is evaluated and
+                // the call returns, so removal is deferred: `TryReplace(out service, service)`
+                // still reads the disposed instance through its second argument.
+                List<ILocalSymbol>? rewrittenByOut = null;
                 foreach (var argument in invocationWithTrackedArgument.ArgumentList.Arguments)
                 {
                     if (argument.Expression is not IdentifierNameSyntax argumentIdentifier ||
@@ -543,7 +645,33 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
+                    // An out argument writes the local without reading the disposed
+                    // instance, and the rewritten local refers to a fresh value afterwards.
+                    if (argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword))
+                    {
+                        (rewrittenByOut ??= new List<ILocalSymbol>()).Add(argumentSymbol);
+                        continue;
+                    }
+
                     ReportDiagnostic(context, argumentIdentifier, argumentIdentifier.Identifier.Text, reportedSpans);
+                }
+
+                if (rewrittenByOut is not null && OutWriteDominatesLaterUses(invocationWithTrackedArgument, executableBody))
+                {
+                    foreach (var rewritten in rewrittenByOut)
+                    {
+                        serviceVariables.Remove(rewritten);
+
+                        // A closure observes the reassigned local, so delegates that
+                        // captured it now see the fresh instance.
+                        foreach (var staleDelegate in capturedDelegateVariables
+                                     .Where(pair => pair.Value == rewritten.Name)
+                                     .Select(pair => pair.Key)
+                                     .ToList())
+                        {
+                            capturedDelegateVariables.Remove(staleDelegate);
+                        }
+                    }
                 }
             }
 
