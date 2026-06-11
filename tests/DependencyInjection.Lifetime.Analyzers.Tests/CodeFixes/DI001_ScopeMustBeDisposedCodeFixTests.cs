@@ -764,4 +764,56 @@ public class DI001_ScopeMustBeDisposedCodeFixTests
         await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddAwaitUsing");
     }
+
+    [Fact]
+    public async Task CodeFix_AwaitUsing_ExplicitlyTypedDeclaration_RewritesTypeToVar()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    IServiceScope scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetService<object>();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopeMustBeDisposed)
+            .WithSpan(15, 31, 15, 58)
+            .WithArguments("CreateScope");
+
+        // Keeping the IServiceScope type through the CreateAsyncScope conversion produces
+        // CS8410 (AsyncServiceScope boxed to IServiceScope is not await-using-able).
+        await CodeFixVerifier<DI001_ScopeDisposalAnalyzer, DI001_ScopeMustBeDisposedCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI001_AddAwaitUsing");
+    }
 }

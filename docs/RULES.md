@@ -39,7 +39,7 @@ For the latest full rule content, see:
 
 ## DI001: Service Scope Not Disposed
 
-**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, switch section, loop, catch block, or after a branch exit that can bypass shared cleanup. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, while still reporting reassignment leaks and loop-created scopes that need per-iteration disposal.
+**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, or behind a switch section, loop, or catch block that does not also contain the creation, or after a branch exit that can bypass shared cleanup. Create-and-dispose within the same loop iteration, switch section, or catch clause — the per-message worker shape — stays quiet, but a `continue`/`break` that skips the dispose, or a `yield return`/`yield break` that can strand the scope in a never-resumed iterator, still reports. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, while still reporting reassignment leaks and loop-created scopes that need per-iteration disposal.
 
 **Why it matters:** undisposed scopes can retain scoped and transient disposable services longer than expected, causing memory and handle leaks.
 
@@ -67,7 +67,7 @@ public void Process()
 }
 ```
 
-**Code Fix:** Yes. Adds `using` / `await using` where possible.
+**Code Fix:** Yes. Adds `using` / `await using` where possible; the `await using` conversion also rewrites explicitly typed declarations to `var`, because `AsyncServiceScope` boxed to `IServiceScope` cannot be awaited-using.
 
 ---
 
