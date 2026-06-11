@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.5] - 2026-06-11
+
+### Changed
+
+- **DI024 recall: wrapper invocations, provider aliases, declare-then-assign scopes**: three canonical worker shapes were invisible. (1) `await timer.WaitForNextTickAsync(ct).ConfigureAwait(false)`, `await reader.WaitToReadAsync(ct).ConfigureAwait(false)`, and `await foreach (... in reader.ReadAllAsync(ct).ConfigureAwait(false))` / `.WithCancellation(ct)` — the loop-shape gates saw the wrapper invocation's name instead of the wrapped call, so any hosted service following the ConfigureAwait(false) library guidance lost all DI024 coverage; wrappers are now peeled before gating. (2) `var sp = scope.ServiceProvider;` — the alias local hid hoisted-scope usage; in-loop resolutions through the alias now attribute to the hoisted scope (including pre-loop service resolutions through the alias), and an alias repointed inside the loop makes its uses unattributable rather than refreshing the scope; aliases resolve after field scope symbols are known (`var sp = _scope.ServiceProvider;` over a hoisted scope field reports), and an alias binds to the creation that dominated its own declaration, so a later pre-loop reassignment or clear of the scope local does not repoint or silently drop it; the same pinning applies to pre-loop service resolutions (direct or through an alias) — the diagnostic lands on the creation that actually produced the service. (3) `IServiceScope? scope = null; try { scope = factory.CreateScope(); while (...) { ... } } finally { scope?.Dispose(); }` — the try/finally ownership pattern assigns rather than initializes, and only declarator initializers were inspected; direct pre-loop assignment statements now participate with last-write-wins semantics, which also fixes a pre-existing false positive: an initializer-created scope explicitly disposed and cleared (`scope = null`) before the loop no longer reports, because the closest pre-loop write is a clear and the created instance provably never feeds the loop. Conditional (nested) pre-loop writes never dominate, and dispose-and-recreate reassignment inside the loop suppresses as before.
+
 ## [2.11.4] - 2026-06-11
 
 ### Fixed

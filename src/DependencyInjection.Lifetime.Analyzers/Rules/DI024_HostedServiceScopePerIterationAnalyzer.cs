@@ -539,10 +539,11 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
         // Symbols holding a service resolved before the loop: symbol -> (service type, the
         // resolution invocation, the hoisted scope symbol it was resolved from, if any).
-        var serviceLocals = new Dictionary<ISymbol, (ITypeSymbol ServiceType, InvocationExpressionSyntax Invocation, ISymbol? SourceScope)>(SymbolEqualityComparer.Default);
+        var serviceLocals = new Dictionary<ISymbol, (ITypeSymbol ServiceType, InvocationExpressionSyntax Invocation, ISymbol? SourceScope, InvocationExpressionSyntax? SourceCreation, bool SourceWithinBoundary)>(SymbolEqualityComparer.Default);
 
         var methodBody = method.Body!;
         var declarations = new List<(ILocalSymbol Local, InvocationExpressionSyntax Invocation, bool WithinBoundary)>();
+        var aliasDeclarations = new List<(ILocalSymbol Local, ExpressionSyntax Receiver)>();
         foreach (var declarator in GetLocalsDeclaredBeforeLoop(methodBody, loop))
         {
             if (declarator.Initializer?.Value is not { } initializer ||
@@ -554,6 +555,14 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             var initializerInvocation = UnwrapInvocation(initializer);
             if (initializerInvocation is null)
             {
+                // `var sp = scope.ServiceProvider;` — a provider alias hides the hoisted
+                // scope behind a member-access initializer; resolve it once scope symbols
+                // are known.
+                if (initializer is MemberAccessExpressionSyntax { Name.Identifier.Text: "ServiceProvider" } aliasAccess)
+                {
+                    aliasDeclarations.Add((local, aliasAccess.Expression));
+                }
+
                 continue;
             }
 
@@ -575,6 +584,89 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             }
         }
 
+        // Declare-then-assign locals (`IServiceScope? scope = null; try { scope = factory.CreateScope(); ... }`)
+        // are written through pre-loop assignment statements rather than declarator
+        // initializers. Last pre-loop write wins: a creation makes (or refreshes) the
+        // candidate, while a null/default clear or an unrecognized value kills it — the
+        // created instance provably never feeds the loop, or can no longer be proven to.
+        var assignmentWrites = new List<(ILocalSymbol Local, int Position, InvocationExpressionSyntax? Creation, StatementSyntax Site)>();
+        foreach (var statement in GetStatementsBeforeLoop(methodBody, loop))
+        {
+            if (statement is not ExpressionStatementSyntax
+                {
+                    Expression: AssignmentExpressionSyntax
+                    {
+                        RawKind: (int)SyntaxKind.SimpleAssignmentExpression,
+                        Left: IdentifierNameSyntax assignedIdentifier,
+                        Right: { } assignedValue
+                    }
+                } ||
+                semanticModel.GetSymbolInfo(assignedIdentifier).Symbol is not ILocalSymbol assignedLocal)
+            {
+                continue;
+            }
+
+            if (UnwrapInvocation(assignedValue) is { } assignedInvocation &&
+                IsScopeCreation(assignedInvocation, semanticModel, wellKnownTypes))
+            {
+                assignmentWrites.Add((assignedLocal, statement.SpanStart, assignedInvocation, statement));
+            }
+            else if (scopeLocals.ContainsKey(assignedLocal) ||
+                     assignmentWrites.Any(write => SymbolEqualityComparer.Default.Equals(write.Local, assignedLocal)))
+            {
+                // Clear or unknown value over a known scope local.
+                assignmentWrites.Add((assignedLocal, statement.SpanStart, null, statement));
+            }
+        }
+
+        // Per-local ordered pre-loop writes (declarator creations + assignment writes): the
+        // last write decides the local's own candidacy, while provider aliases bind to the
+        // write that dominated their declaration.
+        var scopeWrites = new Dictionary<ISymbol, List<(int Position, InvocationExpressionSyntax? Creation, bool WithinBoundary)>>(SymbolEqualityComparer.Default);
+        foreach (var (local, invocation, withinBoundary) in declarations)
+        {
+            if (scopeLocals.ContainsKey(local))
+            {
+                scopeWrites[local] = new List<(int, InvocationExpressionSyntax?, bool)>
+                {
+                    (invocation.SpanStart, invocation, withinBoundary)
+                };
+            }
+        }
+
+        foreach (var (local, position, creation, site) in assignmentWrites)
+        {
+            if (!scopeWrites.TryGetValue(local, out var writes))
+            {
+                writes = new List<(int, InvocationExpressionSyntax?, bool)>();
+                scopeWrites[local] = writes;
+            }
+
+            writes.Add((position, creation, boundary == methodBody || boundary.Span.Contains(site.Span)));
+        }
+
+        foreach (var pair in scopeWrites)
+        {
+            var lastWrite = pair.Value.OrderBy(write => write.Position).Last();
+            if (lastWrite.Creation is { } creation)
+            {
+                scopeLocals[pair.Key] = creation;
+                if (lastWrite.WithinBoundary)
+                {
+                    candidateScopes.Add(pair.Key);
+                }
+                else
+                {
+                    candidateScopes.Remove(pair.Key);
+                }
+            }
+            else
+            {
+                scopeLocals.Remove(pair.Key);
+                candidateScopes.Remove(pair.Key);
+            }
+        }
+
         foreach (var pair in fields.ScopeFields)
         {
             if (TryGetDominatingAssignment(pair.Value.Sites, method, loop) is not { } index)
@@ -586,14 +678,53 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             candidateScopes.Add(pair.Key);
         }
 
+        // Provider aliases resolve after every scope symbol is known — declared locals,
+        // assigned locals, and hoisted scope fields alike. An alias binds to the creation
+        // that dominated its own declaration, not the local's final pre-loop state: a later
+        // reassignment or clear of the scope local does not repoint an already-taken alias.
+        var providerAliases = new Dictionary<ISymbol, (ISymbol ScopeSymbol, InvocationExpressionSyntax Creation, bool WithinBoundary)>(SymbolEqualityComparer.Default);
+        foreach (var (local, rawReceiver) in aliasDeclarations)
+        {
+            var receiver = UnwrapReceiver(rawReceiver);
+            if (semanticModel.GetSymbolInfo(receiver).Symbol is not { } receiverSymbol)
+            {
+                continue;
+            }
+
+            if (scopeWrites.TryGetValue(receiverSymbol, out var writes))
+            {
+                var dominating = writes
+                    .Where(write => write.Position < receiver.SpanStart)
+                    .OrderBy(write => write.Position)
+                    .Cast<(int Position, InvocationExpressionSyntax? Creation, bool WithinBoundary)?>()
+                    .LastOrDefault();
+                if (dominating is { Creation: { } aliasCreation } dominatingWrite)
+                {
+                    providerAliases[local] = (receiverSymbol, aliasCreation, dominatingWrite.WithinBoundary);
+                }
+            }
+            else if (scopeLocals.TryGetValue(receiverSymbol, out var fieldCreation) &&
+                     (fieldCreation.SyntaxTree != receiver.SyntaxTree ||
+                      !method.Span.Contains(fieldCreation.Span) ||
+                      fieldCreation.SpanStart < receiver.SpanStart))
+            {
+                // Hoisted scope fields: the dominating-assignment machinery already chose the
+                // site that feeds the loop, but the alias only sees it when that site also
+                // dominates the alias declaration — another file/method (earlier lifecycle
+                // stage) or textually before it. A same-method creation written after the
+                // alias was taken cannot be what the alias holds.
+                providerAliases[local] = (receiverSymbol, fieldCreation, true);
+            }
+        }
+
         foreach (var (local, invocation, withinBoundary) in declarations)
         {
             if (withinBoundary &&
                 !scopeLocals.ContainsKey(local) &&
                 TryGetResolution(invocation, semanticModel, out var serviceType))
             {
-                var sourceScope = FindReferencedScopeLocal(invocation, semanticModel, scopeLocals);
-                serviceLocals[local] = (serviceType, invocation, sourceScope);
+                var source = FindReferencedScopeLocal(invocation, semanticModel, scopeLocals, scopeWrites, method, providerAliases);
+                serviceLocals[local] = (serviceType, invocation, source?.Symbol, source?.Creation, source?.WithinBoundary ?? false);
             }
         }
 
@@ -606,18 +737,24 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             // Source-scope attribution was resolved at collection time with each resolution
             // site's own semantic model (sites may live in another partial declaration).
+            var fieldSourceScope = pair.Value.SiteSourceScopes?[index];
             serviceLocals[pair.Key] = (
                 pair.Value.ServiceType!,
                 pair.Value.Sites[index].Invocation!,
-                pair.Value.SiteSourceScopes?[index]);
+                fieldSourceScope,
+                fieldSourceScope is { } fieldScopeSymbol && scopeLocals.TryGetValue(fieldScopeSymbol, out var fieldScopeCreation)
+                    ? fieldScopeCreation
+                    : null,
+                true);
         }
 
-        if (candidateScopes.Count == 0 && serviceLocals.Count == 0)
+        if (candidateScopes.Count == 0 && serviceLocals.Count == 0 && providerAliases.Count == 0)
         {
             return;
         }
 
         var scopeUsage = new Dictionary<ISymbol, ScopeUsage>(SymbolEqualityComparer.Default);
+        var aliasUsage = new Dictionary<ISymbol, ScopeUsage>(SymbolEqualityComparer.Default);
         var serviceUsedInLoop = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         var reassignedInLoop = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
@@ -631,7 +768,9 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             var isScopeLocal = candidateScopes.Contains(local);
             var isServiceLocal = serviceLocals.ContainsKey(local);
-            if (!isScopeLocal && !isServiceLocal)
+            var isProviderAlias = providerAliases.TryGetValue(local, out var aliasBinding) &&
+                                  aliasBinding.WithinBoundary;
+            if (!isScopeLocal && !isServiceLocal && !isProviderAlias)
             {
                 continue;
             }
@@ -640,7 +779,8 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             {
                 // A null/default clear (error branch, teardown inside the loop) does not give
                 // the next iteration a fresh instance; only a real reassignment counts as
-                // dispose-and-recreate.
+                // dispose-and-recreate. An alias reassignment makes the alias's uses
+                // unattributable rather than refreshing the scope.
                 var assignedValue = GetEnclosingAssignmentValue(identifier);
                 if (assignedValue is null || !IsNullOrDefaultClear(assignedValue))
                 {
@@ -656,15 +796,17 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 continue;
             }
 
-            if (!scopeUsage.TryGetValue(local, out var usage))
+            var usageMap = isScopeLocal ? scopeUsage : aliasUsage;
+            if (!usageMap.TryGetValue(local, out var usage))
             {
                 usage = new ScopeUsage();
-                scopeUsage[local] = usage;
+                usageMap[local] = usage;
             }
 
             // A scope identifier used as the root of `scope.ServiceProvider.Get*Service<T>()`
-            // contributes a typed resolution; any other shape (passed to a method, disposed,
-            // provider handed elsewhere) is an opaque use.
+            // (or a provider alias used as `sp.Get*Service<T>()`) contributes a typed
+            // resolution; any other shape (passed to a method, disposed, provider handed
+            // elsewhere) is an opaque use.
             if (TryGetEnclosingResolution(identifier, semanticModel, out var resolvedType))
             {
                 usage.ResolvedTypes.Add(resolvedType);
@@ -675,12 +817,48 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             }
         }
 
+        // Alias uses attribute to the creation the alias was taken from, unless the alias
+        // itself was repointed inside the loop. When the scope local still holds that same
+        // creation, the uses merge into its usage; when a later pre-loop write repointed or
+        // cleared the local, the alias still pins the original creation and reports it
+        // directly.
+        foreach (var pair in aliasUsage)
+        {
+            if (reassignedInLoop.Contains(pair.Key))
+            {
+                continue;
+            }
+
+            var (scopeSymbol, aliasCreation, _) = providerAliases[pair.Key];
+            if (candidateScopes.Contains(scopeSymbol) &&
+                scopeLocals.TryGetValue(scopeSymbol, out var currentCreation) &&
+                currentCreation == aliasCreation)
+            {
+                if (!scopeUsage.TryGetValue(scopeSymbol, out var usage))
+                {
+                    usage = new ScopeUsage();
+                    scopeUsage[scopeSymbol] = usage;
+                }
+
+                usage.ResolvedTypes.AddRange(pair.Value.ResolvedTypes);
+                usage.HasNonResolutionUse |= pair.Value.HasNonResolutionUse;
+                continue;
+            }
+
+            hoistedScopes.Add(new HoistedScopeCandidate(
+                aliasCreation.GetLocation(),
+                loop.GetLocation(),
+                pair.Value.ResolvedTypes.ToImmutableArray(),
+                pair.Value.HasNonResolutionUse,
+                method.Identifier.Text));
+        }
+
         // Service locals used inside the loop: attribute the use to their source scope (the
         // hoisted scope is what must move), or report the hoisted service itself when it was
         // resolved from a provider that is not a hoisted scope.
         foreach (var local in serviceUsedInLoop)
         {
-            var (serviceType, invocation, sourceScope) = serviceLocals[local];
+            var (serviceType, invocation, sourceScope, sourceCreation, sourceWithinBoundary) = serviceLocals[local];
             if (reassignedInLoop.Contains(local))
             {
                 continue;
@@ -688,6 +866,28 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             if (sourceScope is not null)
             {
+                // The resolution pinned the creation that backed it. When the scope symbol
+                // still holds that creation, attribution follows the symbol; when a later
+                // pre-loop write repointed or cleared the symbol (alias-taken-then-cleared),
+                // the pinned creation still backs the service used in the loop and is
+                // reported directly.
+                if (sourceCreation is not null &&
+                    (!scopeLocals.TryGetValue(sourceScope, out var currentSourceCreation) ||
+                     currentSourceCreation != sourceCreation))
+                {
+                    if (sourceWithinBoundary)
+                    {
+                        hoistedScopes.Add(new HoistedScopeCandidate(
+                            sourceCreation.GetLocation(),
+                            loop.GetLocation(),
+                            ImmutableArray.Create(serviceType),
+                            hasNonResolutionUse: false,
+                            method.Identifier.Text));
+                    }
+
+                    continue;
+                }
+
                 if (!candidateScopes.Contains(sourceScope))
                 {
                     // The service flows from a scope hoisted above the enclosing long-running
@@ -729,16 +929,51 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         }
     }
 
+    private static ExpressionSyntax UnwrapReceiver(ExpressionSyntax expression)
+    {
+        // `scope!.ServiceProvider`, `(scope).ServiceProvider`, `((IServiceScope)scope).ServiceProvider`
+        // all alias the same scope local.
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression:
+                    expression = suppression.Operand;
+                    continue;
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
     private static InvocationExpressionSyntax? UnwrapInvocation(ExpressionSyntax expression)
     {
-        return expression switch
+        var invocation = expression switch
         {
-            InvocationExpressionSyntax invocation => invocation,
+            InvocationExpressionSyntax inner => inner,
             AwaitExpressionSyntax awaitExpression => UnwrapInvocation(awaitExpression.Expression),
             CastExpressionSyntax cast => UnwrapInvocation(cast.Expression),
             ParenthesizedExpressionSyntax parenthesized => UnwrapInvocation(parenthesized.Expression),
             _ => null
         };
+
+        // `await x.WaitForNextTickAsync(ct).ConfigureAwait(false)` and
+        // `reader.ReadAllAsync().WithCancellation(ct)`: awaitable wrappers forward the
+        // underlying operation, so peel them before any name or semantic gate sees the
+        // wrapper instead of the wrapped call.
+        while (invocation is { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "ConfigureAwait" or "WithCancellation" } wrapperAccess } &&
+               UnwrapInvocation(wrapperAccess.Expression) is { } wrapped)
+        {
+            invocation = wrapped;
+        }
+
+        return invocation;
     }
 
     private static ExpressionSyntax? GetEnclosingAssignmentValue(IdentifierNameSyntax identifier)
@@ -771,18 +1006,59 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                outerAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression);
     }
 
-    private static ISymbol? FindReferencedScopeLocal(
+    private static (ISymbol Symbol, InvocationExpressionSyntax Creation, bool WithinBoundary)? FindReferencedScopeLocal(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
-        Dictionary<ISymbol, InvocationExpressionSyntax> scopeLocals)
+        Dictionary<ISymbol, InvocationExpressionSyntax> scopeLocals,
+        Dictionary<ISymbol, List<(int Position, InvocationExpressionSyntax? Creation, bool WithinBoundary)>>? scopeWrites = null,
+        MethodDeclarationSyntax? method = null,
+        Dictionary<ISymbol, (ISymbol ScopeSymbol, InvocationExpressionSyntax Creation, bool WithinBoundary)>? providerAliases = null)
     {
         foreach (var identifier in invocation.DescendantNodes().OfType<IdentifierNameSyntax>())
         {
-            if (semanticModel.GetSymbolInfo(identifier).Symbol is { } symbol &&
-                symbol is ILocalSymbol or IFieldSymbol &&
-                scopeLocals.ContainsKey(symbol))
+            if (semanticModel.GetSymbolInfo(identifier).Symbol is not { } symbol ||
+                symbol is not (ILocalSymbol or IFieldSymbol))
             {
-                return symbol;
+                continue;
+            }
+
+            // Pin the write that dominated the resolution, not the symbol's final pre-loop
+            // state: a later clear or reassignment of the scope local does not change which
+            // scope the already-resolved service came from.
+            if (scopeWrites is not null && scopeWrites.TryGetValue(symbol, out var writes))
+            {
+                var dominating = writes
+                    .Where(write => write.Position < invocation.SpanStart)
+                    .OrderBy(write => write.Position)
+                    .Cast<(int Position, InvocationExpressionSyntax? Creation, bool WithinBoundary)?>()
+                    .LastOrDefault();
+                if (dominating is { Creation: { } pinnedCreation } dominatingWrite)
+                {
+                    return (symbol, pinnedCreation, dominatingWrite.WithinBoundary);
+                }
+
+                continue;
+            }
+
+            if (scopeLocals.TryGetValue(symbol, out var creation))
+            {
+                // Fields: bind only when the chosen creation site dominates the resolution —
+                // another file/method (earlier lifecycle stage) or textually before it.
+                if (method is null ||
+                    creation.SyntaxTree != invocation.SyntaxTree ||
+                    !method.Span.Contains(creation.Span) ||
+                    creation.SpanStart < invocation.SpanStart)
+                {
+                    return (symbol, creation, WithinBoundary: true);
+                }
+
+                continue;
+            }
+
+            if (providerAliases is not null &&
+                providerAliases.TryGetValue(symbol, out var aliasBinding))
+            {
+                return (aliasBinding.ScopeSymbol, aliasBinding.Creation, aliasBinding.WithinBoundary);
             }
         }
 
@@ -897,6 +1173,38 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                             yield return declarator;
                         }
                     }
+                }
+            }
+
+            if (current.Parent == boundary)
+            {
+                yield break;
+            }
+
+            current = current.Parent;
+        }
+    }
+
+    private static IEnumerable<StatementSyntax> GetStatementsBeforeLoop(
+        SyntaxNode boundary,
+        StatementSyntax loop)
+    {
+        // Mirror of GetLocalsDeclaredBeforeLoop: direct statements of every enclosing block
+        // that precede the loop's enclosing statement. Statements nested in earlier control
+        // flow are deliberately excluded — a conditional write does not dominate the loop.
+        SyntaxNode current = loop;
+        while (current != boundary.Parent && current.Parent is not null)
+        {
+            if (current.Parent is BlockSyntax block)
+            {
+                foreach (var statement in block.Statements)
+                {
+                    if (statement == current)
+                    {
+                        break;
+                    }
+
+                    yield return statement;
                 }
             }
 
