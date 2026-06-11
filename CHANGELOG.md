@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.7] - 2026-06-11
+
+### Fixed
+
+- **DI001 per-iteration dispose false positive**: explicit create-and-dispose inside one loop iteration, switch section, or catch clause — the canonical per-message worker shape, the very pattern DI024's dispose-and-recreate suppression honors — reported a false leak because the disposal proof unconditionally rejected those constructs. The proof now exempts constructs that contain the creation (the construct re-runs creation before each dispose, so the dispose is as reliable as straight-line code). The blanket rejection had been masking a real gap that the exemption would have exposed: `continue`/`break` between creation and dispose skip the dispose for that iteration and are now blocking exits (gated on whether the jump's target construct contains the dispose, so a `continue` in a nested loop the dispose sits after stays neutral), and `yield return`/`yield break` — which can strand the scope when an iterator is never resumed — block as well. Dispose-then-continue and the other existing exemptions are unchanged.
+- **DI001 await-using fixer CS8410**: the `await using` action on an explicitly typed `IServiceScope scope = factory.CreateScope();` declaration converted the creation to `CreateAsyncScope()` but kept the declared type; `AsyncServiceScope` boxed to `IServiceScope` is not await-using-able. The conversion now rewrites the declared type to `var`.
+
 ## [2.11.6] - 2026-06-11
 
 ### Fixed

@@ -1880,5 +1880,213 @@ public class DI001_ScopeDisposalAnalyzerTests
         await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    #region Same-Construct Create-And-Dispose
+
+    [Fact]
+    public async Task CreateAndDispose_InsideSameLoopIteration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process(int count)
+                {
+                    while (count-- > 0)
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        // The canonical per-message worker shape: each iteration creates and disposes its
+        // own scope on a straight-line path.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateAndDispose_InsideSameCatchClause_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process()
+                {
+                    try
+                    {
+                    }
+                    catch (Exception)
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetService<object>();
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateAndDispose_InsideSameSwitchSection_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process(int kind)
+                {
+                    switch (kind)
+                    {
+                        case 1:
+                            var scope = _scopeFactory.CreateScope();
+                            var service = scope.ServiceProvider.GetService<object>();
+                            scope.Dispose();
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_ContinueBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process(int count)
+                {
+                    while (count-- > 0)
+                    {
+                        var scope = [|_scopeFactory.CreateScope()|];
+                        if (count % 2 == 0)
+                        {
+                            continue;
+                        }
+
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        // `continue` between creation and dispose skips the dispose for that iteration —
+        // the same-construct exemption must not hide it.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_DisposeThenContinue_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process(int count)
+                {
+                    while (count-- > 0)
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        if (count % 2 == 0)
+                        {
+                            scope.Dispose();
+                            continue;
+                        }
+
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInLoop_NestedLoopContinue_DisposeAfterNestedLoop_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Process(int count)
+                {
+                    while (count-- > 0)
+                    {
+                        var scope = _scopeFactory.CreateScope();
+                        for (var i = 0; i < count; i++)
+                        {
+                            if (i == 1)
+                            {
+                                continue;
+                            }
+                        }
+
+                        scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        // The `continue` restarts the inner loop only; the dispose after it still runs.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateInIterator_YieldReturnBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public IEnumerable<object> Produce()
+                {
+                    var scope = [|_scopeFactory.CreateScope()|];
+                    var service = scope.ServiceProvider.GetService<object>();
+                    yield return service;
+                    scope.Dispose();
+                }
+            }
+            """;
+
+        // An early-terminated iterator never resumes past the yield, stranding the scope.
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    #endregion
+
     #endregion
 }

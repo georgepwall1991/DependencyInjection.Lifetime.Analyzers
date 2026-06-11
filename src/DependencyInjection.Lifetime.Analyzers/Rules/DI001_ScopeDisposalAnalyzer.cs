@@ -385,10 +385,22 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         foreach (var descendant in startSyntax.SyntaxTree.GetRoot().DescendantNodes(
             Microsoft.CodeAnalysis.Text.TextSpan.FromBounds(startSyntax.Span.End, endSyntax.SpanStart)))
         {
-            if (descendant is not ReturnStatementSyntax and not ThrowStatementSyntax and not ThrowExpressionSyntax and not GotoStatementSyntax)
+            if (descendant is not ReturnStatementSyntax and not ThrowStatementSyntax and not ThrowExpressionSyntax and not GotoStatementSyntax
+                and not ContinueStatementSyntax and not BreakStatementSyntax and not YieldStatementSyntax)
             {
                 continue;
             }
+
+            // `continue`/`break` only bypass the dispose when the construct they jump out of
+            // (or restart) contains it; a jump inside a nested loop the dispose sits after
+            // re-enters the path to the dispose. `yield break`, and `yield return` suspensions
+            // the caller may never resume, can both strand the scope.
+            if (descendant is ContinueStatementSyntax or BreakStatementSyntax &&
+                !JumpMayBypassDispose(descendant, endSyntax))
+            {
+                continue;
+            }
+
 
             if (!SharesExecutableBoundary(descendant, startSyntax))
             {
@@ -432,6 +444,27 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool JumpMayBypassDispose(SyntaxNode jumpStatement, SyntaxNode disposeSyntax)
+    {
+        // Find the construct the jump targets: the nearest enclosing loop for `continue`,
+        // the nearest enclosing loop or switch for `break`. The jump bypasses the dispose
+        // only when that construct contains it.
+        for (SyntaxNode? current = jumpStatement.Parent; current is not null; current = current.Parent)
+        {
+            var isLoop = current is ForStatementSyntax or ForEachStatementSyntax or
+                         ForEachVariableStatementSyntax or WhileStatementSyntax or DoStatementSyntax;
+            var isBreakTarget = isLoop || (jumpStatement is BreakStatementSyntax && current is SwitchStatementSyntax);
+            if (!isBreakTarget)
+            {
+                continue;
+            }
+
+            return current.Span.Contains(disposeSyntax.Span);
+        }
+
+        return true;
     }
 
     private static bool HasDisposeBeforeExit(
@@ -721,6 +754,16 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                      DoStatementSyntax or
                      CatchClauseSyntax)
             {
+                // Create-and-dispose within the same iteration/section/catch is the canonical
+                // per-message worker shape: the construct re-runs creation before each dispose,
+                // so the dispose is as reliable as in straight-line code. A dispose whose
+                // construct does NOT contain the creation runs conditionally and stays rejected.
+                if (current.Span.Contains(creationSyntax.Span))
+                {
+                    current = current.Parent;
+                    continue;
+                }
+
                 return false;
             }
 

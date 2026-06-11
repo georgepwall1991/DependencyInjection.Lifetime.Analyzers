@@ -197,6 +197,16 @@ public sealed class DI001_ScopeMustBeDisposedCodeFixProvider : CodeFixProvider
             newDeclaration = localDeclaration;
         }
 
+        // An explicitly typed declaration keeps its IServiceScope type through the
+        // CreateAsyncScope conversion, but AsyncServiceScope only satisfies `await using`
+        // through its own type (CS8410 when boxed to IServiceScope) — rewrite to var.
+        if (newDeclaration.Declaration.Type is { IsVar: false } declaredType)
+        {
+            newDeclaration = newDeclaration.WithDeclaration(
+                newDeclaration.Declaration.WithType(
+                    SyntaxFactory.IdentifierName("var").WithTriviaFrom(declaredType)));
+        }
+
         // Add 'await' and 'using' keywords
         var awaitKeyword = SyntaxFactory.Token(SyntaxKind.AwaitKeyword)
             .WithLeadingTrivia(leadingTrivia)
