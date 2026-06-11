@@ -49,6 +49,14 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
                 continue;
             }
 
+            // Instance registrations: the recorded type may be only the instance expression's
+            // static type (a base/interface). The runtime type could be any subtype, so an
+            // Error-severity mismatch can only be proven when the runtime type is exact.
+            if (registration.HasImplementationInstance && !registration.ImplementationInstanceTypeIsExact)
+            {
+                continue;
+            }
+
             if (!IsCompatible(context.Compilation, registration.ServiceType, registration.ImplementationType))
             {
                 var properties = ImmutableDictionary<string, string?>.Empty

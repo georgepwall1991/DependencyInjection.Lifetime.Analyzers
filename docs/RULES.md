@@ -538,7 +538,9 @@ public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 ```
 
-**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid block-contained standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation, including invalid implementation-instance registrations. Embedded single-line statement bodies stay manual unless a symbol-backed type rewrite is available.
+For instance-backed registrations (`AddSingleton(typeof(IService), instance)` and the `ServiceDescriptor` equivalents), DI013 only reports when the instance's runtime type is provably known: the argument is an object creation (even through parentheses or upcasts), or its static type is sealed or a value type. A local declared as a base type or interface stays silent — its static type says nothing about the runtime type, and DI013 is the package's only Error-severity rule, so it never reports on code that could be correct.
+
+**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid block-contained standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation, including invalid implementation-instance registrations. Embedded single-line statement bodies stay manual unless a symbol-backed type rewrite is available. Candidate suggestions never include generic type definitions or structs — both produce registrations that fail to compile or crash at resolution.
 
 ---
 

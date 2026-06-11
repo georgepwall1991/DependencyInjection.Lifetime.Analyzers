@@ -75,6 +75,16 @@ public sealed class ServiceRegistration
     public bool IsTryAdd { get; }
 
     /// <summary>
+    /// Gets whether <see cref="ImplementationType"/> is provably the runtime type for an
+    /// instance-backed registration (the instance expression is an object creation, or its
+    /// static type is sealed or a value type). When false, the recorded type is only the
+    /// instance expression's static type — the runtime type may be any subtype, so
+    /// incompatibility with the service type cannot be proven. Always true for
+    /// type-based registrations.
+    /// </summary>
+    public bool ImplementationInstanceTypeIsExact { get; }
+
+    /// <summary>
     /// Creates a new service registration.
     /// </summary>
     public ServiceRegistration(
@@ -90,7 +100,8 @@ public sealed class ServiceRegistration
         string? flowKey = null,
         int order = 0,
         bool skipIfAlreadyRegistered = false,
-        bool isTryAdd = false)
+        bool isTryAdd = false,
+        bool implementationInstanceTypeIsExact = true)
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
@@ -105,5 +116,6 @@ public sealed class ServiceRegistration
         Order = order;
         SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
         IsTryAdd = isTryAdd;
+        ImplementationInstanceTypeIsExact = implementationInstanceTypeIsExact;
     }
 }

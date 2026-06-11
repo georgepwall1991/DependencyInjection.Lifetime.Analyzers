@@ -502,6 +502,64 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
     }
 
     [Fact]
+    public async Task ReplaceImplementation_OnlyOpenGenericCandidate_OffersNoFix()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+            public class GenericService<T> : IService {}
+
+            public class Startup
+            {
+                public IServiceCollection ConfigureServices(IServiceCollection services)
+                {
+                    return {|#0:services.AddSingleton(typeof(IService), typeof(WrongService))|};
+                }
+            }
+            """;
+
+        // A generic type definition cannot be rendered as a typeof argument
+        // (typeof(GenericService<T>) does not compile with an undefined T), so it
+        // must never be offered as an implementation candidate.
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"));
+    }
+
+    [Fact]
+    public async Task ReplaceImplementation_OnlyStructCandidate_OffersNoFix()
+    {
+        var source = Usings + """
+            public interface IService {}
+            public sealed class WrongService {}
+            public struct StructService : IService {}
+
+            public class Startup
+            {
+                public IServiceCollection ConfigureServices(IServiceCollection services)
+                {
+                    return {|#0:services.AddSingleton(typeof(IService), typeof(WrongService))|};
+                }
+            }
+            """;
+
+        // A struct candidate compiles in the typeof form but crashes at container
+        // resolution (no activatable constructor) and violates the class constraint
+        // in the generic form, so it must never be offered.
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "IService"));
+    }
+
+    [Fact]
     public void FixAllProvider_IsDisabled()
     {
         var provider = new DI013_ImplementationTypeMismatchCodeFixProvider();
