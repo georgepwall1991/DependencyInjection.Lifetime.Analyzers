@@ -45,6 +45,29 @@ internal static class FactoryAnalysis
         }
     }
 
+    /// <summary>
+    /// Resolves the semantic model that owns <paramref name="node"/>. Method-group factories
+    /// resolve to bodies declared in other files, so nodes produced by factory analysis must
+    /// never be queried against the registration site's model.
+    /// </summary>
+    public static SemanticModel? GetSemanticModelForNode(SyntaxNode node, SemanticModel semanticModel)
+    {
+        if (node.SyntaxTree == semanticModel.SyntaxTree)
+        {
+            return semanticModel;
+        }
+
+        var compilation = semanticModel.Compilation;
+        if (!compilation.ContainsSyntaxTree(node.SyntaxTree))
+        {
+            return null;
+        }
+
+        #pragma warning disable RS1030
+        return compilation.GetSemanticModel(node.SyntaxTree);
+        #pragma warning restore RS1030
+    }
+
     public static bool TryGetActivatorUtilitiesImplementationType(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,

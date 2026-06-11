@@ -78,8 +78,16 @@ internal static class FactoryDependencyAnalysis
 
         foreach (var invocation in FactoryAnalysis.GetFactoryInvocations(factoryExpression, semanticModel))
         {
-            if (TryCreateRequiredServiceRequest(invocation, semanticModel, wellKnownTypes, keyContext, out var request) ||
-                TryCreateActivatorUtilitiesRequest(invocation, semanticModel, out request))
+            // Method-group factories yield invocations from bodies declared in other files;
+            // querying them against the registration site's model throws (AD0001).
+            var invocationModel = FactoryAnalysis.GetSemanticModelForNode(invocation, semanticModel);
+            if (invocationModel is null)
+            {
+                continue;
+            }
+
+            if (TryCreateRequiredServiceRequest(invocation, invocationModel, wellKnownTypes, keyContext, out var request) ||
+                TryCreateActivatorUtilitiesRequest(invocation, invocationModel, out request))
             {
                 if (seenRequests.Add(new DependencyRequestKey(request)))
                 {

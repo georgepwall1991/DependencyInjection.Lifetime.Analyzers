@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.3] - 2026-06-11
+
+### Fixed
+
+- **Cross-file method-group factory crash (AD0001)**: a factory registered as a method group declared in another file — `services.AddSingleton<IMyService>(Factories.Create)` with `Factories` in a second file — crashed DI010 with `ArgumentException: Syntax node is not within syntax tree`, and an AD0001 analyzer crash kills every diagnostic for the compilation. Factory analysis follows the method group's declaration into the declaring file's syntax tree, but the resolved body nodes were then queried against the registration site's semantic model. DI010's factory return analysis and the shared factory dependency-request walk (consumed by DI015, DI017, and the scoped dependency graph) now resolve the semantic model that owns each foreign node, so cross-file method-group factories are analyzed correctly instead of crashing: DI010 reports over-injected constructors and DI015 reports missing dependencies through factory bodies declared in other files. C# 12 primary-constructor services were also pinned with regression tests (constructor selection already handled the synthesized primary constructor).
+
 ## [2.11.2] - 2026-06-11
 
 ### Changed

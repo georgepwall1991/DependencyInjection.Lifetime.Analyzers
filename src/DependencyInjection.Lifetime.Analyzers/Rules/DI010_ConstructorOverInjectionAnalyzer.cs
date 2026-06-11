@@ -139,9 +139,17 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        // Method-group factories resolve to bodies declared in other files; querying the
+        // registration site's model with that foreign node throws (AD0001).
+        var returnExpressionModel = FactoryAnalysis.GetSemanticModelForNode(returnExpression, semanticModel);
+        if (returnExpressionModel is null)
+        {
+            return;
+        }
+
         if (TryGetConstructedImplementationFromExpression(
                 returnExpression,
-                semanticModel,
+                returnExpressionModel,
                 out var constructor,
                 out var implementationType))
         {
@@ -157,7 +165,7 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
 
         if (!TryGetActivatorUtilitiesImplementationFromExpression(
                 returnExpression,
-                semanticModel,
+                returnExpressionModel,
                 out implementationType))
         {
             return;

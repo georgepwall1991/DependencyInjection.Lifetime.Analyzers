@@ -445,7 +445,7 @@ public sealed class ReportingService
 
 **Better pattern:** split into focused collaborators and inject smaller abstractions.
 
-For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories.
+For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor — including C# 12 primary constructors. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories. Method-group factories work across files: `services.AddScoped<IMyService>(Factories.Create)` is analyzed through the factory body even when `Factories` is declared in another file.
 
 By default, DI010 reports when a constructor has more than `4` meaningful dependencies. It ignores primitives/value types, optional parameters, provider-plumbing types already covered by `DI011`, and common framework abstractions such as `ILogger<T>`, `IOptions<T>`, and `IConfiguration`.
 
