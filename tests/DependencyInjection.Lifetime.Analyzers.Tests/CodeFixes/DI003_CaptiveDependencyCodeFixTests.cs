@@ -777,4 +777,143 @@ public class DI003_CaptiveDependencyCodeFixTests
         await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, expected, "DI003_ChangeToScoped");
     }
+
+    [Fact]
+    public async Task CodeFix_ResolutionWrappedInHelperWithLifetimeToken_TargetsRegistrationNotHelper()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public static class Mappers
+            {
+                public static IScopedService MapScopedValue(IScopedService value) => value;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService(Mappers.MapScopedValue({|#0:sp.GetRequiredService<IScopedService>()|})));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public static class Mappers
+            {
+                public static IScopedService MapScopedValue(IScopedService value) => value;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddScoped<ISingletonService>(
+                        sp => new SingletonService(Mappers.MapScopedValue(sp.GetRequiredService<IScopedService>())));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithLocation(0)
+            .WithArguments("ISingletonService", "scoped", "IScopedService");
+
+        // The ancestor walk must not mistake the user helper (its name contains a
+        // lifetime token) for the registration — only MEDI registration methods may be
+        // rewritten.
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
+
+    [Fact]
+    public async Task CodeFix_HelperInMediNamespaceWithLifetimeToken_TargetsRegistrationNotHelper()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class UserMappers
+                {
+                    public static T MapScopedValue<T>(T value) => value;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => new SingletonService(UserMappers.MapScopedValue({|#0:sp.GetRequiredService<IScopedService>()|})));
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class UserMappers
+                {
+                    public static T MapScopedValue<T>(T value) => value;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddScoped<ISingletonService>(
+                        sp => new SingletonService(UserMappers.MapScopedValue(sp.GetRequiredService<IScopedService>())));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+            .WithLocation(0)
+            .WithArguments("ISingletonService", "scoped", "IScopedService");
+
+        // Declaring a helper inside the MEDI namespace must not make it a rewrite target
+        // (Codex review regression).
+        await CodeFixVerifier<DI003_CaptiveDependencyAnalyzer, DI003_CaptiveDependencyCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI003_ChangeToScoped");
+    }
 }

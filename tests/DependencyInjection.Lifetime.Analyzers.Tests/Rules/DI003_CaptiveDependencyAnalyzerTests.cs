@@ -4558,4 +4558,634 @@ public class DI003_CaptiveDependencyAnalyzerTests
         test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
         return test;
     }
+
+    [Fact]
+    public async Task Factory_ResolvingFromOwnDisposedScope_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = scope.ServiceProvider.GetRequiredService<IScopedService>();
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // The factory creates and disposes its own scope for one-time scoped setup: the
+        // resolved instance does not outlive the factory call, so nothing is captive.
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Factory_ResolvingFromOwnUndisposedScope_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // Without a disposal proof the scope (and its scoped instance) lives as long as
+        // the singleton — stay conservative and keep reporting.
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnDisposedScope_InstanceEscapesIntoProduct_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed);
+                    });
+                }
+            }
+            """;
+
+        // The scoped instance itself escapes into the singleton (and is now tied to a
+        // disposed scope) — still captive (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnScope_ConditionalDisposeOnly_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool condition)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateScope();
+                        if (condition)
+                        {
+                            scope.Dispose();
+                        }
+
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // The dispose sits behind a branch the resolution does not share — there is still
+        // a path with an undisposed factory scope (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnDisposedScope_MethodGroupEscapes_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { void DoWork(); }
+            public class ScopedService : IScopedService { public void DoWork() { } }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Action work) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed.DoWork);
+                    });
+                }
+            }
+            """;
+
+        // The method group captures the scoped instance as the delegate target — the
+        // instance escapes (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnScope_UnawaitedDisposeAsync_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateAsyncScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        _ = scope.DisposeAsync();
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // A fire-and-forget DisposeAsync is not a reliable disposal proof
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnDisposedScope_ClosureCapturesInstance_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Func<string> configProvider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(() => seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // The nested lambda captures the scoped instance in a closure the singleton keeps
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnScope_DisposedBeforeUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        scope.Dispose();
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // The derived value is read after the scope is disposed — not a safe one-time
+        // setup (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnScope_EarlyReturnBeforeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool cached)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        var config = seed.Config;
+                        if (cached)
+                        {
+                            return new SingletonService(config);
+                        }
+
+                        scope.Dispose();
+                        return new SingletonService(config);
+                    });
+                }
+            }
+            """;
+
+        // The early return leaves the scope undisposed on that path
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_NestedLambdaResolvesFromOuterScope_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Func<string> configProvider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        return new SingletonService(
+                            () => {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|}.Config);
+                    });
+                }
+            }
+            """;
+
+        // The nested lambda resolves from the outer factory's scope after that scope is
+        // disposed — not one-time setup (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnDisposedScope_InlineMethodGroupEscapes_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { void DoWork(); }
+            public class ScopedService : IScopedService { public void DoWork() { } }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(Action work) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        return new SingletonService({|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|}.DoWork);
+                    });
+                }
+            }
+            """;
+
+        // The inline method group captures the scoped instance as delegate target
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_OwnScope_TryFinallyDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        var scope = sp.CreateScope();
+                        try
+                        {
+                            var seed = scope.ServiceProvider.GetRequiredService<IScopedService>();
+                            return new SingletonService(seed.Config);
+                        }
+                        finally
+                        {
+                            scope.Dispose();
+                        }
+                    });
+                }
+            }
+            """;
+
+        // The finally always runs: the return inside the try cannot bypass the dispose
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Factory_OwnDisposedScope_MethodReturningInstance_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { IScopedService GetSelf(); }
+            public class ScopedService : IScopedService { public IScopedService GetSelf() => this; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed.GetSelf());
+                    });
+                }
+            }
+            """;
+
+        // A reference-typed member result may carry the scoped instance onward — only
+        // value-type/string derived values are provably safe (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_UsingVarScope_EarlyDisposeBeforeUse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope();
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        scope.Dispose();
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // The redundant early Dispose runs before the derived value is read — the service
+        // is consumed from a disposed scope even though it is also a `using var`
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task Factory_CustomCreateScopeExtension_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class CustomScopeExtensions
+                {
+                    public static IServiceScope CreateScope(this IServiceProvider provider, string tag) =>
+                        provider.CreateScope();
+                }
+            }
+
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(sp =>
+                    {
+                        using var scope = sp.CreateScope("setup");
+                        var seed = {|#0:scope.ServiceProvider.GetRequiredService<IScopedService>()|};
+                        return new SingletonService(seed.Config);
+                    });
+                }
+            }
+            """;
+
+        // A user CreateScope overload is not the framework scope-creation surface — its
+        // wrapper semantics are unknown, so the suppression must not apply
+        // (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task MethodGroupFactory_OwnDisposedScope_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { string Config { get; } }
+            public class ScopedService : IScopedService { public string Config => ""; }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string config) { }
+            }
+
+            public static class Factories
+            {
+                public static ISingletonService Create(IServiceProvider sp)
+                {
+                    using var scope = sp.CreateScope();
+                    var seed = scope.ServiceProvider.GetRequiredService<IScopedService>();
+                    return new SingletonService(seed.Config);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<ISingletonService>(Factories.Create);
+                }
+            }
+            """;
+
+        // The same own-disposed-scope one-time setup applies when the factory is a method
+        // group (Codex review regression).
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

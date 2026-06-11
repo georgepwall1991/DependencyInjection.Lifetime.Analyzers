@@ -402,8 +402,13 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
     {
         lifetime = default;
 
+        // The lifetime-token name scan alone would also match user methods that merely
+        // contain "Singleton"/"Scoped"/"Transient" (e.g. a MapScopedValue helper in the
+        // diagnostic's ancestor chain); only methods on the MEDI registration surface may
+        // become rewrite targets.
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
-            TryGetLifetimeToken(memberAccess.Name, out lifetime))
+            TryGetLifetimeToken(memberAccess.Name, out lifetime) &&
+            IsKnownRegistrationMethod(invocation, semanticModel))
         {
             return true;
         }
@@ -412,10 +417,13 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
         // method name through a MemberBindingExpressionSyntax instead of a
         // MemberAccessExpressionSyntax.
         if (invocation.Expression is MemberBindingExpressionSyntax memberBinding &&
-            TryGetLifetimeToken(memberBinding.Name, out lifetime))
+            TryGetLifetimeToken(memberBinding.Name, out lifetime) &&
+            IsKnownRegistrationMethod(invocation, semanticModel))
         {
             return true;
         }
+
+        lifetime = default;
 
         if (!IsAddStyleRegistrationInvocation(invocation.Expression))
         {
@@ -513,6 +521,36 @@ public sealed class DI003_CaptiveDependencyCodeFixProvider : CodeFixProvider
     {
         lifetime = value;
         return true;
+    }
+
+    private static bool IsKnownRegistrationMethod(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
+        {
+            return false;
+        }
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        var containingType = sourceMethod.ContainingType;
+        if (containingType is null)
+        {
+            return false;
+        }
+
+        // User helpers are often declared inside the Microsoft.Extensions.DependencyInjection
+        // namespace for extension discoverability, so the namespace alone is not enough —
+        // only the framework's own registration types qualify.
+        if (containingType.Name is not ("ServiceDescriptor" or
+            "ServiceCollectionServiceExtensions" or
+            "ServiceCollectionDescriptorExtensions" or
+            "ServiceCollectionHostedServiceExtensions"))
+        {
+            return false;
+        }
+
+        var containingNamespace = containingType.ContainingNamespace?.ToDisplayString();
+        return containingNamespace == "Microsoft.Extensions.DependencyInjection" ||
+               containingNamespace?.StartsWith("Microsoft.Extensions.DependencyInjection.", System.StringComparison.Ordinal) == true;
     }
 
     private static bool TryGetLifetimeToken(SimpleNameSyntax nameSyntax, out LifetimeKind lifetime)

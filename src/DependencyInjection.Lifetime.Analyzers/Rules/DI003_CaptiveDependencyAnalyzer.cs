@@ -214,6 +214,19 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            // A factory that creates and disposes its own scope performs one-time scoped
+            // setup: the resolved instance does not outlive the factory call, so nothing is
+            // captured by the longer-lived registration. The suppression requires both a
+            // disposal proof for the scope and a non-escape proof for the resolved instance
+            // (derived values like `seed.Config` may flow into the product; the instance
+            // itself may not). Undisposed factory scopes stay reported — they (and their
+            // scoped instances) live as long as the product.
+            if (IsResolutionFromFactoryOwnedDisposedScope(invocation, factory, invocationSemanticModel) &&
+                !ResolvedInstanceEscapesFactory(invocation, GetFactoryAnalysisContainer(invocation, factory), invocationSemanticModel))
+            {
+                continue;
+            }
+
             object? key = null;
             bool isKeyed = false;
             if (isKeyedResolution)
@@ -255,6 +268,404 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                 isKeyed,
                 reportedDiagnostics);
         }
+    }
+
+    private static bool IsResolutionFromFactoryOwnedDisposedScope(
+        InvocationExpressionSyntax resolution,
+        ExpressionSyntax factoryExpression,
+        SemanticModel semanticModel)
+    {
+        if (resolution.Expression is not MemberAccessExpressionSyntax resolutionAccess)
+        {
+            return false;
+        }
+
+        // Method-group factories resolve inside the target method's body in another part
+        // of the tree; analyze within that body rather than the registration-site
+        // expression.
+        var factory = GetFactoryAnalysisContainer(resolution, factoryExpression);
+
+        // A resolution inside a nested lambda/local function runs after the factory body
+        // completes — by then the factory's own scope is disposed, and the delegate
+        // captures it. Only same-execution-context resolutions qualify as one-time setup.
+        if (IsInsideNestedFunction(resolution, factory))
+        {
+            return false;
+        }
+
+
+        // `scope.ServiceProvider.Get*Service<T>()` — unwrap the provider hop.
+        var scopeExpression = resolutionAccess.Expression;
+        if (scopeExpression is MemberAccessExpressionSyntax { Name.Identifier.Text: "ServiceProvider" } providerAccess)
+        {
+            scopeExpression = providerAccess.Expression;
+        }
+
+        while (scopeExpression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            scopeExpression = parenthesized.Expression;
+        }
+
+        while (scopeExpression is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression)
+        {
+            scopeExpression = suppression.Operand;
+        }
+
+        if (scopeExpression is not IdentifierNameSyntax scopeIdentifier ||
+            semanticModel.GetSymbolInfo(scopeIdentifier).Symbol is not ILocalSymbol scopeLocal ||
+            scopeLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax declarator ||
+            !factory.Span.Contains(declarator.Span) ||
+            declarator.Initializer?.Value is not { } initializer)
+        {
+            return false;
+        }
+
+        var creation = UnwrapToInvocation(initializer);
+        if (creation is null || !IsScopeCreationInvocation(creation, semanticModel))
+        {
+            return false;
+        }
+
+        // Any explicit dispose of the scope before the last use of the resolved value means
+        // the service is consumed from an already-disposed scope — never a safe setup, no
+        // matter how the scope is otherwise disposed (including a redundant early Dispose
+        // on a `using var` scope).
+        var lastUsePosition = GetLastResolvedUsePosition(resolution, factory, semanticModel);
+        foreach (var earlyCandidate in factory.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (earlyCandidate.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Dispose" or "DisposeAsync" } earlyAccess &&
+                earlyAccess.Expression is IdentifierNameSyntax earlyIdentifier &&
+                earlyCandidate.SpanStart < lastUsePosition &&
+                !IsInsideNestedFunction(earlyCandidate, factory) &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(earlyIdentifier).Symbol, scopeLocal))
+            {
+                return false;
+            }
+        }
+
+        // Disposal proof: `using var scope = ...`, `using (var scope = ...)`, or an explicit
+        // scope.Dispose()/DisposeAsync() inside the factory.
+        if (declarator.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>() is { } declarationStatement &&
+            declarationStatement.UsingKeyword != default)
+        {
+            return true;
+        }
+
+        if (declarator.FirstAncestorOrSelf<UsingStatementSyntax>() is { } usingStatement &&
+            usingStatement.Declaration?.Variables.Contains(declarator) == true)
+        {
+            return true;
+        }
+
+        // The explicit dispose must run after the resolution and after every use of the
+        // resolved value: a scope disposed before (or between) uses is not a safe one-time
+        // setup — the service is consumed from an already-disposed scope.
+        foreach (var candidate in factory.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (candidate.Expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Dispose" or "DisposeAsync" } disposeAccess &&
+                disposeAccess.Expression is IdentifierNameSyntax disposedIdentifier &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(disposedIdentifier).Symbol, scopeLocal) &&
+                candidate.SpanStart >= lastUsePosition &&
+                (disposeAccess.Name.Identifier.Text != "DisposeAsync" || IsAwaited(candidate)) &&
+                ExplicitDisposeDominatesResolution(candidate, resolution, factory) &&
+                !HasExitBetween(resolution, candidate, factory))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int GetLastResolvedUsePosition(
+        InvocationExpressionSyntax resolution,
+        SyntaxNode factory,
+        SemanticModel semanticModel)
+    {
+        var lastPosition = resolution.Span.End;
+
+        var current = (ExpressionSyntax)resolution;
+        while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax ||
+               current.Parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+        {
+            current = (ExpressionSyntax)current.Parent;
+        }
+
+        if (current.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } &&
+            semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol resolvedLocal)
+        {
+            foreach (var identifier in factory.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (identifier.SpanStart > declarator.Span.End &&
+                    identifier.Span.End > lastPosition &&
+                    SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(identifier).Symbol, resolvedLocal))
+                {
+                    lastPosition = identifier.Span.End;
+                }
+            }
+        }
+
+        return lastPosition;
+    }
+
+    private static bool HasExitBetween(SyntaxNode start, SyntaxNode end, SyntaxNode factory)
+    {
+        // A return/throw/jump between the resolution and the dispose means a path exists
+        // on which the factory finishes with the scope undisposed.
+        foreach (var descendant in factory.DescendantNodes())
+        {
+            if (descendant is not (ReturnStatementSyntax or ThrowStatementSyntax or ThrowExpressionSyntax
+                or GotoStatementSyntax or ContinueStatementSyntax or BreakStatementSyntax) ||
+                descendant.SpanStart <= start.Span.End ||
+                descendant.Span.End >= end.SpanStart ||
+                IsInsideNestedFunction(descendant, factory))
+            {
+                continue;
+            }
+
+            // An exit inside a try whose finally performs the dispose cannot bypass it —
+            // finally always runs (`try { ... return ...; } finally { scope.Dispose(); }`).
+            var guardedByFinally = false;
+            for (SyntaxNode? current = descendant.Parent; current is not null && current != factory; current = current.Parent)
+            {
+                if (current is TryStatementSyntax { Finally.Block: { } finallyBlock } &&
+                    finallyBlock.Span.Contains(end.Span))
+                {
+                    guardedByFinally = true;
+                    break;
+                }
+            }
+
+            if (guardedByFinally)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsInsideNestedFunction(SyntaxNode node, SyntaxNode factory)
+    {
+        for (SyntaxNode? current = node.Parent; current is not null && current != factory; current = current.Parent)
+        {
+            if (current is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAwaited(InvocationExpressionSyntax invocation)
+    {
+        SyntaxNode current = invocation;
+        while (current.Parent is ParenthesizedExpressionSyntax parenthesized)
+        {
+            current = parenthesized;
+        }
+
+        return current.Parent is AwaitExpressionSyntax;
+    }
+
+    private static bool IsMethodGroupUse(MemberAccessExpressionSyntax memberAccess, SemanticModel semanticModel)
+    {
+        // `seed.DoWork` handed somewhere as a delegate captures the instance as the
+        // delegate target — that is the instance escaping, not a derived value.
+        if (memberAccess.Parent is InvocationExpressionSyntax invocation && invocation.Expression == memberAccess)
+        {
+            return false;
+        }
+
+        var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
+        return symbolInfo.Symbol is IMethodSymbol ||
+               symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().Any();
+    }
+
+    private static bool ExplicitDisposeDominatesResolution(
+        InvocationExpressionSyntax disposeInvocation,
+        InvocationExpressionSyntax resolution,
+        SyntaxNode factory)
+    {
+        // The explicit dispose only proves cleanup when it runs on every path the
+        // resolution runs on: not inside a nested lambda/local function (which may never
+        // execute), and not behind a branch the resolution does not share. `finally`
+        // clauses pass — they always run.
+        for (SyntaxNode? current = disposeInvocation.Parent; current is not null && current != factory; current = current.Parent)
+        {
+            if (current is LambdaExpressionSyntax or AnonymousMethodExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return false;
+            }
+
+            if (current is IfStatementSyntax or
+                ElseClauseSyntax or
+                SwitchStatementSyntax or
+                SwitchSectionSyntax or
+                ConditionalExpressionSyntax or
+                ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax or
+                CatchClauseSyntax)
+            {
+                if (!current.Span.Contains(resolution.Span))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ResolvedInstanceEscapesFactory(
+        InvocationExpressionSyntax resolution,
+        SyntaxNode factory,
+        SemanticModel semanticModel)
+    {
+        // Inline use: the resolution's own parent decides. A member access on the result
+        // (`...GetRequiredService<T>().Config`) yields a derived value; anything else
+        // (argument, return, assignment) hands the instance onward.
+        var current = (ExpressionSyntax)resolution;
+        while (current.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax ||
+               current.Parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+        {
+            current = (ExpressionSyntax)current.Parent;
+        }
+
+        if (current.Parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } &&
+            semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol resolvedLocal)
+        {
+            // Tracked local: the instance escapes when any later use is not a plain
+            // member-access receiver.
+            foreach (var identifier in factory.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (identifier.SpanStart <= declarator.Span.End ||
+                    !SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(identifier).Symbol, resolvedLocal))
+                {
+                    continue;
+                }
+
+                // A use inside a nested lambda/local function captures the instance in a
+                // closure that may outlive the factory call — that is an escape even when
+                // the use itself is receiver-only.
+                if (IsInsideNestedFunction(identifier, factory))
+                {
+                    return true;
+                }
+
+                var isReceiverOnly =
+                    (identifier.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Expression == identifier &&
+                     !IsMethodGroupUse(memberAccess, semanticModel) &&
+                     IsSafeDerivedValue(memberAccess, semanticModel)) ||
+                    (identifier.Parent is ConditionalAccessExpressionSyntax conditionalAccess && conditionalAccess.Expression == identifier &&
+                     IsSafeDerivedValue(conditionalAccess, semanticModel));
+                if (!isReceiverOnly)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return current.Parent is not MemberAccessExpressionSyntax accessOnResult ||
+               accessOnResult.Expression != current ||
+               IsMethodGroupUse(accessOnResult, semanticModel) ||
+               !IsSafeDerivedValue(accessOnResult, semanticModel);
+    }
+
+    private static bool IsSafeDerivedValue(ExpressionSyntax access, SemanticModel semanticModel)
+    {
+        // Only values that provably cannot carry the scoped instance (value types and
+        // strings) count as derived: a member returning a reference type may hand back the
+        // instance itself or scoped state reachable from it.
+        var resultExpression = access;
+        if (resultExpression.Parent is InvocationExpressionSyntax invocation && invocation.Expression == resultExpression)
+        {
+            resultExpression = invocation;
+        }
+
+        var resultType = semanticModel.GetTypeInfo(resultExpression).Type;
+        if (resultType is null)
+        {
+            return false;
+        }
+
+        // Primitives, enums, and strings cannot carry the scoped instance. Arbitrary
+        // structs can (a struct field may hold the service), so they do not qualify.
+        return resultType.TypeKind == TypeKind.Enum ||
+               (resultType.SpecialType != SpecialType.None &&
+                resultType.SpecialType != SpecialType.System_Object);
+    }
+
+    private static SyntaxNode GetFactoryAnalysisContainer(InvocationExpressionSyntax resolution, ExpressionSyntax factoryExpression)
+    {
+        if (factoryExpression.SyntaxTree == resolution.SyntaxTree &&
+            factoryExpression.Span.Contains(resolution.Span))
+        {
+            return factoryExpression;
+        }
+
+        foreach (var ancestor in resolution.Ancestors())
+        {
+            if (ancestor is MethodDeclarationSyntax or LocalFunctionStatementSyntax or AccessorDeclarationSyntax)
+            {
+                return ancestor;
+            }
+        }
+
+        return factoryExpression;
+    }
+
+    private static InvocationExpressionSyntax? UnwrapToInvocation(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case AwaitExpressionSyntax awaitExpression:
+                    expression = awaitExpression.Expression;
+                    continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression:
+                    expression = (ExpressionSyntax)suppression.Operand;
+                    continue;
+                case InvocationExpressionSyntax invocation:
+                    return invocation;
+                default:
+                    return null;
+            }
+        }
+    }
+
+    private static bool IsScopeCreationInvocation(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
+            method.Name is not ("CreateScope" or "CreateAsyncScope"))
+        {
+            return false;
+        }
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        var containingType = sourceMethod.ContainingType;
+
+        // Restrict to the framework's own scope-creation surface: a user CreateScope
+        // extension declared inside the MEDI namespace for discoverability may return a
+        // wrapper whose ServiceProvider is the root provider.
+        return containingType is { Name: "IServiceScopeFactory" or "ServiceProviderServiceExtensions" } &&
+               containingType.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
     }
 
     private static ITypeSymbol? GetResolvedDependencyType(
