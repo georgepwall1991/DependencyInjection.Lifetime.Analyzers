@@ -159,13 +159,15 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax fieldAssignment &&
-                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol fieldSymbol)
+                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol fieldSymbol &&
+                AssignmentTargetOutlivesScope(fieldAssignment.Left, semanticModel, executableBody, fieldAssignment))
             {
                 ReportDiagnostic(context, invocation, fieldSymbol.Name, reportedSpans);
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax propertyAssignment &&
-                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol propertySymbol)
+                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol propertySymbol &&
+                AssignmentTargetOutlivesScope(propertyAssignment.Left, semanticModel, executableBody, propertyAssignment))
             {
                 ReportDiagnostic(context, invocation, propertySymbol.Name, reportedSpans);
             }
@@ -210,7 +212,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             TrackDelegateCapture(node, semanticModel, serviceVariables, capturedDelegateVariables);
 
             if (node is ReturnStatementSyntax returnStmt &&
-                TryGetTrackedLocalReference(returnStmt.Expression, semanticModel, serviceVariables, out var sourceInvocation))
+                TryGetTrackedLocalReference(
+                    returnStmt.Expression,
+                    semanticModel,
+                    serviceVariables,
+                    out var sourceInvocation,
+                    out var returnLocal) &&
+                SourceCanReachSink(sourceInvocation, returnStmt, returnLocal, semanticModel))
             {
                 ReportDiagnostic(context, sourceInvocation, "return", reportedSpans);
             }
@@ -241,8 +249,15 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is AssignmentExpressionSyntax fieldAssignment &&
-                TryGetTrackedLocalReference(fieldAssignment.Right, semanticModel, serviceVariables, out var source) &&
-                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol field)
+                TryGetTrackedLocalReference(
+                    fieldAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    out var source,
+                    out var fieldAssignmentLocal) &&
+                SourceCanReachSink(source, fieldAssignment, fieldAssignmentLocal, semanticModel) &&
+                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol field &&
+                AssignmentTargetOutlivesScope(fieldAssignment.Left, semanticModel, executableBody, fieldAssignment))
             {
                 ReportDiagnostic(context, source, field.Name, reportedSpans);
             }
@@ -260,8 +275,15 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is AssignmentExpressionSyntax propertyAssignment &&
-                TryGetTrackedLocalReference(propertyAssignment.Right, semanticModel, serviceVariables, out var propertySource) &&
-                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol property)
+                TryGetTrackedLocalReference(
+                    propertyAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    out var propertySource,
+                    out var propertyAssignmentLocal) &&
+                SourceCanReachSink(propertySource, propertyAssignment, propertyAssignmentLocal, semanticModel) &&
+                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol property &&
+                AssignmentTargetOutlivesScope(propertyAssignment.Left, semanticModel, executableBody, propertyAssignment))
             {
                 ReportDiagnostic(context, propertySource, property.Name, reportedSpans);
             }
@@ -279,7 +301,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is AssignmentExpressionSyntax parameterAssignment &&
-                TryGetTrackedLocalReference(parameterAssignment.Right, semanticModel, serviceVariables, out var parameterSource) &&
+                TryGetTrackedLocalReference(
+                    parameterAssignment.Right,
+                    semanticModel,
+                    serviceVariables,
+                    out var parameterSource,
+                    out var parameterAssignmentLocal) &&
+                SourceCanReachSink(parameterSource, parameterAssignment, parameterAssignmentLocal, semanticModel) &&
                 semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameter &&
                 IsEscapingParameter(parameter))
             {
@@ -544,6 +572,210 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    private static bool SourceCanReachSink(
+        InvocationExpressionSyntax sourceInvocation,
+        SyntaxNode sink,
+        ILocalSymbol carriedLocal,
+        SemanticModel semanticModel) =>
+        LocalCanReachSink(sourceInvocation, sink, carriedLocal, semanticModel);
+
+    private static bool LocalCanReachSink(
+        SyntaxNode source,
+        SyntaxNode sink,
+        ILocalSymbol carriedLocal,
+        SemanticModel semanticModel) =>
+        source.SpanStart < sink.SpanStart ||
+        LocalCanReachEarlierSinkOnLoopBackEdge(source, sink, carriedLocal, semanticModel);
+
+    private static bool LocalCanReachEarlierSinkOnLoopBackEdge(
+        SyntaxNode source,
+        SyntaxNode sink,
+        ILocalSymbol carriedLocal,
+        SemanticModel semanticModel)
+    {
+        if (source.SpanStart <= sink.SpanStart)
+        {
+            return false;
+        }
+
+        var loop = FindCommonLoop(source, sink);
+        if (loop is null)
+        {
+            return false;
+        }
+
+        return !LocalDeclaredInsideLoopBeforeSink(carriedLocal, loop, sink, semanticModel) &&
+               !LocalAssignedBeforeSinkInLoop(carriedLocal, loop, sink, semanticModel) &&
+               !LoopDefinitelyExitsAfterSource(loop, source, semanticModel);
+    }
+
+    private static SyntaxNode? FindCommonLoop(SyntaxNode source, SyntaxNode sink)
+    {
+        var sourceLoops = new HashSet<SyntaxNode>(source.Ancestors().Where(IsLoopStatement));
+
+        return sink
+            .AncestorsAndSelf()
+            .FirstOrDefault(ancestor => sourceLoops.Contains(ancestor));
+    }
+
+    private static bool LocalDeclaredInsideLoopBeforeSink(
+        ILocalSymbol local,
+        SyntaxNode loop,
+        SyntaxNode sink,
+        SemanticModel semanticModel)
+    {
+        foreach (var reference in local.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is VariableDeclaratorSyntax declarator &&
+                loop.Span.Contains(declarator.SpanStart) &&
+                declarator.SpanStart < sink.SpanStart &&
+                !LocalDeclarationCopiesLoopCarriedValue(declarator, loop, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LocalDeclarationCopiesLoopCarriedValue(
+        VariableDeclaratorSyntax declarator,
+        SyntaxNode loop,
+        SemanticModel semanticModel)
+    {
+        if (declarator.Initializer?.Value is not { } initializer)
+        {
+            return false;
+        }
+
+        initializer = UnwrapParentheses(initializer);
+        if (initializer is not IdentifierNameSyntax identifier ||
+            semanticModel.GetSymbolInfo(identifier).Symbol is not ILocalSymbol sourceLocal)
+        {
+            return false;
+        }
+
+        foreach (var reference in sourceLocal.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is VariableDeclaratorSyntax sourceDeclarator &&
+                loop.Span.Contains(sourceDeclarator.SpanStart) &&
+                sourceDeclarator.SpanStart < declarator.SpanStart)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool LocalAssignedBeforeSinkInLoop(
+        ILocalSymbol local,
+        SyntaxNode loop,
+        SyntaxNode sink,
+        SemanticModel semanticModel) =>
+        loop.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Any(assignment =>
+                assignment.SpanStart < sink.SpanStart &&
+                assignment.Left is IdentifierNameSyntax identifier &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    local));
+
+    private static bool LoopConditionDefinitelyStopsAfterSource(
+        SyntaxNode loop,
+        SyntaxNode source,
+        SemanticModel semanticModel)
+    {
+        if (!TryGetLoopConditionSymbol(loop, semanticModel, out var conditionSymbol))
+        {
+            return false;
+        }
+
+        return loop.DescendantNodes()
+            .OfType<AssignmentExpressionSyntax>()
+            .Any(assignment =>
+                assignment.SpanStart > source.SpanStart &&
+                assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                assignment.Right.IsKind(SyntaxKind.FalseLiteralExpression) &&
+                AssignmentIsUnconditionalLoopBodyStatement(loop, assignment) &&
+                assignment.Left is IdentifierNameSyntax identifier &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    conditionSymbol));
+    }
+
+    private static bool LoopDefinitelyExitsAfterSource(
+        SyntaxNode loop,
+        SyntaxNode source,
+        SemanticModel semanticModel) =>
+        LoopConditionDefinitelyStopsAfterSource(loop, source, semanticModel) ||
+        loop.DescendantNodes()
+            .OfType<StatementSyntax>()
+            .Any(statement =>
+                statement.SpanStart > source.SpanStart &&
+                statement is BreakStatementSyntax or ReturnStatementSyntax or ThrowStatementSyntax &&
+                StatementIsUnconditionalLoopBodyStatement(loop, statement));
+
+    private static bool AssignmentIsUnconditionalLoopBodyStatement(
+        SyntaxNode loop,
+        AssignmentExpressionSyntax assignment) =>
+        assignment.FirstAncestorOrSelf<StatementSyntax>() is { } statement &&
+        StatementIsUnconditionalLoopBodyStatement(loop, statement);
+
+    private static bool StatementIsUnconditionalLoopBodyStatement(
+        SyntaxNode loop,
+        StatementSyntax statement)
+    {
+        var body = loop switch
+        {
+            WhileStatementSyntax whileStatement => whileStatement.Statement,
+            DoStatementSyntax doStatement => doStatement.Statement,
+            ForStatementSyntax forStatement => forStatement.Statement,
+            _ => null
+        };
+
+        return body switch
+        {
+            BlockSyntax block => statement.Parent == block,
+            StatementSyntax singleStatement => statement == singleStatement,
+            _ => false
+        };
+    }
+
+    private static bool TryGetLoopConditionSymbol(
+        SyntaxNode loop,
+        SemanticModel semanticModel,
+        out ISymbol conditionSymbol)
+    {
+        conditionSymbol = null!;
+
+        var condition = loop switch
+        {
+            WhileStatementSyntax whileStatement => whileStatement.Condition,
+            DoStatementSyntax doStatement => doStatement.Condition,
+            ForStatementSyntax forStatement => forStatement.Condition,
+            _ => null
+        };
+
+        condition = condition is null ? null : UnwrapParentheses(condition);
+        if (condition is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol or IParameterSymbol)
+        {
+            conditionSymbol = semanticModel.GetSymbolInfo(identifier).Symbol!;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLoopStatement(SyntaxNode node) =>
+        node is ForStatementSyntax or
+                ForEachStatementSyntax or
+                ForEachVariableStatementSyntax or
+                WhileStatementSyntax or
+                DoStatementSyntax;
+
     /// <summary>
     /// Reports every tracked service local or capturing delegate referenced inside a returned
     /// tuple or anonymous object, recursing through nested composites.
@@ -573,9 +805,17 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (TryGetTrackedLocalReference(element, semanticModel, serviceVariables, out var trackedSource))
+            if (TryGetTrackedLocalReference(
+                    element,
+                    semanticModel,
+                    serviceVariables,
+                    out var trackedSource,
+                    out var trackedLocal))
             {
-                ReportDiagnostic(context, trackedSource, "return", reportedSpans);
+                if (SourceCanReachSink(trackedSource, composite, trackedLocal, semanticModel))
+                {
+                    ReportDiagnostic(context, trackedSource, "return", reportedSpans);
+                }
             }
             else if (TryGetCapturedDelegateSource(
                          element, semanticModel, serviceVariables, capturedDelegateVariables, out var delegateSource))
@@ -588,21 +828,1281 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     private static bool IsEscapingParameter(IParameterSymbol parameter) =>
         parameter.RefKind is RefKind.Ref or RefKind.Out;
 
+    private static bool AssignmentTargetOutlivesScope(
+        ExpressionSyntax target,
+        SemanticModel semanticModel,
+        SyntaxNode executableBody,
+        AssignmentExpressionSyntax assignment)
+    {
+        target = UnwrapParentheses(target);
+
+        if (target is IdentifierNameSyntax identifier)
+        {
+            return semanticModel.GetSymbolInfo(identifier).Symbol is IFieldSymbol or IPropertySymbol;
+        }
+
+        if (target is MemberAccessExpressionSyntax memberAccess)
+        {
+            return ReceiverRootOutlivesScope(memberAccess.Expression, semanticModel, executableBody, assignment);
+        }
+
+        if (target is ElementAccessExpressionSyntax elementAccess)
+        {
+            return ReceiverRootOutlivesScope(elementAccess.Expression, semanticModel, executableBody, assignment);
+        }
+
+        return false;
+    }
+
+    private static bool ReceiverRootOutlivesScope(
+        ExpressionSyntax receiverExpression,
+        SemanticModel semanticModel,
+        SyntaxNode executableBody,
+        AssignmentExpressionSyntax assignment)
+    {
+        var root = GetReceiverRoot(receiverExpression);
+        if (root is ThisExpressionSyntax or BaseExpressionSyntax)
+        {
+            return true;
+        }
+
+        var rootSymbol = semanticModel.GetSymbolInfo(root).Symbol;
+        if (rootSymbol is ILocalSymbol localSymbol)
+        {
+            if (!ReceiverIsDirectRootReference(receiverExpression, root))
+            {
+                return true;
+            }
+
+            return LocalReceiverOutlivesScope(localSymbol, executableBody, semanticModel, assignment);
+        }
+
+        if (rootSymbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or INamedTypeSymbol)
+        {
+            return true;
+        }
+
+        // Fully-qualified static receivers can have a namespace root (`MyApp`) while the full
+        // receiver expression (`MyApp.Globals`) binds to the static type.
+        return semanticModel.GetSymbolInfo(receiverExpression).Symbol is INamedTypeSymbol;
+    }
+
+    private static bool LocalReceiverOutlivesScope(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        AssignmentExpressionSyntax assignment)
+    {
+        var root = ResolveFreshLocalRoot(localSymbol, executableBody, semanticModel, assignment);
+        if (!root.HasValue)
+        {
+            return true;
+        }
+
+        return LocalEscapesAroundAssignment(root.Value, executableBody, semanticModel, assignment);
+    }
+
+    private enum LocalValueKind
+    {
+        FreshObject,
+        Alias,
+        Null,
+        Other
+    }
+
+    private readonly struct FreshLocalRoot
+    {
+        public FreshLocalRoot(ILocalSymbol local, int originSpanStart)
+        {
+            Local = local;
+            OriginSpanStart = originSpanStart;
+        }
+
+        public ILocalSymbol Local { get; }
+
+        public int OriginSpanStart { get; }
+    }
+
+    private static FreshLocalRoot? ResolveFreshLocalRoot(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        AssignmentExpressionSyntax assignment)
+    {
+        var visited = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        return ResolveFreshLocalRoot(
+            localSymbol,
+            executableBody,
+            semanticModel,
+            assignment.SpanStart,
+            assignment,
+            visited);
+    }
+
+    private static FreshLocalRoot? ResolveFreshLocalRoot(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart,
+        AssignmentExpressionSyntax sink,
+        HashSet<ILocalSymbol> visited)
+    {
+        if (!visited.Add(localSymbol))
+        {
+            return null;
+        }
+
+        if (!TryGetLatestLocalValueBefore(
+                localSymbol,
+                executableBody,
+                semanticModel,
+                beforeSpanStart,
+                out var valueKind,
+                out var aliasSource,
+                out var valueOrigin) ||
+            valueOrigin is null ||
+            !ValueDefinitelyReachesSink(valueOrigin, sink))
+        {
+            return null;
+        }
+
+        return valueKind switch
+        {
+            LocalValueKind.FreshObject => new FreshLocalRoot(localSymbol, valueOrigin.SpanStart),
+            LocalValueKind.Alias when aliasSource is not null =>
+                ResolveFreshLocalRoot(
+                    aliasSource,
+                    executableBody,
+                    semanticModel,
+                    valueOrigin.SpanStart,
+                    sink,
+                    visited),
+            _ => null
+        };
+    }
+
+    private static bool TryGetLatestLocalValueBefore(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart,
+        out LocalValueKind valueKind,
+        out ILocalSymbol? aliasSource,
+        out SyntaxNode? valueOrigin)
+    {
+        AssignmentExpressionSyntax? latestAssignment = null;
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node.SpanStart >= beforeSpanStart ||
+                node is not AssignmentExpressionSyntax assignment ||
+                assignment.Left is not IdentifierNameSyntax leftIdentifier ||
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(leftIdentifier).Symbol,
+                    localSymbol))
+            {
+                continue;
+            }
+
+            if (latestAssignment is null || assignment.SpanStart > latestAssignment.SpanStart)
+            {
+                latestAssignment = assignment;
+            }
+        }
+
+        if (latestAssignment is not null)
+        {
+            valueOrigin = latestAssignment;
+            return TryClassifyAssignmentValue(
+                localSymbol,
+                executableBody,
+                latestAssignment,
+                semanticModel,
+                out valueKind,
+                out aliasSource);
+        }
+
+        foreach (var declarationReference in localSymbol.DeclaringSyntaxReferences)
+        {
+            if (declarationReference.GetSyntax() is VariableDeclaratorSyntax declarator &&
+                declarator.SpanStart < beforeSpanStart &&
+                declarator.Initializer?.Value is { } initializer)
+            {
+                valueOrigin = declarator;
+                return TryClassifyLocalValue(initializer, semanticModel, out valueKind, out aliasSource);
+            }
+        }
+
+        valueKind = LocalValueKind.Other;
+        aliasSource = null;
+        valueOrigin = null;
+        return false;
+    }
+
+    private static bool TryClassifyAssignmentValue(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        AssignmentExpressionSyntax assignment,
+        SemanticModel semanticModel,
+        out LocalValueKind valueKind,
+        out ILocalSymbol? aliasSource)
+    {
+        if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+        {
+            return TryClassifyLocalValue(assignment.Right, semanticModel, out valueKind, out aliasSource);
+        }
+
+        if (assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+            TryClassifyLocalValue(assignment.Right, semanticModel, out var rightValueKind, out _) &&
+            rightValueKind == LocalValueKind.FreshObject &&
+            TryGetLatestLocalValueBefore(
+                localSymbol,
+                executableBody,
+                semanticModel,
+                assignment.SpanStart,
+                out var previousValueKind,
+                out _,
+                out var previousOrigin) &&
+            previousOrigin is not null &&
+            previousValueKind is LocalValueKind.FreshObject or LocalValueKind.Null)
+        {
+            valueKind = LocalValueKind.FreshObject;
+            aliasSource = null;
+            return true;
+        }
+
+        valueKind = LocalValueKind.Other;
+        aliasSource = null;
+        return true;
+    }
+
+    private static bool ValueDefinitelyReachesSink(SyntaxNode valueOrigin, AssignmentExpressionSyntax sink)
+    {
+        if (valueOrigin.SpanStart >= sink.SpanStart)
+        {
+            return false;
+        }
+
+        var valueStatement = valueOrigin.FirstAncestorOrSelf<StatementSyntax>();
+        var sinkStatement = sink.FirstAncestorOrSelf<StatementSyntax>();
+        if (valueStatement is null || sinkStatement is null)
+        {
+            return false;
+        }
+
+        if (valueStatement == sinkStatement)
+        {
+            return valueOrigin.SpanStart < sink.SpanStart;
+        }
+
+        return valueStatement.Parent switch
+        {
+            BlockSyntax block => StatementListDefinitelyPrecedesSink(
+                block.Statements,
+                valueStatement,
+                sinkStatement),
+            SwitchSectionSyntax switchSection => StatementListDefinitelyPrecedesSink(
+                switchSection.Statements,
+                valueStatement,
+                sinkStatement),
+            _ => false
+        };
+    }
+
+    private static bool StatementListDefinitelyPrecedesSink(
+        SyntaxList<StatementSyntax> statements,
+        StatementSyntax valueStatement,
+        StatementSyntax sinkStatement)
+    {
+        var valueIndex = -1;
+        var sinkIndex = -1;
+
+        for (var index = 0; index < statements.Count; index++)
+        {
+            var statement = statements[index];
+            if (statement == valueStatement)
+            {
+                valueIndex = index;
+            }
+
+            if (statement == sinkStatement || statement.Span.Contains(sinkStatement.SpanStart))
+            {
+                sinkIndex = index;
+            }
+        }
+
+        return valueIndex >= 0 && sinkIndex >= 0 && valueIndex < sinkIndex;
+    }
+
+    private static bool TryClassifyLocalValue(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        out LocalValueKind valueKind,
+        out ILocalSymbol? aliasSource)
+    {
+        expression = UnwrapParentheses(expression);
+        if (expression is ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax)
+        {
+            valueKind = LocalValueKind.FreshObject;
+            aliasSource = null;
+            return true;
+        }
+
+        if (expression.IsKind(SyntaxKind.NullLiteralExpression))
+        {
+            valueKind = LocalValueKind.Null;
+            aliasSource = null;
+            return true;
+        }
+
+        if (TryGetLocalAliasSource(expression, semanticModel, out aliasSource))
+        {
+            valueKind = LocalValueKind.Alias;
+            return true;
+        }
+
+        valueKind = LocalValueKind.Other;
+        aliasSource = null;
+        return true;
+    }
+
+    private static bool LocalEscapesAroundAssignment(
+        FreshLocalRoot root,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        AssignmentExpressionSyntax scopedAssignment)
+    {
+        var aliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)
+        {
+            root.Local
+        };
+        var containerAliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node == scopedAssignment || node.Span.End <= root.OriginSpanStart)
+            {
+                continue;
+            }
+
+            var beforeScopedAssignment = node.SpanStart < scopedAssignment.SpanStart;
+            if (node is ReturnStatementSyntax returnStatement &&
+                (!beforeScopedAssignment ||
+                 LocalCanReachSink(scopedAssignment, returnStatement, root.Local, semanticModel)) &&
+                (ExpressionRetainsEscapingHolderValue(
+                        returnStatement.Expression,
+                        aliases,
+                        scopedAssignment.Left,
+                        semanticModel,
+                        includeAssignedScopedSlot: true) ||
+                    ExpressionRetainsLocalValue(
+                        returnStatement.Expression,
+                        containerAliases,
+                        semanticModel)))
+            {
+                return true;
+            }
+
+            if (node is AssignmentExpressionSyntax assignment &&
+                (ExpressionRetainsEscapingHolderValue(
+                        assignment.Right,
+                        aliases,
+                        scopedAssignment.Left,
+                        semanticModel,
+                        includeAssignedScopedSlot: !beforeScopedAssignment) ||
+                    ExpressionRetainsLocalValue(
+                        assignment.Right,
+                        containerAliases,
+                        semanticModel)) &&
+                AssignmentSinkDefinitelyOutlivesScope(assignment.Left, semanticModel))
+            {
+                return true;
+            }
+
+            if (node is AssignmentExpressionSyntax localElementAssignment &&
+                TryGetLocalElementAssignment(localElementAssignment, semanticModel, out var elementContainerLocal) &&
+                ExpressionRetainsEscapingHolderValue(
+                    localElementAssignment.Right,
+                    aliases,
+                    scopedAssignment.Left,
+                    semanticModel,
+                    includeAssignedScopedSlot: !beforeScopedAssignment))
+            {
+                var currentContainerAliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+                AddLocalAndCurrentAliases(
+                    currentContainerAliases,
+                    elementContainerLocal,
+                    executableBody,
+                    semanticModel,
+                    localElementAssignment.SpanStart);
+
+                if (LocalValueEscapedBefore(
+                        currentContainerAliases,
+                        executableBody,
+                        semanticModel,
+                        localElementAssignment.SpanStart))
+                {
+                    return true;
+                }
+
+                containerAliases.UnionWith(currentContainerAliases);
+            }
+
+            if (node is InvocationExpressionSyntax mutationCall &&
+                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                mutationCall.ArgumentList.Arguments.Any(argument =>
+                    ExpressionRetainsEscapingHolderValue(
+                        argument.Expression,
+                        aliases,
+                        scopedAssignment.Left,
+                        semanticModel,
+                        includeAssignedScopedSlot: !beforeScopedAssignment) ||
+                    ExpressionRetainsLocalValue(
+                        argument.Expression,
+                        containerAliases,
+                        semanticModel)))
+            {
+                return true;
+            }
+
+            if (node is InvocationExpressionSyntax localMutationCall &&
+                TryGetLocalCollectionMutation(localMutationCall, semanticModel, out var containerLocal) &&
+                localMutationCall.ArgumentList.Arguments.Any(argument =>
+                    ExpressionRetainsEscapingHolderValue(
+                        argument.Expression,
+                        aliases,
+                        scopedAssignment.Left,
+                        semanticModel,
+                        includeAssignedScopedSlot: !beforeScopedAssignment)))
+            {
+                var currentContainerAliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+                AddLocalAndCurrentAliases(
+                    currentContainerAliases,
+                    containerLocal,
+                    executableBody,
+                    semanticModel,
+                    localMutationCall.SpanStart);
+
+                if (LocalValueEscapedBefore(
+                        currentContainerAliases,
+                        executableBody,
+                        semanticModel,
+                        localMutationCall.SpanStart))
+                {
+                    return true;
+                }
+
+                containerAliases.UnionWith(currentContainerAliases);
+            }
+
+            TrackLocalAliases(node, aliases, semanticModel);
+            TrackLocalAliases(node, containerAliases, semanticModel);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetLocalElementAssignment(
+        AssignmentExpressionSyntax assignment,
+        SemanticModel semanticModel,
+        out ILocalSymbol containerLocal)
+    {
+        containerLocal = null!;
+
+        if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+            assignment.Left is not ElementAccessExpressionSyntax elementAccess)
+        {
+            return false;
+        }
+
+        var root = GetReceiverRoot(elementAccess.Expression);
+        if (semanticModel.GetSymbolInfo(root).Symbol is not ILocalSymbol localSymbol)
+        {
+            return false;
+        }
+
+        containerLocal = localSymbol;
+        return true;
+    }
+
+    private static void TrackLocalAliases(
+        SyntaxNode node,
+        HashSet<ILocalSymbol> aliases,
+        SemanticModel semanticModel)
+    {
+        if (node is LocalDeclarationStatementSyntax localDeclaration)
+        {
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol declaredLocal &&
+                    TryGetLocalAliasSource(variable.Initializer?.Value, semanticModel, out var aliasSource) &&
+                    aliases.Contains(aliasSource))
+                {
+                    aliases.Add(declaredLocal);
+                }
+            }
+
+            return;
+        }
+
+        if (node is AssignmentExpressionSyntax assignment &&
+            assignment.Left is IdentifierNameSyntax leftIdentifier &&
+            semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol leftLocal)
+        {
+            if (TryGetLocalAliasSource(assignment.Right, semanticModel, out var aliasSource) &&
+                aliases.Contains(aliasSource))
+            {
+                aliases.Add(leftLocal);
+            }
+            else
+            {
+                aliases.Remove(leftLocal);
+            }
+        }
+    }
+
+    private static bool LocalValueEscapedBefore(
+        HashSet<ILocalSymbol> localAliases,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart)
+    {
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node.SpanStart >= beforeSpanStart)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax returnStatement &&
+                ExpressionRetainsCurrentLocalValue(
+                    returnStatement.Expression,
+                    localAliases,
+                    executableBody,
+                    semanticModel,
+                    beforeSpanStart,
+                    returnStatement.SpanStart))
+            {
+                return true;
+            }
+
+            if (node is AssignmentExpressionSyntax assignment &&
+                ExpressionRetainsCurrentLocalValue(
+                    assignment.Right,
+                    localAliases,
+                    executableBody,
+                    semanticModel,
+                    beforeSpanStart,
+                    assignment.SpanStart) &&
+                AssignmentSinkDefinitelyOutlivesScope(assignment.Left, semanticModel))
+            {
+                return true;
+            }
+
+            if (node is InvocationExpressionSyntax mutationCall &&
+                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                mutationCall.ArgumentList.Arguments.Any(argument =>
+                    ExpressionRetainsCurrentLocalValue(
+                        argument.Expression,
+                        localAliases,
+                        executableBody,
+                        semanticModel,
+                        beforeSpanStart,
+                        mutationCall.SpanStart)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ExpressionRetainsCurrentLocalValue(
+        ExpressionSyntax? expression,
+        HashSet<ILocalSymbol> localAliases,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int currentBeforeSpanStart,
+        int sinkSpanStart)
+    {
+        if (expression is null ||
+            !ExpressionRetainsLocalValue(expression, localAliases, semanticModel))
+        {
+            return false;
+        }
+
+        return expression.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Any(identifier =>
+                semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol &&
+                localAliases.Contains(localSymbol) &&
+                LocalValueAtSinkStillCurrent(
+                    localSymbol,
+                    executableBody,
+                    semanticModel,
+                    sinkSpanStart,
+                    currentBeforeSpanStart));
+    }
+
+    private static bool LocalValueAtSinkStillCurrent(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int sinkSpanStart,
+        int currentBeforeSpanStart)
+    {
+        if (!TryGetLatestLocalValueBefore(
+                localSymbol,
+                executableBody,
+                semanticModel,
+                sinkSpanStart,
+                out _,
+                out _,
+                out var sinkOrigin) ||
+            !TryGetLatestLocalValueBefore(
+                localSymbol,
+                executableBody,
+                semanticModel,
+                currentBeforeSpanStart,
+                out _,
+                out _,
+                out var currentOrigin))
+        {
+            return false;
+        }
+
+        return sinkOrigin is not null &&
+               currentOrigin is not null &&
+               sinkOrigin == currentOrigin;
+    }
+
+    private static void AddLocalAndCurrentAliases(
+        HashSet<ILocalSymbol> aliases,
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart)
+    {
+        var root = ResolveCurrentAliasRoot(
+            localSymbol,
+            executableBody,
+            semanticModel,
+            beforeSpanStart,
+            new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default));
+
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node.SpanStart >= beforeSpanStart ||
+                node is not LocalDeclarationStatementSyntax localDeclaration)
+            {
+                continue;
+            }
+
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol declaredLocal)
+                {
+                    continue;
+                }
+
+                var declaredRoot = ResolveCurrentAliasRoot(
+                    declaredLocal,
+                    executableBody,
+                    semanticModel,
+                    beforeSpanStart,
+                    new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default));
+
+                if (SymbolEqualityComparer.Default.Equals(declaredRoot, root))
+                {
+                    aliases.Add(declaredLocal);
+                }
+            }
+        }
+
+        aliases.Add(localSymbol);
+    }
+
+    private static ILocalSymbol ResolveCurrentAliasRoot(
+        ILocalSymbol localSymbol,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart,
+        HashSet<ILocalSymbol> visited)
+    {
+        if (!visited.Add(localSymbol))
+        {
+            return localSymbol;
+        }
+
+        if (TryGetLatestLocalValueBefore(
+                localSymbol,
+                executableBody,
+                semanticModel,
+                beforeSpanStart,
+                out var valueKind,
+                out var aliasSource,
+                out _) &&
+            valueKind == LocalValueKind.Alias &&
+            aliasSource is not null)
+        {
+            return ResolveCurrentAliasRoot(
+                aliasSource,
+                executableBody,
+                semanticModel,
+                beforeSpanStart,
+                visited);
+        }
+
+        return localSymbol;
+    }
+
+    private static bool TryGetLocalCollectionMutation(
+        InvocationExpressionSyntax call,
+        SemanticModel semanticModel,
+        out ILocalSymbol containerLocal)
+    {
+        containerLocal = null!;
+
+        SimpleNameSyntax methodName;
+        ExpressionSyntax receiverExpression;
+        if (call.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            methodName = memberAccess.Name;
+            receiverExpression = memberAccess.Expression;
+        }
+        else if (call.Expression is MemberBindingExpressionSyntax memberBinding &&
+                 FindOwningConditionalAccess(call) is { } conditionalAccess)
+        {
+            methodName = memberBinding.Name;
+            receiverExpression = conditionalAccess.Expression;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (!CollectionMutationMethodNames.Contains(methodName.Identifier.ValueText))
+        {
+            return false;
+        }
+
+        if (semanticModel.GetSymbolInfo(call).Symbol is not IMethodSymbol method ||
+            !(method.ReturnsVoid ||
+              method.ReturnType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Int32))
+        {
+            return false;
+        }
+
+        if (semanticModel.GetTypeInfo(receiverExpression).Type is not { } receiverType ||
+            !IsEnumerableLike(receiverType))
+        {
+            return false;
+        }
+
+        var root = GetReceiverRoot(receiverExpression);
+        if (semanticModel.GetSymbolInfo(root).Symbol is not ILocalSymbol localSymbol)
+        {
+            return false;
+        }
+
+        containerLocal = localSymbol;
+        return true;
+    }
+
+    private static bool AssignmentSinkDefinitelyOutlivesScope(ExpressionSyntax target, SemanticModel semanticModel)
+    {
+        target = UnwrapParentheses(target);
+
+        if (target is IdentifierNameSyntax identifier)
+        {
+            return semanticModel.GetSymbolInfo(identifier).Symbol switch
+            {
+                IFieldSymbol or IPropertySymbol => true,
+                IParameterSymbol parameter => IsEscapingParameter(parameter),
+                _ => false
+            };
+        }
+
+        if (target is MemberAccessExpressionSyntax memberAccess)
+        {
+            return ReceiverRootDefinitelyOutlivesScope(memberAccess.Expression, semanticModel);
+        }
+
+        if (target is ElementAccessExpressionSyntax elementAccess)
+        {
+            return ReceiverRootDefinitelyOutlivesScope(elementAccess.Expression, semanticModel);
+        }
+
+        return false;
+    }
+
+    private static bool ReceiverRootDefinitelyOutlivesScope(ExpressionSyntax receiverExpression, SemanticModel semanticModel)
+    {
+        var root = GetReceiverRoot(receiverExpression);
+        if (root is ThisExpressionSyntax or BaseExpressionSyntax)
+        {
+            return true;
+        }
+
+        if (semanticModel.GetSymbolInfo(root).Symbol
+            is IFieldSymbol or IPropertySymbol or IParameterSymbol or INamedTypeSymbol)
+        {
+            return true;
+        }
+
+        return semanticModel.GetSymbolInfo(receiverExpression).Symbol is INamedTypeSymbol;
+    }
+
+    private static bool ExpressionReferencesLocal(
+        ExpressionSyntax? expression,
+        ILocalSymbol localSymbol,
+        SemanticModel semanticModel)
+    {
+        var locals = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)
+        {
+            localSymbol
+        };
+
+        return ExpressionReferencesAnyLocal(expression, locals, semanticModel);
+    }
+
+    private static bool ExpressionReferencesAnyLocal(
+        ExpressionSyntax? expression,
+        HashSet<ILocalSymbol> locals,
+        SemanticModel semanticModel)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        return expression
+            .DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Any(identifier =>
+                semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol referencedLocal &&
+                locals.Contains(referencedLocal));
+    }
+
+    private static bool SyntaxReferencesAnyLocal(
+        SyntaxNode node,
+        HashSet<ILocalSymbol> locals,
+        SemanticModel semanticModel) =>
+        node.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Any(identifier =>
+                semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol referencedLocal &&
+                locals.Contains(referencedLocal));
+
+    private static bool ExpressionRetainsEscapingHolderValue(
+        ExpressionSyntax? expression,
+        HashSet<ILocalSymbol> holderAliases,
+        ExpressionSyntax scopedAssignmentTarget,
+        SemanticModel semanticModel,
+        bool includeAssignedScopedSlot)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        expression = UnwrapTransparentValueExpression(expression);
+
+        if (expression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol referencedLocal &&
+            holderAliases.Contains(referencedLocal))
+        {
+            return true;
+        }
+
+        if (includeAssignedScopedSlot &&
+            (IsAssignedScopedSlotReference(
+                expression,
+                holderAliases,
+                scopedAssignmentTarget,
+                semanticModel) ||
+            IsAssignedScopedSlotConditionalAccess(
+                expression,
+                holderAliases,
+                scopedAssignmentTarget,
+                semanticModel)))
+        {
+            return true;
+        }
+
+        return expression switch
+        {
+            ConditionalExpressionSyntax conditional =>
+                ExpressionRetainsEscapingHolderValue(
+                    conditional.WhenTrue,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot) ||
+                ExpressionRetainsEscapingHolderValue(
+                    conditional.WhenFalse,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression) =>
+                ExpressionRetainsEscapingHolderValue(
+                    binary.Left,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot) ||
+                ExpressionRetainsEscapingHolderValue(
+                    binary.Right,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression) =>
+                ExpressionRetainsEscapingHolderValue(
+                    binary.Left,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            AssignmentExpressionSyntax assignment =>
+                ExpressionRetainsEscapingHolderValue(
+                    assignment.Right,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            AnonymousFunctionExpressionSyntax anonymousFunction =>
+                SyntaxReferencesAnyLocal(anonymousFunction, holderAliases, semanticModel),
+            TupleExpressionSyntax tuple =>
+                tuple.Arguments.Any(argument =>
+                    ExpressionRetainsEscapingHolderValue(
+                        argument.Expression,
+                        holderAliases,
+                        scopedAssignmentTarget,
+                        semanticModel,
+                        includeAssignedScopedSlot)),
+            AnonymousObjectCreationExpressionSyntax anonymousObject =>
+                anonymousObject.Initializers.Any(initializer =>
+                    ExpressionRetainsEscapingHolderValue(
+                        initializer.Expression,
+                        holderAliases,
+                        scopedAssignmentTarget,
+                        semanticModel,
+                        includeAssignedScopedSlot)),
+            ObjectCreationExpressionSyntax objectCreation =>
+                ArgumentListRetainsEscapingHolderValue(
+                    objectCreation.ArgumentList,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot) ||
+                InitializerRetainsEscapingHolderValue(
+                    objectCreation.Initializer,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            ImplicitObjectCreationExpressionSyntax implicitObjectCreation =>
+                ArgumentListRetainsEscapingHolderValue(
+                    implicitObjectCreation.ArgumentList,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot) ||
+                InitializerRetainsEscapingHolderValue(
+                    implicitObjectCreation.Initializer,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            ArrayCreationExpressionSyntax arrayCreation =>
+                InitializerRetainsEscapingHolderValue(
+                    arrayCreation.Initializer,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            ImplicitArrayCreationExpressionSyntax implicitArrayCreation =>
+                InitializerRetainsEscapingHolderValue(
+                    implicitArrayCreation.Initializer,
+                    holderAliases,
+                    scopedAssignmentTarget,
+                    semanticModel,
+                    includeAssignedScopedSlot),
+            _ => false
+        };
+    }
+
+    private static bool ExpressionRetainsLocalValue(
+        ExpressionSyntax? expression,
+        HashSet<ILocalSymbol> localAliases,
+        SemanticModel semanticModel)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        expression = UnwrapTransparentValueExpression(expression);
+
+        if (expression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol referencedLocal &&
+            localAliases.Contains(referencedLocal))
+        {
+            return true;
+        }
+
+        return expression switch
+        {
+            ConditionalExpressionSyntax conditional =>
+                ExpressionRetainsLocalValue(conditional.WhenTrue, localAliases, semanticModel) ||
+                ExpressionRetainsLocalValue(conditional.WhenFalse, localAliases, semanticModel),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression) =>
+                ExpressionRetainsLocalValue(binary.Left, localAliases, semanticModel) ||
+                ExpressionRetainsLocalValue(binary.Right, localAliases, semanticModel),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression) =>
+                ExpressionRetainsLocalValue(binary.Left, localAliases, semanticModel),
+            AssignmentExpressionSyntax assignment =>
+                ExpressionRetainsLocalValue(assignment.Right, localAliases, semanticModel),
+            TupleExpressionSyntax tuple =>
+                tuple.Arguments.Any(argument =>
+                    ExpressionRetainsLocalValue(argument.Expression, localAliases, semanticModel)),
+            AnonymousObjectCreationExpressionSyntax anonymousObject =>
+                anonymousObject.Initializers.Any(initializer =>
+                    ExpressionRetainsLocalValue(initializer.Expression, localAliases, semanticModel)),
+            ObjectCreationExpressionSyntax objectCreation =>
+                ArgumentListRetainsLocalValue(objectCreation.ArgumentList, localAliases, semanticModel) ||
+                InitializerRetainsLocalValue(objectCreation.Initializer, localAliases, semanticModel),
+            ImplicitObjectCreationExpressionSyntax implicitObjectCreation =>
+                ArgumentListRetainsLocalValue(
+                    implicitObjectCreation.ArgumentList,
+                    localAliases,
+                    semanticModel) ||
+                InitializerRetainsLocalValue(
+                    implicitObjectCreation.Initializer,
+                    localAliases,
+                    semanticModel),
+            ArrayCreationExpressionSyntax arrayCreation =>
+                InitializerRetainsLocalValue(arrayCreation.Initializer, localAliases, semanticModel),
+            ImplicitArrayCreationExpressionSyntax implicitArrayCreation =>
+                InitializerRetainsLocalValue(implicitArrayCreation.Initializer, localAliases, semanticModel),
+            _ => false
+        };
+    }
+
+    private static bool IsAssignedScopedSlotReference(
+        ExpressionSyntax expression,
+        HashSet<ILocalSymbol> holderAliases,
+        ExpressionSyntax scopedAssignmentTarget,
+        SemanticModel semanticModel)
+    {
+        expression = UnwrapTransparentValueExpression(expression);
+        scopedAssignmentTarget = UnwrapTransparentValueExpression(scopedAssignmentTarget);
+
+        if (expression is not MemberAccessExpressionSyntax and not ElementAccessExpressionSyntax)
+        {
+            return false;
+        }
+
+        var root = GetReceiverRoot(expression);
+        return semanticModel.GetSymbolInfo(root).Symbol is ILocalSymbol rootLocal &&
+               holderAliases.Contains(rootLocal) &&
+               SymbolEqualityComparer.Default.Equals(
+                   semanticModel.GetSymbolInfo(expression).Symbol,
+                   semanticModel.GetSymbolInfo(scopedAssignmentTarget).Symbol);
+    }
+
+    private static bool IsAssignedScopedSlotConditionalAccess(
+        ExpressionSyntax expression,
+        HashSet<ILocalSymbol> holderAliases,
+        ExpressionSyntax scopedAssignmentTarget,
+        SemanticModel semanticModel)
+    {
+        if (expression is not ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            return false;
+        }
+
+        var root = GetReceiverRoot(conditionalAccess.Expression);
+        return semanticModel.GetSymbolInfo(root).Symbol is ILocalSymbol rootLocal &&
+               holderAliases.Contains(rootLocal) &&
+               SymbolEqualityComparer.Default.Equals(
+                   semanticModel.GetSymbolInfo(conditionalAccess.WhenNotNull).Symbol,
+                   semanticModel.GetSymbolInfo(scopedAssignmentTarget).Symbol);
+    }
+
+    private static bool ArgumentListRetainsEscapingHolderValue(
+        ArgumentListSyntax? argumentList,
+        HashSet<ILocalSymbol> holderAliases,
+        ExpressionSyntax scopedAssignmentTarget,
+        SemanticModel semanticModel,
+        bool includeAssignedScopedSlot) =>
+        argumentList?.Arguments.Any(argument =>
+            ExpressionRetainsEscapingHolderValue(
+                argument.Expression,
+                holderAliases,
+                scopedAssignmentTarget,
+                semanticModel,
+                includeAssignedScopedSlot)) == true;
+
+    private static bool InitializerRetainsEscapingHolderValue(
+        InitializerExpressionSyntax? initializer,
+        HashSet<ILocalSymbol> holderAliases,
+        ExpressionSyntax scopedAssignmentTarget,
+        SemanticModel semanticModel,
+        bool includeAssignedScopedSlot) =>
+        initializer?.Expressions.Any(expression =>
+            ExpressionRetainsEscapingHolderValue(
+                expression,
+                holderAliases,
+                scopedAssignmentTarget,
+                semanticModel,
+                includeAssignedScopedSlot)) == true;
+
+    private static bool ArgumentListRetainsLocalValue(
+        ArgumentListSyntax? argumentList,
+        HashSet<ILocalSymbol> localAliases,
+        SemanticModel semanticModel) =>
+        argumentList?.Arguments.Any(argument =>
+            ExpressionRetainsLocalValue(argument.Expression, localAliases, semanticModel)) == true;
+
+    private static bool InitializerRetainsLocalValue(
+        InitializerExpressionSyntax? initializer,
+        HashSet<ILocalSymbol> localAliases,
+        SemanticModel semanticModel) =>
+        initializer?.Expressions.Any(expression =>
+            ExpressionRetainsLocalValue(expression, localAliases, semanticModel)) == true;
+
+    private static bool TryGetLocalAliasSource(
+        ExpressionSyntax? expression,
+        SemanticModel semanticModel,
+        out ILocalSymbol aliasSource)
+    {
+        aliasSource = null!;
+
+        if (expression is null)
+        {
+            return false;
+        }
+
+        expression = UnwrapParentheses(expression);
+        if (expression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol)
+        {
+            aliasSource = localSymbol;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ExpressionContainsInvocation(
+        ExpressionSyntax expression,
+        InvocationExpressionSyntax invocation) =>
+        expression == invocation ||
+        expression.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(candidate => candidate == invocation);
+
+    private static bool ReceiverIsDirectRootReference(ExpressionSyntax receiverExpression, ExpressionSyntax root) =>
+        UnwrapTransparentValueExpression(receiverExpression) == root;
+
+    private static ExpressionSyntax GetReceiverRoot(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            expression = UnwrapTransparentValueExpression(expression);
+
+            switch (expression)
+            {
+                case MemberAccessExpressionSyntax memberAccess:
+                    expression = memberAccess.Expression;
+                    continue;
+                case ElementAccessExpressionSyntax elementAccess:
+                    expression = elementAccess.Expression;
+                    continue;
+                case ConditionalAccessExpressionSyntax conditionalAccess:
+                    expression = conditionalAccess.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    private static ExpressionSyntax UnwrapParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
+    }
+
+    private static ExpressionSyntax UnwrapTransparentValueExpression(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            expression = UnwrapParentheses(expression);
+
+            switch (expression)
+            {
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    continue;
+                case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression):
+                    expression = binary.Left;
+                    continue;
+                case PostfixUnaryExpressionSyntax postfix
+                    when postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    expression = postfix.Operand;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
+    }
+
     /// <summary>
     /// Returns the expression whose parent decides how the resolved service is consumed: the
-    /// invocation itself, or the outermost enclosing conditional access that evaluates it
-    /// (`scope?.ServiceProvider.GetRequiredService<T>()`).
+    /// invocation itself, or the outermost enclosing wrapper whose result escapes.
     /// </summary>
     private static SyntaxNode GetConsumptionExpression(InvocationExpressionSyntax invocation)
     {
         SyntaxNode current = invocation;
-        while (current.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
-               conditionalAccess.WhenNotNull == current)
+        while (true)
         {
-            current = conditionalAccess;
+            switch (current.Parent)
+            {
+                case ParenthesizedExpressionSyntax parenthesized when parenthesized.Expression == current:
+                    current = parenthesized;
+                    continue;
+                case CastExpressionSyntax cast when cast.Expression == current:
+                    current = cast;
+                    continue;
+                case PostfixUnaryExpressionSyntax postfix
+                    when postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression) && postfix.Operand == current:
+                    current = postfix;
+                    continue;
+                case ConditionalAccessExpressionSyntax conditionalAccess when conditionalAccess.WhenNotNull == current:
+                    current = conditionalAccess;
+                    continue;
+                case ConditionalExpressionSyntax conditional
+                    when conditional.WhenTrue == current || conditional.WhenFalse == current:
+                    current = conditional;
+                    continue;
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.CoalesceExpression) &&
+                         (binary.Left == current || binary.Right == current):
+                    current = binary;
+                    continue;
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.AsExpression) && binary.Left == current:
+                    current = binary;
+                    continue;
+                default:
+                    return current;
+            }
         }
-
-        return current;
     }
 
     /// <summary>
@@ -989,6 +2489,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 if (variable.Initializer?.Value is not IdentifierNameSyntax identifier ||
                     semanticModel.GetSymbolInfo(identifier).Symbol is not ILocalSymbol sourceLocal ||
                     !serviceVariables.TryGetValue(sourceLocal, out var sourceInvocation) ||
+                    !SourceCanReachSink(sourceInvocation, variable, sourceLocal, semanticModel) ||
                     semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol aliasLocal)
                 {
                     continue;
@@ -1002,16 +2503,16 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             assignment.Left is IdentifierNameSyntax leftIdentifier &&
             semanticModel.GetSymbolInfo(leftIdentifier).Symbol is ILocalSymbol leftLocal)
         {
-            if (assignment.Right is InvocationExpressionSyntax directInvocation &&
-                serviceVariables.TryGetValue(leftLocal, out var existingInvocation) &&
-                existingInvocation == directInvocation)
+            if (serviceVariables.TryGetValue(leftLocal, out var existingInvocation) &&
+                ExpressionContainsInvocation(assignment.Right, existingInvocation))
             {
                 return;
             }
 
             if (assignment.Right is not IdentifierNameSyntax rightIdentifier ||
                 semanticModel.GetSymbolInfo(rightIdentifier).Symbol is not ILocalSymbol rightLocal ||
-                !serviceVariables.TryGetValue(rightLocal, out var invocation))
+                !serviceVariables.TryGetValue(rightLocal, out var invocation) ||
+                !SourceCanReachSink(invocation, assignment, rightLocal, semanticModel))
             {
                 serviceVariables.Remove(leftLocal);
                 return;
@@ -1071,19 +2572,39 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         ExpressionSyntax? expression,
         SemanticModel semanticModel,
         Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
-        out InvocationExpressionSyntax sourceInvocation)
+        out InvocationExpressionSyntax sourceInvocation) =>
+        TryGetTrackedLocalReference(
+            expression,
+            semanticModel,
+            serviceVariables,
+            out sourceInvocation,
+            out _);
+
+    private static bool TryGetTrackedLocalReference(
+        ExpressionSyntax? expression,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        out InvocationExpressionSyntax sourceInvocation,
+        out ILocalSymbol referencedLocal)
     {
         sourceInvocation = null!;
+        referencedLocal = null!;
 
         if (expression is ParenthesizedExpressionSyntax parenthesized)
         {
-            return TryGetTrackedLocalReference(parenthesized.Expression, semanticModel, serviceVariables, out sourceInvocation);
+            return TryGetTrackedLocalReference(
+                parenthesized.Expression,
+                semanticModel,
+                serviceVariables,
+                out sourceInvocation,
+                out referencedLocal);
         }
 
         if (expression is IdentifierNameSyntax identifier &&
             semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol localSymbol &&
             serviceVariables.TryGetValue(localSymbol, out sourceInvocation))
         {
+            referencedLocal = localSymbol;
             return true;
         }
 

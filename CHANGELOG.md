@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.11] - 2026-06-27
+
+### Fixed
+
+- **DI002 sink-ordering false positives**: tracked locals no longer report as escaping when the return, field/property assignment, or `ref`/`out` assignment happened before the local was reassigned to a scoped resolution. This keeps pre-existing values from being misclassified as scoped escapes while preserving reports after the resolution actually exists.
+- **DI002 scope-local holder false positive**: direct assignments into member/indexer targets now classify the receiver root before reporting, so `holder.Service = scopedService` stays quiet when `holder` is a freshly local object that does not escape, including through simple direct local aliases whose source is proven at alias creation time. Read-only uses such as `holder.Service is not null` or `holder.Service?.ToString()` stay quiet, pre-assignment reads of the holder slot are not blamed on a later scoped write, earlier escaped values of the same local are not blamed on a later fresh holder, and returned/stored holders, nested receiver paths under a fresh wrapper, conditional or stale long-lived holder aliases, `??=` holder receivers that may still reference a long-lived holder, holders that escape through aliases, field/property-held collections, already-escaped local collections, returned local containers and collection aliases, conditional-access slot returns, or escaping delegates, field/parameter aliases, fields, properties, parameters, static receivers, and `this`-rooted targets still report.
+- **DI002 wrapped-resolution false negative**: direct scoped resolutions returned or assigned to later-returned locals through casts, `as` casts, null-forgiving operators, ternary/coalesce expressions, and the non-generic `GetService(typeof(T))` path now participate in escape detection.
+- **DI002 review-found loop/container escapes**: local holders inserted into returned local containers through element/indexer assignments now keep the container escape relationship, tracked scoped locals, loop-local aliases of those locals, and fresh holders returned from a later loop iteration are no longer hidden by a purely lexical source-before-sink guard, loops that cannot revisit the earlier sink stay quiet for unconditional stops and loop exits, and conditional loop-stop assignments no longer hide reachable later-iteration returns.
+
 ## [2.11.10] - 2026-06-11
 
 ### Fixed

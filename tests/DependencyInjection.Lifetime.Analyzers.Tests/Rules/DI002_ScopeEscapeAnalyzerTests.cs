@@ -1237,6 +1237,188 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
+    public async Task ScopedService_NonGenericResolutionReturnedThroughCastAndNullForgiving_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return (IMyService){|DI002:scope.ServiceProvider.GetService(typeof(IMyService))|}!;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_NonGenericResolutionReturnedThroughAsCast_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return {|DI002:scope.ServiceProvider.GetService(typeof(IMyService))|} as IMyService;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_WrappedAssignmentResolutionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    IMyService service;
+                    service = (IMyService){|DI002:scope.ServiceProvider.GetService(typeof(IMyService))|}!;
+                    return service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_TernaryResolutionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService(bool fromScope, IMyService fallback)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return fromScope ? {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|} : fallback;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_CoalescedResolutionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService(IMyService fallback)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    return {|DI002:scope.ServiceProvider.GetService<IMyService>()|} ?? fallback;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ScopedService_ReturnedInsideInitializerOfNewObject_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -1273,6 +1455,1070 @@ public class DI002_ScopeEscapeAnalyzerTests
             }
 
             public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToLocalHolderThenReturned_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Holder Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return holder;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderSlotReturnedThroughConditionalAccess_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return holder?.Service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderCapturedByEscapingDelegate_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System;
+
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private Func<IMyService?>? _factory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _factory = () => holder.Service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderEscapesThroughReturnedLocalCollection_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public List<Holder> Capture()
+                {
+                    var holders = new List<Holder>();
+                    var holder = new Holder();
+                    holders.Add(holder);
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return holders;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderEscapesThroughReturnedLocalContainerElementAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Holder[] Capture()
+                {
+                    var holders = new Holder[1];
+                    var holder = new Holder();
+                    holders[0] = holder;
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return holders;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderEscapesThroughReturnedCollectionAlias_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public List<Holder> Capture()
+                {
+                    var holders = new List<Holder>();
+                    var alias = holders;
+                    var holder = new Holder();
+                    alias.Add(holder);
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return holders;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderAddedToAlreadyEscapedCollection_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private List<Holder>? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holders = new List<Holder>();
+                    _captured = holders;
+                    var holder = new Holder();
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    holders.Add(holder);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedFromLaterLoopIteration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? Capture(bool keepGoing)
+                {
+                    IMyService? service = null;
+                    while (keepGoing)
+                    {
+                        if (service is not null)
+                        {
+                            return service;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedFromLaterLoopIterationWithConditionalStop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? Capture(bool keepGoing, bool stop)
+                {
+                    IMyService? service = null;
+                    while (keepGoing)
+                    {
+                        if (service is not null)
+                        {
+                            return service;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                        if (stop)
+                        {
+                            keepGoing = false;
+                        }
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LoopAliasReturnedFromLaterIteration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? Capture(bool keepGoing)
+                {
+                    IMyService? service = null;
+                    while (keepGoing)
+                    {
+                        var alias = service;
+                        if (alias is not null)
+                        {
+                            return alias;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderReturnedFromLaterLoopIteration_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Holder? Capture(bool keepGoing)
+                {
+                    var holder = new Holder();
+                    while (keepGoing)
+                    {
+                        if (holder.Service is not null)
+                        {
+                            return holder;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToPreviouslyEscapedLocalHolder_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private Holder? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    _captured = holder;
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderEscapesThroughAliasAfterAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private Holder? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    var alias = holder;
+                    _captured = alias;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderReturnedThroughAliasAfterAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public Holder Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    var alias = holder;
+                    return alias;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderAddedToFieldCollectionAfterAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly List<Holder> _holders = new List<Holder>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _holders.Add(holder);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughFieldAliasLocal_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Holder _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = _holder;
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughExplicitCastFieldReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private object _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    ((Holder)_holder).Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughConditionallyFreshHolder_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Holder _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture(bool useLocal)
+                {
+                    Holder holder = _holder;
+                    if (useLocal)
+                    {
+                        holder = new Holder();
+                    }
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughNestedFieldHolderReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public sealed class Wrapper
+            {
+                public Wrapper(Holder holder)
+                {
+                    Holder = holder;
+                }
+
+                public Holder Holder { get; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Holder _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var wrapper = new Wrapper(_holder);
+                    using var scope = _scopeFactory.CreateScope();
+                    wrapper.Holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughNullCoalescingFieldReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Holder? _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    Holder? holder = _holder;
+                    holder ??= new Holder();
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughAliasCreatedBeforeFreshReassignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Holder _holder = new Holder();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = _holder;
+                    var alias = holder;
+                    holder = new Holder();
+
+                    using var scope = _scopeFactory.CreateScope();
+                    alias.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToBaseProperty_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public abstract class BaseClass
+            {
+                protected IMyService? Service { get; set; }
+            }
+
+            public class MyClass : BaseClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    base.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToFullyQualifiedStaticProperty_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace MyApp
+            {
+                public interface IMyService { }
+
+                public static class Globals
+                {
+                    public static IMyService? Service { get; set; }
+                }
+
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public void Capture()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        MyApp.Globals.Service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddScoped<IMyService, ScopedMyService>();
+                    }
+                }
+
+                public class ScopedMyService : IMyService { }
+            }
             """;
 
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
@@ -1367,6 +2613,541 @@ public class DI002_ScopeEscapeAnalyzerTests
                     localRef.DoWork();
                 }
             }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnBeforeResolutionAssignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService(bool useExisting, IMyService existing)
+                {
+                    IMyService service = existing;
+                    if (useExisting)
+                    {
+                        return service;
+                    }
+
+                    using var scope = _scopeFactory.CreateScope();
+                    service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.ToString();
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnBeforeResolutionAssignmentInLoopThatStops_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService(bool keepGoing)
+                {
+                    IMyService? service = null;
+                    while (keepGoing)
+                    {
+                        if (service is not null)
+                        {
+                            return service;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        keepGoing = false;
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnBeforeResolutionAssignmentInLoopThatBreaks_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService(bool keepGoing)
+                {
+                    IMyService? service = null;
+                    while (keepGoing)
+                    {
+                        if (service is not null)
+                        {
+                            return service;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        break;
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnBeforeResolutionAssignmentWithLoopLocalReset_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService? GetService(bool keepGoing)
+                {
+                    while (keepGoing)
+                    {
+                        IMyService? service = null;
+                        if (service is not null)
+                        {
+                            return service;
+                        }
+
+                        using var scope = _scopeFactory.CreateScope();
+                        service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    }
+
+                    return null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_FieldAssignmentBeforeResolutionAssignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IMyService? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture(IMyService existing)
+                {
+                    IMyService service = existing;
+                    _captured = service;
+
+                    using var scope = _scopeFactory.CreateScope();
+                    service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_RefAssignmentBeforeResolutionAssignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture(ref IMyService escaped, IMyService existing)
+                {
+                    IMyService service = existing;
+                    escaped = service;
+
+                    using var scope = _scopeFactory.CreateScope();
+                    service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToLocalHolderProperty_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    holder.Service?.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderPropertyReadAssignedToField_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private bool _hasService;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _hasService = holder.Service is not null;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderPropertyReadStoredBeforeAssignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IMyService? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    _captured = holder.Service;
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    holder.Service?.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_LocalHolderPropertyReadReturned_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public string? Capture()
+                {
+                    var holder = new Holder();
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    return holder.Service?.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedToFreshHolderAfterPreviousHolderEscaped_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private Holder? _captured;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    _captured = holder;
+                    holder = new Holder();
+
+                    using var scope = _scopeFactory.CreateScope();
+                    holder.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    holder.Service?.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AssignedThroughLocalAliasOfFreshHolder_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class Holder
+            {
+                public IMyService? Service { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Capture()
+                {
+                    var holder = new Holder();
+                    var alias = holder;
+                    using var scope = _scopeFactory.CreateScope();
+                    alias.Service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    holder.Service?.ToString();
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
             """;
 
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
