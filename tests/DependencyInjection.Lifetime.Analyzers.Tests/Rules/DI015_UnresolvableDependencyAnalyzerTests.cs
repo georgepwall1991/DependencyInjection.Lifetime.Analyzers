@@ -219,6 +219,70 @@ public class DI015_UnresolvableDependencyAnalyzerTests
         await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task ContainerNativeServiceProviderInspectionDependencies_DoNotReport()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public interface IServiceProviderIsService
+                {
+                    bool IsService(Type serviceType);
+                }
+
+                public interface IServiceProviderIsKeyedService
+                {
+                    bool IsKeyedService(Type serviceType, object? serviceKey);
+                }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(
+                    IServiceProviderIsService services,
+                    IServiceProviderIsKeyedService keyedServices) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Dependency_ProvidedByUnknownTwoTypeRegistration_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public class Dependency : IDependency { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var implementationType = typeof(Dependency);
+                    services.AddSingleton(typeof(IDependency), implementationType);
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
 
     [Fact]
     public async Task RegisteredService_WithMissingConstructorDependency_ReportsDiagnostic()

@@ -176,11 +176,6 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        if (namedType.TypeKind == TypeKind.Struct)
-        {
-            return true;
-        }
-
         if (namedType.TypeKind != TypeKind.Class)
         {
             return false;
@@ -462,7 +457,8 @@ internal sealed class DependencyResolutionEngine
         }
 
         if (_wellKnownTypes is not null &&
-            _wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType))
+            (_wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType) ||
+             _wellKnownTypes.IsServiceProviderInspectionService(dependencyType)))
         {
             return true;
         }

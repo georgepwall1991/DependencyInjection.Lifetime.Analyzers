@@ -44,6 +44,16 @@ public sealed class WellKnownTypes
     public INamedTypeSymbol? IKeyedServiceProvider { get; }
 
     /// <summary>
+    /// Gets the IServiceProviderIsService type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IServiceProviderIsService { get; }
+
+    /// <summary>
+    /// Gets the IServiceProviderIsKeyedService type symbol (.NET 8+).
+    /// </summary>
+    public INamedTypeSymbol? IServiceProviderIsKeyedService { get; }
+
+    /// <summary>
     /// Gets the IServiceCollection type symbol.
     /// </summary>
     public INamedTypeSymbol? IServiceCollection { get; }
@@ -91,6 +101,8 @@ public sealed class WellKnownTypes
         INamedTypeSymbol? disposable,
         INamedTypeSymbol? asyncDisposable,
         INamedTypeSymbol? keyedServiceProvider,
+        INamedTypeSymbol? serviceProviderIsService,
+        INamedTypeSymbol? serviceProviderIsKeyedService,
         INamedTypeSymbol? serviceCollection,
         INamedTypeSymbol? serviceCollectionServiceExtensions,
         INamedTypeSymbol? configuration,
@@ -107,6 +119,8 @@ public sealed class WellKnownTypes
         IDisposable = disposable;
         IAsyncDisposable = asyncDisposable;
         IKeyedServiceProvider = keyedServiceProvider;
+        IServiceProviderIsService = serviceProviderIsService;
+        IServiceProviderIsKeyedService = serviceProviderIsKeyedService;
         IServiceCollection = serviceCollection;
         ServiceCollectionServiceExtensions = serviceCollectionServiceExtensions;
         IConfiguration = configuration;
@@ -130,6 +144,8 @@ public sealed class WellKnownTypes
         var disposable = compilation.GetTypeByMetadataName("System.IDisposable");
         var asyncDisposable = compilation.GetTypeByMetadataName("System.IAsyncDisposable");
         var keyedServiceProvider = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider");
+        var serviceProviderIsService = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceProviderIsService");
+        var serviceProviderIsKeyedService = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceProviderIsKeyedService");
         var serviceCollection = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceCollection");
         var serviceCollectionServiceExtensions = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions");
         var configuration = compilation.GetTypeByMetadataName("Microsoft.Extensions.Configuration.IConfiguration");
@@ -153,6 +169,8 @@ public sealed class WellKnownTypes
             disposable,
             asyncDisposable,
             keyedServiceProvider,
+            serviceProviderIsService,
+            serviceProviderIsKeyedService,
             serviceCollection,
             serviceCollectionServiceExtensions,
             configuration,
@@ -209,6 +227,16 @@ public sealed class WellKnownTypes
     public bool IsKeyedServiceProvider(ITypeSymbol? type)
     {
         return type is not null && SymbolEqualityComparer.Default.Equals(type, IKeyedServiceProvider);
+    }
+
+    /// <summary>
+    /// Checks if the given type is provided by the container for service availability inspection.
+    /// </summary>
+    public bool IsServiceProviderInspectionService(ITypeSymbol? type)
+    {
+        return type is not null &&
+               (SymbolEqualityComparer.Default.Equals(type, IServiceProviderIsService) ||
+                SymbolEqualityComparer.Default.Equals(type, IServiceProviderIsKeyedService));
     }
 
     /// <summary>

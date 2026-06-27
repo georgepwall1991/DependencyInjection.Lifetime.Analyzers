@@ -348,6 +348,35 @@ public class DI015_UnresolvableDependencyCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_NotOffered_ForStructDependency()
+    {
+        var source = Usings + """
+            public readonly struct MissingDependency { }
+
+            public interface IMyService { }
+            public sealed class MyService : IMyService
+            {
+                public MyService(MissingDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+            .WithArguments("IMyService", "MissingDependency");
+
+        await CodeFixVerifier<DI015_UnresolvableDependencyAnalyzer, DI015_UnresolvableDependencyCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, AddMissingRegistrationEquivalenceKey);
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_ForMultipleMissingDependencies()
     {
         var source = Usings + """
