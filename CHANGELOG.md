@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.12] - 2026-06-27
+
+### Fixed
+
+- **DI015 container-native false positives**: constructor dependencies on `IServiceProviderIsService` and `IServiceProviderIsKeyedService` are now treated as container-provided, matching MEDI's native activation surface instead of reporting missing registrations.
+- **DI015 struct self-binding fixer output**: the missing-registration code fix no longer offers `AddSingleton<TStruct>()` / scoped / transient self-bindings for struct dependencies, because MEDI's generic registration helpers require class services.
+- **DI015 unknown two-Type registration guard**: pinned the existing conservative behavior for `services.AddSingleton(typeof(IService), implementationType)` where the implementation argument is not statically extractable; downstream consumers stay quiet rather than fabricating an unsafe self-binding.
+
 ## [2.11.11] - 2026-06-27
 
 ### Fixed

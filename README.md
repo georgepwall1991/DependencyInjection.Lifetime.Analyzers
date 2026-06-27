@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.11
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.12
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.11">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.12">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.11" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.12" />
 ```
 
 Then reference it from the project file:
@@ -718,7 +718,7 @@ services.AddScoped<IMissingDependency, MissingDependency>();
 services.AddSingleton<IMyService, MyService>();
 ```
 
-**Code Fix:** Yes. Adds a missing self-binding registration when DI015 can prove a single direct concrete dependency is safe to register. Supports local constructor diagnostics, `TryAdd*` registration sites, local `IServiceCollection` aliases, direct `GetRequiredService<TConcrete>()` factory diagnostics, and keyed self-bindings when the key can be emitted as a C# literal.
+**Code Fix:** Yes. Adds a missing self-binding registration when DI015 can prove a single direct concrete class dependency is safe to register. Supports local constructor diagnostics, `TryAdd*` registration sites, local `IServiceCollection` aliases, direct `GetRequiredService<TConcrete>()` factory diagnostics, and keyed self-bindings when the key can be emitted as a C# literal.
 
 ### DI015 strict mode
 
@@ -734,7 +734,7 @@ DI015 is intentionally conservative to keep false positives low:
 
 - Source-visible `IServiceCollection` wrappers are expanded before DI015 reports missing registrations.
 - Stable local delegate factories are inspected, including inherited keyed factory parameters, later definite simple reassignments, exhaustive local-function branch rewrites, and method-group delegate aliases to local functions that rewrite the factory, while unrelated assignment left-hand-side uses and opaque delegate-local writes such as direct delegate calls, delegate `.Invoke()` calls, and `ref`/`out` writes stay conservative.
-- `[ServiceKey]` parameters and `IEnumerable<T>` are treated as container-provided.
+- `[ServiceKey]` parameters, `IEnumerable<T>`, `IServiceProviderIsService`, and `IServiceProviderIsKeyedService` are treated as container-provided.
 - Parameterless `[FromKeyedServices]` inherits the containing keyed registration key when that key is known.
 - `KeyedService.AnyKey` keyed registrations satisfy exact keyed dependency requests.
 - Definite same-flow `RemoveAll(...)` and `Replace(...)` mutations suppress diagnostics for registrations they remove.
@@ -743,6 +743,7 @@ DI015 is intentionally conservative to keep false positives low:
 - `GetService(...)` and dynamic keyed resolutions are treated as optional/unknown.
 - If an earlier opaque or external wrapper could have registered services on the same `IServiceCollection` flow, DI015 stays silent instead of speculating.
 - If any effective candidate registration is backed by an opaque factory, DI015 stays silent instead of speculating.
+- Two-Type registrations with a non-extractable implementation argument are treated as registered-but-unknown, suppressing downstream missing-registration guesses without inventing an implementation shape.
 
 ---
 
