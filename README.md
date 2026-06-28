@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.17
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.18
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.17">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.18">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.17" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.18" />
 ```
 
 Then reference it from the project file:
@@ -840,7 +840,7 @@ public sealed class BadPrivateCtorService : IMyService
 services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
 
-DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
+DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
 
 **Better pattern:**
 
