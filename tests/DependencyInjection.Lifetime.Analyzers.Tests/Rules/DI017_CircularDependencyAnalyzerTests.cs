@@ -195,6 +195,117 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task ExactClosedRegistrationCycle_BeatsSafeOpenGeneric_Reports()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IWorker { }
+            public sealed class Order { }
+
+            public class OpenRepository<T> : IRepository<T> { }
+
+            public class OrderRepository : IRepository<Order>
+            {
+                public OrderRepository(IWorker worker) { }
+            }
+
+            public class Worker : IWorker
+            {
+                public Worker(IRepository<Order> repository) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IRepository<Order>, OrderRepository>();
+                    services.AddScoped(typeof(IRepository<>), typeof(OpenRepository<>));
+                    services.AddScoped<IWorker, Worker>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(24, 9, 24, 66)
+                .WithArguments("OrderRepository", "IRepository<Order> -> IWorker -> IRepository<Order>"));
+    }
+
+    [Fact]
+    public async Task OptionalRegisteredConstructorParameter_ParticipatesInCycle()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b = null) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(21, 9, 21, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
+    public async Task ConstructorWithUnknownKeyedParameter_StillAnalyzesOtherParameters()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface IUnknownKeyed { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA([FromKeyedServices] IUnknownKeyed unknown, IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.ReferenceAssembliesWithLatestKeyedDi,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(22, 9, 22, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
     public async Task DirectCircularDependency_WithAdditionalInstanceRegistration_ReportsOnConstructedRegistration()
     {
         var source = Usings + """
@@ -849,7 +960,7 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
-    public async Task CircularDependency_WithOptionalParam_DoesNotReport()
+    public async Task CircularDependency_WithRegisteredOptionalParam_Reports()
     {
         var source = Usings + """
             public interface IServiceA { }
@@ -857,7 +968,7 @@ public class DI017_CircularDependencyAnalyzerTests
 
             public class ServiceA : IServiceA
             {
-                public ServiceA(IServiceB? b = null) { }
+                public ServiceA(IServiceB b = null) { }
             }
 
             public class ServiceB : IServiceB
@@ -875,8 +986,12 @@ public class DI017_CircularDependencyAnalyzerTests
             }
             """;
 
-        // Optional parameter breaks the cycle since the container can use null
-        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithSpan(21, 9, 21, 50)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
     }
 
     [Fact]
@@ -1222,6 +1337,40 @@ public class DI017_CircularDependencyAnalyzerTests
                     services.AddScoped<IServiceA, SafeA>();
                     Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddScoped<IServiceA, ServiceA>(services);
                     services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ExactClosedSafeRegistration_BeatsCyclicOpenGeneric_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IWorker { }
+            public sealed class Order { }
+
+            public class OpenRepository<T> : IRepository<T>
+            {
+                public OpenRepository(IWorker worker) { }
+            }
+
+            public class SafeOrderRepository : IRepository<Order> { }
+
+            public class Worker : IWorker
+            {
+                public Worker(IRepository<Order> repository) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IRepository<Order>, SafeOrderRepository>();
+                    services.AddScoped(typeof(IRepository<>), typeof(OpenRepository<>));
+                    services.AddScoped<IWorker, Worker>();
                 }
             }
             """;

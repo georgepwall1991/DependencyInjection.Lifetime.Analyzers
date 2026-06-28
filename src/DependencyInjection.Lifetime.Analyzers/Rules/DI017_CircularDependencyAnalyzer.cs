@@ -371,7 +371,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
                 registration.IsKeyed ? registration.KeyLiteral : null);
             if (serviceKey.IsUnknown)
             {
-                yield break;
+                continue;
             }
 
             var requestKey = new ServiceRequestKey(
@@ -497,9 +497,7 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
 
     private static bool ShouldSkipParameter(IParameterSymbol parameter, WellKnownTypes? wellKnownTypes)
     {
-        if (parameter.HasExplicitDefaultValue ||
-            parameter.IsOptional ||
-            KeyedServiceHelpers.IsServiceKeyParameter(parameter))
+        if (KeyedServiceHelpers.IsServiceKeyParameter(parameter))
         {
             return true;
         }
@@ -1106,10 +1104,29 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
 
         public RegistrationMatch? FindSingleRegistration(ServiceRequestKey request, bool allowAnyFlow = false)
         {
-            var matches = FindAllRegistrations(request, allowAnyFlow);
-            return matches.IsDefaultOrEmpty
-                ? null
-                : matches[matches.Length - 1];
+            var exactMatches = ImmutableArray.CreateBuilder<RegistrationMatch>();
+            AddMatches(request, allowAnyFlow, exactMatches);
+            if (exactMatches.Count > 0)
+            {
+                return exactMatches[exactMatches.Count - 1];
+            }
+
+            if (request.Type.IsGenericType && !request.Type.IsUnboundGenericType)
+            {
+                var openMatches = ImmutableArray.CreateBuilder<RegistrationMatch>();
+                var openType = request.Type.ConstructUnboundGenericType();
+                AddMatches(
+                    new ServiceRequestKey(openType, request.Key, request.IsKeyed, request.FlowKey),
+                    allowAnyFlow,
+                    openMatches,
+                    requestedType: request.Type);
+
+                return openMatches.Count == 0
+                    ? null
+                    : openMatches[openMatches.Count - 1];
+            }
+
+            return null;
         }
 
         public ImmutableArray<RegistrationMatch> FindAllRegistrations(
