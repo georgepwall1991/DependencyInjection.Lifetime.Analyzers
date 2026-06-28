@@ -93,6 +93,14 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
             HandleServiceCollectionAddDescriptor(context, invocation, wellKnownTypes, serviceDescriptorType, optionsProvider);
             return;
         }
+
+        // Path 4: services.TryAdd(ServiceDescriptor.Transient<...>()) / services.Replace(...)
+        if (serviceCollectionDescriptorExtensionsType is not null &&
+            IsServiceDescriptorExtensionDescriptorMethod(methodSymbol, wellKnownTypes, serviceCollectionDescriptorExtensionsType))
+        {
+            HandleServiceCollectionAddDescriptor(context, invocation, wellKnownTypes, serviceDescriptorType, optionsProvider);
+            return;
+        }
     }
 
     private static void HandleAddTransientShape(
@@ -681,6 +689,24 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsServiceDescriptorExtensionDescriptorMethod(
+        IMethodSymbol method,
+        WellKnownTypes wellKnownTypes,
+        INamedTypeSymbol descriptorExtensionsType)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+
+        if (!originalMethod.IsExtensionMethod ||
+            originalMethod.Name is not ("TryAdd" or "Replace") ||
+            !SymbolEqualityComparer.Default.Equals(originalMethod.ContainingType, descriptorExtensionsType) ||
+            originalMethod.Parameters.Length < 2)
+        {
+            return false;
+        }
+
+        return wellKnownTypes.IsServiceCollection(originalMethod.Parameters[0].Type);
     }
 
     private static bool IsFactoryRegistration(IMethodSymbol method, InvocationExpressionSyntax invocation, SemanticModel semanticModel)

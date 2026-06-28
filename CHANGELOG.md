@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.14] - 2026-06-28
+
+### Fixed
+
+- **RegistrationCollector ServiceDescriptor recall**: shared registration collection now sees `TryAddEnumerable(ServiceDescriptor...)`, target-typed `new(...)` descriptors, and stable single-assignment descriptor locals passed to `Add`/`TryAdd`/`Replace`, so downstream rules such as DI012, DI017, DI018, and the scoped-tier analysis no longer miss those registration shapes.
+- **DI012 TryAddEnumerable pair semantics**: `TryAddEnumerable` now compares earlier registrations by `(service type, implementation type)` instead of treating every earlier service registration as equivalent; same-implementation descriptors report as ignored while different implementations stay quiet.
+- **DI008 plain descriptor extensions**: disposable transient descriptors passed to plain `TryAdd(ServiceDescriptor...)` and `Replace(ServiceDescriptor...)` now report DI008 like the existing `Add(ServiceDescriptor...)` and `TryAddEnumerable(...)` paths.
+
 ## [2.11.13] - 2026-06-28
 
 ### Fixed

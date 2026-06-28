@@ -91,6 +91,50 @@ public sealed class RegistrationCollector
         }
     }
 
+    private readonly struct ServiceImplementationIdentifier : System.IEquatable<ServiceImplementationIdentifier>
+    {
+        public ServiceImplementationIdentifier(
+            INamedTypeSymbol serviceType,
+            object? key,
+            bool isKeyed,
+            INamedTypeSymbol implementationType)
+        {
+            ServiceType = serviceType;
+            Key = key;
+            IsKeyed = isKeyed;
+            ImplementationType = implementationType;
+        }
+
+        public INamedTypeSymbol ServiceType { get; }
+
+        public object? Key { get; }
+
+        public bool IsKeyed { get; }
+
+        public INamedTypeSymbol ImplementationType { get; }
+
+        public bool Equals(ServiceImplementationIdentifier other) =>
+            SymbolEqualityComparer.Default.Equals(ServiceType, other.ServiceType) &&
+            Equals(Key, other.Key) &&
+            IsKeyed == other.IsKeyed &&
+            SymbolEqualityComparer.Default.Equals(ImplementationType, other.ImplementationType);
+
+        public override bool Equals(object? obj) =>
+            obj is ServiceImplementationIdentifier other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = SymbolEqualityComparer.Default.GetHashCode(ServiceType);
+                hashCode = (hashCode * 397) ^ (Key != null ? Key.GetHashCode() : 0);
+                hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
+                hashCode = (hashCode * 397) ^ SymbolEqualityComparer.Default.GetHashCode(ImplementationType);
+                return hashCode;
+            }
+        }
+    }
+
     private sealed class ServiceIdentifierComparer : IEqualityComparer<ServiceIdentifier>
     {
         public static readonly ServiceIdentifierComparer Instance = new();
@@ -98,6 +142,15 @@ public sealed class RegistrationCollector
         public bool Equals(ServiceIdentifier x, ServiceIdentifier y) => x.Equals(y);
 
         public int GetHashCode(ServiceIdentifier obj) => obj.GetHashCode();
+    }
+
+    private sealed class ServiceImplementationIdentifierComparer : IEqualityComparer<ServiceImplementationIdentifier>
+    {
+        public static readonly ServiceImplementationIdentifierComparer Instance = new();
+
+        public bool Equals(ServiceImplementationIdentifier x, ServiceImplementationIdentifier y) => x.Equals(y);
+
+        public int GetHashCode(ServiceImplementationIdentifier obj) => obj.GetHashCode();
     }
 
     /// <summary>
@@ -244,9 +297,30 @@ public sealed class RegistrationCollector
             .Select(item => item.Registration);
 
         var seen = new HashSet<ServiceIdentifier>(ServiceIdentifierComparer.Instance);
+        var seenImplementations = new HashSet<ServiceImplementationIdentifier>(ServiceImplementationIdentifierComparer.Instance);
         foreach (var registration in ordered)
         {
             var identifier = new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed);
+            if (registration.SkipIfSameImplementationAlreadyRegistered)
+            {
+                if (registration.ImplementationType is not null)
+                {
+                    var implementationIdentifier = new ServiceImplementationIdentifier(
+                        registration.ServiceType,
+                        registration.Key,
+                        registration.IsKeyed,
+                        registration.ImplementationType);
+                    if (!seenImplementations.Add(implementationIdentifier))
+                    {
+                        continue;
+                    }
+                }
+
+                seen.Add(identifier);
+                yield return registration;
+                continue;
+            }
+
             if ((registration.SkipIfAlreadyRegistered || registration.IsTryAdd) &&
                 seen.Contains(identifier))
             {
@@ -254,6 +328,16 @@ public sealed class RegistrationCollector
             }
 
             seen.Add(identifier);
+            if (registration.ImplementationType is not null)
+            {
+                seenImplementations.Add(
+                    new ServiceImplementationIdentifier(
+                        registration.ServiceType,
+                        registration.Key,
+                        registration.IsKeyed,
+                        registration.ImplementationType));
+            }
+
             yield return registration;
         }
     }
@@ -300,6 +384,7 @@ public sealed class RegistrationCollector
 
         var methodName = methodSymbol.Name;
         var isTryAdd = IsTryAddMethod(methodName);
+        var isTryAddEnumerable = methodName == "TryAddEnumerable";
 
         if (TryAnalyzeRegistrationMutation(
                 invocation,
@@ -488,12 +573,17 @@ public sealed class RegistrationCollector
             // Extract service, implementation types, factory expression, and key from standard methods
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, key, implementationInstanceTypeIsExact) = ExtractTypes(methodSymbol, invocation, semanticModel);
         }
-        else if ((methodName == "Add" || methodName == "TryAdd") &&
+        else if ((methodName == "Add" || methodName == "TryAdd" || methodName == "TryAddEnumerable") &&
                  (isExtension || isAddMethod))
         {
             // Handle Add(ServiceDescriptor)
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, lifetime, key, isKeyed, implementationInstanceTypeIsExact) =
                 ExtractFromServiceDescriptor(invocation, semanticModel);
+
+            if (methodName == "TryAddEnumerable")
+            {
+                skipPrimaryIfAlreadyRegistered = true;
+            }
         }
         else
         {
@@ -519,7 +609,8 @@ public sealed class RegistrationCollector
             order,
             isTryAdd,
             methodName,
-            skipPrimaryIfAlreadyRegistered);
+            skipPrimaryIfAlreadyRegistered,
+            implementationType: implementationType);
         _orderedRegistrations.Add(orderedRegistration);
 
         // Store registrations that can actually become effective at runtime. TryAdd* only
@@ -528,7 +619,7 @@ public sealed class RegistrationCollector
         // but DI012 now applies a stable source-location ordering when it evaluates duplicates.
         if (implementationType is not null || factoryExpression is not null || hasImplementationInstance)
         {
-            if (isTryAdd && hasEffectiveRegistration)
+            if (isTryAdd && !isTryAddEnumerable && hasEffectiveRegistration)
             {
                 return;
             }
@@ -550,6 +641,7 @@ public sealed class RegistrationCollector
                 order,
                 skipPrimaryIfAlreadyRegistered,
                 isTryAdd,
+                isTryAddEnumerable,
                 implementationInstanceTypeIsExact);
 
             _allRegistrations.Add(registration);
@@ -838,7 +930,8 @@ public sealed class RegistrationCollector
                     registrationOrder,
                     isTryAdd: false,
                     methodName,
-                    skipIfAlreadyRegistered: false));
+                    skipIfAlreadyRegistered: false,
+                    implementationType: implementationType));
 
             var keyLiteral = SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var formattedKey)
                 ? formattedKey
@@ -893,32 +986,199 @@ public sealed class RegistrationCollector
         // Look for ServiceDescriptor argument
         foreach (var arg in invocation.ArgumentList.Arguments)
         {
-            if (arg.Expression is ObjectCreationExpressionSyntax creation)
+            if (TryResolveServiceDescriptorExpression(arg.Expression, semanticModel, out var descriptorExpression))
             {
-                var typeSymbol = semanticModel.GetTypeInfo(creation).Type;
-                if (IsServiceDescriptorType(typeSymbol))
+                return ExtractFromResolvedServiceDescriptorExpression(descriptorExpression, semanticModel);
+            }
+        }
+
+        return (null, null, null, false, null, null, false, true);
+    }
+
+    private bool TryResolveServiceDescriptorExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        out ExpressionSyntax descriptorExpression)
+    {
+        return TryResolveServiceDescriptorExpression(
+            expression,
+            semanticModel,
+            System.Array.Empty<ILocalSymbol>(),
+            out descriptorExpression);
+    }
+
+    private bool TryResolveServiceDescriptorExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        IReadOnlyList<ILocalSymbol> visitedLocals,
+        out ExpressionSyntax descriptorExpression)
+    {
+        descriptorExpression = StripParentheses(expression);
+
+        if (IsInlineServiceDescriptorExpression(descriptorExpression, semanticModel))
+        {
+            return true;
+        }
+
+        if (semanticModel.GetSymbolInfo(descriptorExpression).Symbol is not ILocalSymbol local ||
+            !IsServiceDescriptorType(local.Type) ||
+            visitedLocals.Any(visitedLocal => SymbolEqualityComparer.Default.Equals(visitedLocal, local)) ||
+            !TryGetStableLocalServiceDescriptorValue(descriptorExpression, semanticModel, local, out var localValue))
+        {
+            return false;
+        }
+
+        var nextVisitedLocals = visitedLocals.Concat(new[] { local }).ToArray();
+        return TryResolveServiceDescriptorExpression(
+            localValue,
+            semanticModel,
+            nextVisitedLocals,
+            out descriptorExpression);
+    }
+
+    private bool IsInlineServiceDescriptorExpression(ExpressionSyntax expression, SemanticModel semanticModel)
+    {
+        if (expression is BaseObjectCreationExpressionSyntax creation)
+        {
+            return IsServiceDescriptorType(semanticModel.GetTypeInfo(creation).Type);
+        }
+
+        if (expression is InvocationExpressionSyntax descriptorInvocation &&
+            semanticModel.GetSymbolInfo(descriptorInvocation).Symbol is IMethodSymbol descriptorMethod)
+        {
+            return IsServiceDescriptorType(descriptorMethod.ContainingType);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetStableLocalServiceDescriptorValue(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        ILocalSymbol local,
+        out ExpressionSyntax value)
+    {
+        value = null!;
+
+        if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not VariableDeclaratorSyntax declarator ||
+            declarator.Initializer?.Value is not { } initializer ||
+            declarator.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>() is not { } declarationStatement ||
+            expression.FirstAncestorOrSelf<StatementSyntax>() is not { } usageStatement ||
+            declarationStatement.Parent is not BlockSyntax block ||
+            usageStatement.Parent != block ||
+            declarationStatement.SpanStart >= expression.SpanStart)
+        {
+            return false;
+        }
+
+        var declarationIndex = block.Statements.IndexOf(declarationStatement);
+        var usageIndex = block.Statements.IndexOf(usageStatement);
+        if (declarationIndex < 0 || usageIndex <= declarationIndex)
+        {
+            return false;
+        }
+
+        for (var i = declarationIndex + 1; i < usageIndex; i++)
+        {
+            if (WritesLocal(block.Statements[i], local, semanticModel))
+            {
+                return false;
+            }
+        }
+
+        value = initializer;
+        return true;
+    }
+
+    private static bool WritesLocal(SyntaxNode node, ILocalSymbol local, SemanticModel semanticModel)
+    {
+        foreach (var assignment in node.DescendantNodesAndSelf().OfType<AssignmentExpressionSyntax>())
+        {
+            if (IsLocalReference(assignment.Left, local, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        foreach (var prefix in node.DescendantNodesAndSelf().OfType<PrefixUnaryExpressionSyntax>())
+        {
+            if ((prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                 prefix.IsKind(SyntaxKind.PreDecrementExpression)) &&
+                IsLocalReference(prefix.Operand, local, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        foreach (var postfix in node.DescendantNodesAndSelf().OfType<PostfixUnaryExpressionSyntax>())
+        {
+            if ((postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
+                 postfix.IsKind(SyntaxKind.PostDecrementExpression)) &&
+                IsLocalReference(postfix.Operand, local, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        foreach (var argument in node.DescendantNodesAndSelf().OfType<ArgumentSyntax>())
+        {
+            if (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword))
+            {
+                if (IsLocalReference(argument.Expression, local, semanticModel))
                 {
-                    return ExtractFromServiceDescriptorArguments(creation.ArgumentList, semanticModel);
+                    return true;
                 }
             }
-            else if (arg.Expression is InvocationExpressionSyntax describeInvocation)
-            {
-                var methodSymbol = semanticModel.GetSymbolInfo(describeInvocation).Symbol as IMethodSymbol;
-                if (methodSymbol is not null &&
-                    IsServiceDescriptorType(methodSymbol.ContainingType))
-                {
-                    if (methodSymbol.Name == "Describe")
-                    {
-                        return ExtractFromServiceDescriptorArguments(describeInvocation.ArgumentList, semanticModel);
-                    }
+        }
 
-                    var lifetime = GetLifetimeFromServiceDescriptorFactoryMethod(methodSymbol.Name);
-                    if (lifetime.HasValue)
-                    {
-                        var (serviceType, implementationType, factoryExpression, hasImplementationInstance, key, implementationInstanceTypeIsExact) =
-                            ExtractTypes(methodSymbol, describeInvocation, semanticModel);
-                        return (serviceType, implementationType, factoryExpression, hasImplementationInstance, lifetime, key, IsKeyedMethod(methodSymbol.Name), implementationInstanceTypeIsExact);
-                    }
+        return false;
+    }
+
+    private static bool IsLocalReference(ExpressionSyntax expression, ILocalSymbol local, SemanticModel semanticModel) =>
+        SymbolEqualityComparer.Default.Equals(
+            semanticModel.GetSymbolInfo(StripParentheses(expression)).Symbol,
+            local);
+
+    private static ExpressionSyntax StripParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
+    }
+
+    private (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, bool hasImplementationInstance, ServiceLifetime? lifetime, object? key, bool isKeyed, bool implementationInstanceTypeIsExact) ExtractFromResolvedServiceDescriptorExpression(
+        ExpressionSyntax descriptorExpression,
+        SemanticModel semanticModel)
+    {
+        if (descriptorExpression is BaseObjectCreationExpressionSyntax creation)
+        {
+            var typeSymbol = semanticModel.GetTypeInfo(creation).Type;
+            if (IsServiceDescriptorType(typeSymbol))
+            {
+                return ExtractFromServiceDescriptorArguments(creation.ArgumentList, semanticModel);
+            }
+        }
+        else if (descriptorExpression is InvocationExpressionSyntax describeInvocation)
+        {
+            var methodSymbol = semanticModel.GetSymbolInfo(describeInvocation).Symbol as IMethodSymbol;
+            if (methodSymbol is not null &&
+                IsServiceDescriptorType(methodSymbol.ContainingType))
+            {
+                if (methodSymbol.Name == "Describe")
+                {
+                    return ExtractFromServiceDescriptorArguments(describeInvocation.ArgumentList, semanticModel);
+                }
+
+                var lifetime = GetLifetimeFromServiceDescriptorFactoryMethod(methodSymbol.Name);
+                if (lifetime.HasValue)
+                {
+                    var (serviceType, implementationType, factoryExpression, hasImplementationInstance, key, implementationInstanceTypeIsExact) =
+                        ExtractTypes(methodSymbol, describeInvocation, semanticModel);
+                    return (serviceType, implementationType, factoryExpression, hasImplementationInstance, lifetime, key, IsKeyedMethod(methodSymbol.Name), implementationInstanceTypeIsExact);
                 }
             }
         }

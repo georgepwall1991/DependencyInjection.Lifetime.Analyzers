@@ -136,6 +136,42 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
             var currentHasOpaquePredecessor =
                 reachabilityAnalyzer?.HasOpaquePredecessor(current.Location) == true;
 
+            if (current.MethodName == "TryAddEnumerable")
+            {
+                var equivalentRegistration = FindEarlierEquivalentEnumerableRegistration(current, registrations, i);
+                if (equivalentRegistration is null)
+                {
+                    activeDescriptorCount++;
+                    firstAddRegistration ??= current;
+                    continue;
+                }
+
+                if (IsUnconditionalFallbackAfterGuardedRegistration(
+                        equivalentRegistration,
+                        current,
+                        registrations) ||
+                    AreOppositeBranchesOfSameIfChain(equivalentRegistration, current) ||
+                    (!ServiceCollectionReachabilityAnalyzer.IsLoopedWrapperFlowKey(equivalentRegistration.FlowKey) &&
+                     !ServiceCollectionReachabilityAnalyzer.IsLoopedWrapperFlowKey(current.FlowKey) &&
+                     AreComplementarySiblingGuardRegistrations(equivalentRegistration, current)) ||
+                    (currentHasOpaquePredecessor &&
+                     reachabilityAnalyzer?.HasOpaquePredecessor(equivalentRegistration.Location) != true))
+                {
+                    activeDescriptorCount = Math.Max(activeDescriptorCount, 1);
+                    continue;
+                }
+
+                var diagnostic = Diagnostic.Create(
+                    DiagnosticDescriptors.TryAddIgnored,
+                    current.Location,
+                    serviceTypeName,
+                    FormatLocation(equivalentRegistration.Location));
+
+                context.ReportDiagnostic(diagnostic);
+                activeDescriptorCount = Math.Max(activeDescriptorCount, 1);
+                continue;
+            }
+
             if (current.SkipIfAlreadyRegistered &&
                 firstAddRegistration is not null)
             {
@@ -291,6 +327,32 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 }
             }
         }
+    }
+
+    private static OrderedRegistration? FindEarlierEquivalentEnumerableRegistration(
+        OrderedRegistration current,
+        List<OrderedRegistration> registrations,
+        int currentIndex)
+    {
+        if (current.ImplementationType is null)
+        {
+            return null;
+        }
+
+        for (var i = 0; i < currentIndex; i++)
+        {
+            var candidate = registrations[i];
+            if (!SameFlowKey(candidate.FlowKey, current.FlowKey) ||
+                candidate.ImplementationType is null ||
+                !SymbolEqualityComparer.Default.Equals(candidate.ImplementationType, current.ImplementationType))
+            {
+                continue;
+            }
+
+            return candidate;
+        }
+
+        return null;
     }
 
     private static string FormatLocation(Location location)

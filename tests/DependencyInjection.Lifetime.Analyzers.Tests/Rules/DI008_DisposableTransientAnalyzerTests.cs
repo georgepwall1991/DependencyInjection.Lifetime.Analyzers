@@ -720,6 +720,68 @@ public class DI008_DisposableTransientAnalyzerTests
     }
 
     [Fact]
+    public async Task ServiceCollectionTryAdd_ServiceDescriptorTransientGeneric_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAdd(ServiceDescriptor.Transient<IMyService, DisposableService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithLocation(15, 9)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
+    public async Task ServiceCollectionReplace_ServiceDescriptorTransientGeneric_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Replace(ServiceDescriptor.Transient<IMyService, DisposableService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithLocation(15, 9)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
     public async Task ServiceCollectionAdd_ServiceDescriptorTransientTypeOf_ReportsDiagnostic()
     {
         var source = Usings + """

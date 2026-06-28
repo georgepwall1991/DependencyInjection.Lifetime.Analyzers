@@ -75,6 +75,12 @@ public sealed class ServiceRegistration
     public bool IsTryAdd { get; }
 
     /// <summary>
+    /// Gets whether this registration should be ignored only when an earlier registration
+    /// for the same service/key and implementation type already exists in source order.
+    /// </summary>
+    public bool SkipIfSameImplementationAlreadyRegistered { get; }
+
+    /// <summary>
     /// Gets whether <see cref="ImplementationType"/> is provably the runtime type for an
     /// instance-backed registration (the instance expression is an object creation, or its
     /// static type is sealed or a value type). When false, the recorded type is only the
@@ -101,6 +107,7 @@ public sealed class ServiceRegistration
         int order = 0,
         bool skipIfAlreadyRegistered = false,
         bool isTryAdd = false,
+        bool skipIfSameImplementationAlreadyRegistered = false,
         bool implementationInstanceTypeIsExact = true)
     {
         ServiceType = serviceType;
@@ -116,6 +123,7 @@ public sealed class ServiceRegistration
         Order = order;
         SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
         IsTryAdd = isTryAdd;
+        SkipIfSameImplementationAlreadyRegistered = skipIfSameImplementationAlreadyRegistered;
         ImplementationInstanceTypeIsExact = implementationInstanceTypeIsExact;
     }
 }

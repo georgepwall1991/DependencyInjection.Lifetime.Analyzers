@@ -463,7 +463,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     registration.MethodName,
                     registration.SkipIfAlreadyRegistered,
                     Location.Create(executionLocation.Tree, executionLocation.Span),
-                    Location.Create(branchLocation.Tree, branchLocation.Span)));
+                    Location.Create(branchLocation.Tree, branchLocation.Span),
+                    registration.ImplementationType));
         }
     }
 

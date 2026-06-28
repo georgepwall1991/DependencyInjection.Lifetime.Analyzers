@@ -71,6 +71,11 @@ public sealed class OrderedRegistration
     public bool SkipIfAlreadyRegistered { get; }
 
     /// <summary>
+    /// Gets the implementation type when the registration shape exposes one.
+    /// </summary>
+    public INamedTypeSymbol? ImplementationType { get; }
+
+    /// <summary>
     /// Creates a new ordered registration.
     /// </summary>
     public OrderedRegistration(
@@ -85,7 +90,8 @@ public sealed class OrderedRegistration
         string methodName,
         bool skipIfAlreadyRegistered = false,
         Location? executionLocation = null,
-        Location? branchLocation = null)
+        Location? branchLocation = null,
+        INamedTypeSymbol? implementationType = null)
     {
         ServiceType = serviceType;
         Key = key;
@@ -99,5 +105,6 @@ public sealed class OrderedRegistration
         IsTryAdd = isTryAdd;
         MethodName = methodName;
         SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
+        ImplementationType = implementationType;
     }
 }
