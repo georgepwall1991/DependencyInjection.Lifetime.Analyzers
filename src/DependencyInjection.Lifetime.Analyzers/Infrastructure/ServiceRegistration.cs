@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -91,6 +92,11 @@ public sealed class ServiceRegistration
     public bool ImplementationInstanceTypeIsExact { get; }
 
     /// <summary>
+    /// Gets constructor parameter types supplied by a framework factory for this registration.
+    /// </summary>
+    public ImmutableArray<ITypeSymbol> FactoryProvidedParameterTypes { get; }
+
+    /// <summary>
     /// Creates a new service registration.
     /// </summary>
     public ServiceRegistration(
@@ -108,7 +114,8 @@ public sealed class ServiceRegistration
         bool skipIfAlreadyRegistered = false,
         bool isTryAdd = false,
         bool skipIfSameImplementationAlreadyRegistered = false,
-        bool implementationInstanceTypeIsExact = true)
+        bool implementationInstanceTypeIsExact = true,
+        ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes = default)
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
@@ -125,5 +132,8 @@ public sealed class ServiceRegistration
         IsTryAdd = isTryAdd;
         SkipIfSameImplementationAlreadyRegistered = skipIfSameImplementationAlreadyRegistered;
         ImplementationInstanceTypeIsExact = implementationInstanceTypeIsExact;
+        FactoryProvidedParameterTypes = factoryProvidedParameterTypes.IsDefault
+            ? ImmutableArray<ITypeSymbol>.Empty
+            : factoryProvidedParameterTypes;
     }
 }

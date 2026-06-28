@@ -259,6 +259,11 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             return true;
         }
 
+        if (IsTransparentFrameworkServiceCollectionExtension(normalizedTarget))
+        {
+            return false;
+        }
+
         if (normalizedTarget is not null && IsSourceServiceCollectionWrapperMethod(normalizedTarget))
         {
             observed = ObservedInvocation.WrapperCall(
@@ -667,7 +672,29 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
     {
         return fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions" ||
-               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions";
+               fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions" ||
+               IsKnownFrameworkServiceCollectionExtensionsTypeByName(fullName);
+    }
+
+    private static bool IsTransparentFrameworkServiceCollectionExtension(IMethodSymbol? method)
+    {
+        var sourceMethod = method?.ReducedFrom ?? method;
+        if (sourceMethod is null ||
+            !IsKnownFrameworkServiceCollectionExtensionsTypeByName(sourceMethod.ContainingType?.ToDisplayString()))
+        {
+            return false;
+        }
+
+        return sourceMethod.Name is "AddLogging" or "AddOptions" or "Configure";
+    }
+
+    private static bool IsKnownFrameworkServiceCollectionExtensionsTypeByName(string? fullName)
+    {
+        return fullName == "Microsoft.Extensions.DependencyInjection.LoggingServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.OptionsServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.MemoryCacheServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.HttpClientFactoryServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.HttpServiceCollectionExtensions";
     }
 
     internal static bool IsPotentialServiceCollectionWrapperInvocation(

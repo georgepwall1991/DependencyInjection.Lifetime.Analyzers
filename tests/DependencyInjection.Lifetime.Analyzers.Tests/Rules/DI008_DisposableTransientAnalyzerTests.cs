@@ -15,6 +15,43 @@ public class DI008_DisposableTransientAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task AddHttpClientTypedClient_WithDisposableImplementation_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyClient { }
+            public class DisposableClient : IMyClient, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpClient<IMyClient, DisposableClient>();
+                }
+            }
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class HttpClientFactoryServiceCollectionExtensions
+                {
+                    public static IServiceCollection AddHttpClient<TClient, TImplementation>(this IServiceCollection services)
+                        where TClient : class
+                        where TImplementation : class, TClient => services;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(13, 9, 13, 62)
+                .WithArguments("DisposableClient", "IDisposable"));
+    }
+
+    [Fact]
     public async Task TransientDisposable_GenericTwoTypeArgs_ReportsDiagnostic()
     {
         var source = Usings + """

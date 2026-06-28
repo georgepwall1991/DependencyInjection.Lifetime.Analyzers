@@ -93,6 +93,31 @@ public sealed class WellKnownTypes
     /// </summary>
     public INamedTypeSymbol? IOptionsMonitorOfT { get; }
 
+    /// <summary>
+    /// Gets the ILoggerFactory type symbol.
+    /// </summary>
+    public INamedTypeSymbol? ILoggerFactory { get; }
+
+    /// <summary>
+    /// Gets the IHttpClientFactory type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IHttpClientFactory { get; }
+
+    /// <summary>
+    /// Gets the IMemoryCache type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IMemoryCache { get; }
+
+    /// <summary>
+    /// Gets the IHttpContextAccessor type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IHttpContextAccessor { get; }
+
+    /// <summary>
+    /// Gets the IHostApplicationLifetime type symbol.
+    /// </summary>
+    public INamedTypeSymbol? IHostApplicationLifetime { get; }
+
     private WellKnownTypes(
         INamedTypeSymbol? serviceProvider,
         INamedTypeSymbol? serviceScopeFactory,
@@ -110,7 +135,12 @@ public sealed class WellKnownTypes
         INamedTypeSymbol? loggerOfT,
         INamedTypeSymbol? optionsOfT,
         INamedTypeSymbol? optionsSnapshotOfT,
-        INamedTypeSymbol? optionsMonitorOfT)
+        INamedTypeSymbol? optionsMonitorOfT,
+        INamedTypeSymbol? loggerFactory,
+        INamedTypeSymbol? httpClientFactory,
+        INamedTypeSymbol? memoryCache,
+        INamedTypeSymbol? httpContextAccessor,
+        INamedTypeSymbol? hostApplicationLifetime)
     {
         IServiceProvider = serviceProvider;
         IServiceScopeFactory = serviceScopeFactory;
@@ -129,6 +159,11 @@ public sealed class WellKnownTypes
         IOptionsOfT = optionsOfT;
         IOptionsSnapshotOfT = optionsSnapshotOfT;
         IOptionsMonitorOfT = optionsMonitorOfT;
+        ILoggerFactory = loggerFactory;
+        IHttpClientFactory = httpClientFactory;
+        IMemoryCache = memoryCache;
+        IHttpContextAccessor = httpContextAccessor;
+        IHostApplicationLifetime = hostApplicationLifetime;
     }
 
     /// <summary>
@@ -154,6 +189,11 @@ public sealed class WellKnownTypes
         var optionsOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptions`1");
         var optionsSnapshotOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptionsSnapshot`1");
         var optionsMonitorOfT = compilation.GetTypeByMetadataName("Microsoft.Extensions.Options.IOptionsMonitor`1");
+        var loggerFactory = compilation.GetTypeByMetadataName("Microsoft.Extensions.Logging.ILoggerFactory");
+        var httpClientFactory = compilation.GetTypeByMetadataName("System.Net.Http.IHttpClientFactory");
+        var memoryCache = compilation.GetTypeByMetadataName("Microsoft.Extensions.Caching.Memory.IMemoryCache");
+        var httpContextAccessor = compilation.GetTypeByMetadataName("Microsoft.AspNetCore.Http.IHttpContextAccessor");
+        var hostApplicationLifetime = compilation.GetTypeByMetadataName("Microsoft.Extensions.Hosting.IHostApplicationLifetime");
 
         // Return null if we don't have the basic types needed for analysis
         if (serviceProvider is null && serviceScopeFactory is null)
@@ -178,7 +218,12 @@ public sealed class WellKnownTypes
             loggerOfT,
             optionsOfT,
             optionsSnapshotOfT,
-            optionsMonitorOfT);
+            optionsMonitorOfT,
+            loggerFactory,
+            httpClientFactory,
+            memoryCache,
+            httpContextAccessor,
+            hostApplicationLifetime);
     }
 
     /// <summary>
@@ -280,6 +325,46 @@ public sealed class WellKnownTypes
 
         return type is INamedTypeSymbol { IsGenericType: true } namedType &&
                SymbolEqualityComparer.Default.Equals(namedType.ConstructedFrom, ILoggerOfT);
+    }
+
+    /// <summary>
+    /// Checks if the given type is ILoggerFactory.
+    /// </summary>
+    public bool IsLoggerFactory(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, ILoggerFactory);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IHttpClientFactory.
+    /// </summary>
+    public bool IsHttpClientFactory(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IHttpClientFactory);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IMemoryCache.
+    /// </summary>
+    public bool IsMemoryCache(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IMemoryCache);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IHttpContextAccessor.
+    /// </summary>
+    public bool IsHttpContextAccessor(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IHttpContextAccessor);
+    }
+
+    /// <summary>
+    /// Checks if the given type is IHostApplicationLifetime.
+    /// </summary>
+    public bool IsHostApplicationLifetime(ITypeSymbol? type)
+    {
+        return type is not null && SymbolEqualityComparer.Default.Equals(type, IHostApplicationLifetime);
     }
 
     /// <summary>

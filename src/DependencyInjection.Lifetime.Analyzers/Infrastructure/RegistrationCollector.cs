@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using Microsoft.CodeAnalysis;
@@ -27,6 +28,11 @@ public sealed class RegistrationCollector
     private readonly INamedTypeSymbol? _hostedServiceType;
     private readonly INamedTypeSymbol? _dbContextOptionsOfT;
     private readonly INamedTypeSymbol? _dbContextFactoryOfT;
+    private readonly INamedTypeSymbol? _httpClientFactoryType;
+    private readonly INamedTypeSymbol? _httpContextAccessorType;
+    private readonly INamedTypeSymbol? _memoryCacheType;
+    private readonly INamedTypeSymbol? _loggerFactoryType;
+    private readonly INamedTypeSymbol? _httpClientType;
     private int _registrationOrder;
 
     private RegistrationCollector(
@@ -38,7 +44,12 @@ public sealed class RegistrationCollector
         INamedTypeSymbol? serviceDescriptorType,
         INamedTypeSymbol? hostedServiceType,
         INamedTypeSymbol? dbContextOptionsOfT,
-        INamedTypeSymbol? dbContextFactoryOfT)
+        INamedTypeSymbol? dbContextFactoryOfT,
+        INamedTypeSymbol? httpClientFactoryType,
+        INamedTypeSymbol? httpContextAccessorType,
+        INamedTypeSymbol? memoryCacheType,
+        INamedTypeSymbol? loggerFactoryType,
+        INamedTypeSymbol? httpClientType)
     {
         _serviceCollectionType = serviceCollectionType;
         _serviceCollectionServiceExtensionsType = serviceCollectionServiceExtensionsType;
@@ -49,6 +60,11 @@ public sealed class RegistrationCollector
         _hostedServiceType = hostedServiceType;
         _dbContextOptionsOfT = dbContextOptionsOfT;
         _dbContextFactoryOfT = dbContextFactoryOfT;
+        _httpClientFactoryType = httpClientFactoryType;
+        _httpContextAccessorType = httpContextAccessorType;
+        _memoryCacheType = memoryCacheType;
+        _loggerFactoryType = loggerFactoryType;
+        _httpClientType = httpClientType;
         _registrations = new ConcurrentDictionary<ServiceIdentifier, ServiceRegistration>();
         _allRegistrations = new ConcurrentBag<ServiceRegistration>();
         _orderedRegistrations = new ConcurrentBag<OrderedRegistration>();
@@ -193,6 +209,21 @@ public sealed class RegistrationCollector
         var dbContextFactoryOfT = compilation.GetTypeByMetadataName(
             "Microsoft.EntityFrameworkCore.IDbContextFactory`1");
 
+        var httpClientFactoryType = compilation.GetTypeByMetadataName(
+            "System.Net.Http.IHttpClientFactory");
+
+        var httpContextAccessorType = compilation.GetTypeByMetadataName(
+            "Microsoft.AspNetCore.Http.IHttpContextAccessor");
+
+        var memoryCacheType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.Caching.Memory.IMemoryCache");
+
+        var loggerFactoryType = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.Logging.ILoggerFactory");
+
+        var httpClientType = compilation.GetTypeByMetadataName(
+            "System.Net.Http.HttpClient");
+
         return new RegistrationCollector(
             serviceCollectionType,
             serviceCollectionServiceExtensionsType,
@@ -202,7 +233,12 @@ public sealed class RegistrationCollector
             serviceDescriptorType,
             hostedServiceType,
             dbContextOptionsOfT,
-            dbContextFactoryOfT);
+            dbContextFactoryOfT,
+            httpClientFactoryType,
+            httpContextAccessorType,
+            memoryCacheType,
+            loggerFactoryType,
+            httpClientType);
     }
 
     /// <summary>
@@ -406,6 +442,7 @@ public sealed class RegistrationCollector
         bool implementationInstanceTypeIsExact = true;
         bool isKeyed = IsKeyedMethod(methodName);
         bool skipPrimaryIfAlreadyRegistered = false;
+        var factoryProvidedParameterTypes = ImmutableArray<ITypeSymbol>.Empty;
         var companionRegistrations = new List<CompanionRegistration>();
 
         if (TryExtractHostedServiceRegistration(invocation, methodSymbol, semanticModel, out var hostedServiceType, out var hostedImplementationType, out var hostedFactoryExpression))
@@ -415,6 +452,41 @@ public sealed class RegistrationCollector
             factoryExpression = hostedFactoryExpression;
             lifetime = ServiceLifetime.Singleton;
             isKeyed = false;
+        }
+        else if (TryExtractHttpClientRegistration(
+                     methodSymbol,
+                     out var httpClientServiceType,
+                     out var httpClientImplementationType))
+        {
+            serviceType = httpClientServiceType;
+            implementationType = httpClientImplementationType;
+            factoryExpression = null;
+            lifetime = ServiceLifetime.Transient;
+            isKeyed = false;
+            factoryProvidedParameterTypes = _httpClientType is null
+                ? ImmutableArray<ITypeSymbol>.Empty
+                : ImmutableArray.Create<ITypeSymbol>(_httpClientType);
+
+            if (_httpClientFactoryType is not null)
+            {
+                companionRegistrations.Add(
+                    new CompanionRegistration(
+                        _httpClientFactoryType,
+                        implementationType: null,
+                        hasImplementationInstance: true,
+                        ServiceLifetime.Singleton,
+                        skipIfAlreadyRegistered: true));
+            }
+        }
+        else if (TryExtractFrameworkSingletonRegistration(methodSymbol, out var frameworkSingletonType))
+        {
+            serviceType = frameworkSingletonType;
+            implementationType = null;
+            factoryExpression = null;
+            hasImplementationInstance = true;
+            lifetime = ServiceLifetime.Singleton;
+            isKeyed = false;
+            skipPrimaryIfAlreadyRegistered = true;
         }
         else if (TryExtractDbContextRegistration(
                      invocation,
@@ -642,7 +714,8 @@ public sealed class RegistrationCollector
                 skipPrimaryIfAlreadyRegistered,
                 isTryAdd,
                 isTryAddEnumerable,
-                implementationInstanceTypeIsExact);
+                implementationInstanceTypeIsExact,
+                factoryProvidedParameterTypes);
 
             _allRegistrations.Add(registration);
 
@@ -2075,7 +2148,22 @@ public sealed class RegistrationCollector
                fullName == "Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionDescriptorExtensions" ||
                fullName == "Microsoft.Extensions.DependencyInjection.ServiceCollectionHostedServiceExtensions" ||
-               fullName == "Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions";
+               fullName == "Microsoft.Extensions.DependencyInjection.EntityFrameworkServiceCollectionExtensions" ||
+               IsKnownFrameworkServiceCollectionExtensionsTypeName(fullName);
+    }
+
+    private static bool IsKnownFrameworkServiceCollectionExtensionsType(INamedTypeSymbol? type)
+    {
+        return IsKnownFrameworkServiceCollectionExtensionsTypeName(type?.ToDisplayString());
+    }
+
+    private static bool IsKnownFrameworkServiceCollectionExtensionsTypeName(string? fullName)
+    {
+        return fullName == "Microsoft.Extensions.DependencyInjection.LoggingServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.OptionsServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.MemoryCacheServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.HttpClientFactoryServiceCollectionExtensions" ||
+               fullName == "Microsoft.Extensions.DependencyInjection.HttpServiceCollectionExtensions";
     }
 
     private bool IsKnownEntityFrameworkServiceCollectionExtensionsType(INamedTypeSymbol? type)
@@ -2127,6 +2215,55 @@ public sealed class RegistrationCollector
         }
 
         return implementationType is not null || factoryExpression is not null;
+    }
+
+    private bool TryExtractHttpClientRegistration(
+        IMethodSymbol method,
+        out INamedTypeSymbol? serviceType,
+        out INamedTypeSymbol? implementationType)
+    {
+        serviceType = null;
+        implementationType = null;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (sourceMethod.Name != "AddHttpClient" ||
+            !IsKnownFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        serviceType = method.TypeArguments[0] as INamedTypeSymbol;
+        implementationType = method.TypeArguments.Length == 2
+            ? method.TypeArguments[1] as INamedTypeSymbol
+            : serviceType;
+
+        return serviceType is not null && implementationType is not null;
+    }
+
+    private bool TryExtractFrameworkSingletonRegistration(
+        IMethodSymbol method,
+        out INamedTypeSymbol? serviceType)
+    {
+        serviceType = null;
+
+        var sourceMethod = method.ReducedFrom ?? method;
+        if (!IsKnownFrameworkServiceCollectionExtensionsType(sourceMethod.ContainingType))
+        {
+            return false;
+        }
+
+        serviceType = sourceMethod.Name switch
+        {
+            "AddHttpContextAccessor" => _httpContextAccessorType,
+            "AddMemoryCache" => _memoryCacheType,
+            "AddLogging" => _loggerFactoryType,
+            "AddHttpClient" => _httpClientFactoryType,
+            _ => null
+        };
+
+        return serviceType is not null;
     }
 
     private bool IsServiceDescriptorType(ITypeSymbol? type)

@@ -79,6 +79,13 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        // Path 1b: AddHttpClient<TClient, TImplementation>() registers typed clients as transients.
+        if (TryGetTypedHttpClientImplementation(methodSymbol, out var typedHttpClientImplementation))
+        {
+            ReportIfDisposable(context, invocation, typedHttpClientImplementation, wellKnownTypes, optionsProvider);
+            return;
+        }
+
         // Path 2: TryAddTransient / TryAddKeyedTransient / TryAddEnumerable on ServiceCollectionDescriptorExtensions
         if (serviceCollectionDescriptorExtensionsType is not null &&
             IsTryAddTransientMethod(methodSymbol, wellKnownTypes, serviceCollectionDescriptorExtensionsType))
@@ -636,6 +643,40 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         return wellKnownTypes.IsServiceCollection(originalMethod.Parameters[0].Type);
+    }
+
+    private static bool TryGetTypedHttpClientImplementation(
+        IMethodSymbol method,
+        out INamedTypeSymbol implementationType)
+    {
+        implementationType = null!;
+        var originalMethod = method.ReducedFrom ?? method;
+        if (originalMethod.Name != "AddHttpClient" ||
+            !originalMethod.IsExtensionMethod ||
+            originalMethod.Parameters.Length == 0 ||
+            !IsKnownHttpClientFactoryExtensionsType(originalMethod.ContainingType) ||
+            !method.IsGenericMethod ||
+            method.TypeArguments.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        var candidate = method.TypeArguments.Length == 2
+            ? method.TypeArguments[1]
+            : method.TypeArguments[0];
+        if (candidate is not INamedTypeSymbol namedImplementationType)
+        {
+            return false;
+        }
+
+        implementationType = namedImplementationType;
+        return true;
+    }
+
+    private static bool IsKnownHttpClientFactoryExtensionsType(INamedTypeSymbol? type)
+    {
+        return type?.ToDisplayString() ==
+               "Microsoft.Extensions.DependencyInjection.HttpClientFactoryServiceCollectionExtensions";
     }
 
     private static bool IsServiceCollectionAddOfDescriptor(

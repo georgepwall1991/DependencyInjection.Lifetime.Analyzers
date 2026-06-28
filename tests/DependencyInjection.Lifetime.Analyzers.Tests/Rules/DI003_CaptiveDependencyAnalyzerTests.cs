@@ -105,6 +105,46 @@ public class DI003_CaptiveDependencyAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task SingletonCapturingTypedHttpClient_ReportsTransientDiagnostic()
+    {
+        var source = Usings + """
+            public interface IApiClient { }
+            public class ApiClient : IApiClient { }
+
+            public class Consumer
+            {
+                public Consumer(IApiClient client) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpClient<IApiClient, ApiClient>();
+                    services.AddSingleton<Consumer>();
+                }
+            }
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class HttpClientFactoryServiceCollectionExtensions
+                {
+                    public static IServiceCollection AddHttpClient<TClient, TImplementation>(this IServiceCollection services)
+                        where TClient : class
+                        where TImplementation : class, TClient => services;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithSpan(16, 9, 16, 42)
+                .WithArguments("Consumer", "transient", "IApiClient"));
+    }
+
+    [Fact]
     public async Task SingletonCapturingScoped_ViaConstructor_ReportsDiagnostic()
     {
         var source = Usings + """
