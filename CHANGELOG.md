@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.16] - 2026-06-28
+
+### Fixed
+
+- **DI017 exact generic precedence**: exact closed registrations now beat open-generic registrations for single-service circular dependency traversal, matching Microsoft.Extensions.DependencyInjection precedence and avoiding both false cycles and missed exact-registration cycles.
+- **DI017 optional registered dependencies**: optional/default-valued constructor parameters now participate in cycle analysis when the service is actually registered, while unregistered optional parameters remain non-edges.
+- **DI017 unknown keyed parameters**: a constructor parameter with an unknown inherited key no longer aborts analysis for the rest of the constructor, so other registered dependency edges still report cycles.
+
 ## [2.11.15] - 2026-06-28
 
 ### Fixed

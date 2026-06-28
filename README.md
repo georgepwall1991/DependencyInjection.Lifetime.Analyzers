@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.15
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.16
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.15">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.16">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.15" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.16" />
 ```
 
 Then reference it from the project file:
@@ -790,7 +790,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 ## DI017: Circular Dependency
 
-**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It stays silent when constructor selection is ambiguous rather than guessing which path the container will choose.
+**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It follows effective registration precedence, including exact closed registrations before open-generic fallbacks, and stays silent when constructor selection is ambiguous rather than guessing which path the container will choose.
 
 **Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
 
