@@ -173,4 +173,36 @@ public class Startup
 
         await VerifyCS.VerifyDiagnosticsAsync(test, expected);
     }
+
+    [Fact]
+    public async Task TryAddEnumerable_With_Different_Implementation_ServiceDescriptor_Detected()
+    {
+        var test = @"
+using System;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+public interface IScopedService { }
+public class ScopedService : IScopedService { }
+public interface IHandler { }
+public class SafeHandler : IHandler { }
+public class CaptiveHandler : IHandler { public CaptiveHandler(IScopedService scoped) {} }
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddScoped<IScopedService, ScopedService>();
+        services.AddSingleton<IHandler, SafeHandler>();
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHandler, CaptiveHandler>());
+    }
+}";
+
+        var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+             .WithLocation(19, 9)
+             .WithArguments("CaptiveHandler", "scoped", "IScopedService");
+
+        await VerifyCS.VerifyDiagnosticsAsync(test, expected);
+    }
 }

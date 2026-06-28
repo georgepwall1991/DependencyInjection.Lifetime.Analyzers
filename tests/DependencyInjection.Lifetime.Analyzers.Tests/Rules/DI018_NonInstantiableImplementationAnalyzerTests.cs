@@ -245,6 +245,133 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
+    public async Task ServiceDescriptorTargetTypedNew_WithAbstractImplementation_Reports()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(new(typeof(IMyService), typeof(AbstractService), ServiceLifetime.Singleton));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(11, 9)
+                .WithArguments("AbstractService", "IMyService", "type is abstract"));
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorLocal_WithAbstractImplementation_Reports()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var descriptor = ServiceDescriptor.Singleton(typeof(IMyService), typeof(AbstractService));
+                    services.Add(descriptor);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(12, 9)
+                .WithArguments("AbstractService", "IMyService", "type is abstract"));
+    }
+
+    [Fact]
+    public async Task TryAddEnumerableServiceDescriptor_WithAbstractImplementation_Reports()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IMyService), typeof(AbstractService)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(11, 9)
+                .WithArguments("AbstractService", "IMyService", "type is abstract"));
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorLocalReassignedByRefBeforeAdd_DoesNotReportStaleInitializer()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var descriptor = ServiceDescriptor.Singleton(typeof(IMyService), typeof(AbstractService));
+                    Replace(ref descriptor);
+                    services.Add(descriptor);
+                }
+
+                private static void Replace(ref ServiceDescriptor descriptor)
+                {
+                    descriptor = ServiceDescriptor.Singleton(typeof(IMyService), typeof(ConcreteService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorLocalReassignedByOutBeforeAdd_DoesNotReportStaleInitializer()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var descriptor = ServiceDescriptor.Singleton(typeof(IMyService), typeof(AbstractService));
+                    Replace(out descriptor);
+                    services.Add(descriptor);
+                }
+
+                private static void Replace(out ServiceDescriptor descriptor)
+                {
+                    descriptor = ServiceDescriptor.Singleton(typeof(IMyService), typeof(ConcreteService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task OpenGenericInternalConstructor_Reports()
     {
         var source = Usings + """

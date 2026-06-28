@@ -2718,6 +2718,52 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task TryAddEnumerableSameImplementation_AfterAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                    services.TryAddEnumerable(ServiceDescriptor.Singleton<IMyService, MyService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(12, 9)
+                .WithArguments("IMyService", "line 11"));
+    }
+
+    [Fact]
+    public async Task TryAddEnumerableDifferentImplementation_AfterAdd_DoesNotReportDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService1>();
+                    services.TryAddEnumerable(ServiceDescriptor.Singleton<IMyService, MyService2>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task TryAddSingleton_InInvokedWrapperAfterDirectAdd_ReportsDiagnostic()
     {
         var source = Usings + """
