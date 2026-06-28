@@ -52,6 +52,7 @@ internal sealed class DependencyResolutionEngine
 
     private readonly ImmutableArray<ServiceRegistration> _availableRegistrations;
     private readonly WellKnownTypes? _wellKnownTypes;
+    private readonly KnownServiceLifetimeClassifier _knownLifetimeClassifier;
 
     public DependencyResolutionEngine(
         RegistrationCollector registrationCollector,
@@ -59,6 +60,7 @@ internal sealed class DependencyResolutionEngine
         Func<ServiceRegistration, bool>? isRegistrationAvailable = null)
     {
         _wellKnownTypes = wellKnownTypes;
+        _knownLifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
         var registrationFilter = isRegistrationAvailable ?? (_ => true);
         _availableRegistrations = registrationCollector.AllRegistrations
             .Where(registrationFilter)
@@ -87,6 +89,7 @@ internal sealed class DependencyResolutionEngine
             registration.IsKeyed ? registration.Key : null,
             registration.IsKeyed,
             registration.IsKeyed ? registration.KeyLiteral : null,
+            registration.FactoryProvidedParameterTypes,
             assumeFrameworkServicesRegistered,
             resolutionCache,
             resolutionPath);
@@ -110,6 +113,7 @@ internal sealed class DependencyResolutionEngine
                 registration.IsKeyed ? registration.Key : null,
                 registration.IsKeyed,
                 registration.IsKeyed ? registration.KeyLiteral : null,
+                factoryProvidedParameterTypes: ImmutableArray<ITypeSymbol>.Empty,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
                 resolutionPath)
@@ -189,6 +193,7 @@ internal sealed class DependencyResolutionEngine
         object? inheritedKey,
         bool hasInheritedKey,
         string? inheritedKeyLiteral,
+        ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes,
         bool assumeFrameworkServicesRegistered,
         Dictionary<ServiceLookupKey, ResolutionResult> resolutionCache,
         HashSet<ServiceLookupKey> resolutionPath)
@@ -206,9 +211,28 @@ internal sealed class DependencyResolutionEngine
         foreach (var constructor in constructors)
         {
             var missingDependencies = ImmutableArray.CreateBuilder<MissingDependency>();
+            var remainingFactoryProvidedParameterTypes = factoryProvidedParameterTypes.ToBuilder();
 
             foreach (var parameter in constructor.Parameters)
             {
+                var providedParameterIndex = -1;
+                for (var index = 0; index < remainingFactoryProvidedParameterTypes.Count; index++)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(
+                            remainingFactoryProvidedParameterTypes[index],
+                            parameter.Type))
+                    {
+                        providedParameterIndex = index;
+                        break;
+                    }
+                }
+
+                if (providedParameterIndex >= 0)
+                {
+                    remainingFactoryProvidedParameterTypes.RemoveAt(providedParameterIndex);
+                    continue;
+                }
+
                 if (ShouldSkipDependencyCheck(
                         parameter.Type,
                         parameter,
@@ -336,6 +360,7 @@ internal sealed class DependencyResolutionEngine
                 inheritedKey: request.IsKeyed ? request.Key : null,
                 hasInheritedKey: request.IsKeyed,
                 inheritedKeyLiteral: request.IsKeyed ? request.KeyLiteral : null,
+                candidate.FactoryProvidedParameterTypes,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
                 resolutionPath);
@@ -483,54 +508,41 @@ internal sealed class DependencyResolutionEngine
                namedType.ContainingNamespace.ToDisplayString() == "System.Collections.Generic";
     }
 
-    private static bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
+    private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
+    {
+        if (IsExplicitFrameworkRegistrationRequired(dependencyType))
+        {
+            return false;
+        }
+
+        return _knownLifetimeClassifier.TryGetLifetime(
+            dependencyType,
+            isKeyed: false,
+            out _);
+    }
+
+    private bool IsExplicitFrameworkRegistrationRequired(ITypeSymbol dependencyType)
     {
         if (dependencyType is not INamedTypeSymbol namedType)
         {
             return false;
         }
 
+        if (_wellKnownTypes is not null &&
+            (_wellKnownTypes.IsHttpClientFactory(namedType) ||
+             _wellKnownTypes.IsMemoryCache(namedType) ||
+             _wellKnownTypes.IsHttpContextAccessor(namedType)))
+        {
+            return true;
+        }
+
         var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-
-        if (namedType.Name == "IConfiguration" &&
-            namespaceName == "Microsoft.Extensions.Configuration")
-        {
-            return true;
-        }
-
-        if (namedType.Name == "ILoggerFactory" &&
-            namespaceName == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.Name is "IHostEnvironment" or "IWebHostEnvironment" &&
-            (namespaceName == "Microsoft.Extensions.Hosting" ||
-             namespaceName == "Microsoft.AspNetCore.Hosting"))
-        {
-            return true;
-        }
-
-        if (namedType.Name == "ILogger" &&
-            namespaceName == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.IsGenericType &&
-            namedType.ConstructedFrom.Name == "ILogger" &&
-            namedType.ConstructedFrom.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.Logging")
-        {
-            return true;
-        }
-
-        if (namedType.Name is "IOptions" or "IOptionsSnapshot" or "IOptionsMonitor" &&
-            namespaceName == "Microsoft.Extensions.Options")
-        {
-            return true;
-        }
-
-        return false;
+        return (namedType.Name == "IHttpClientFactory" &&
+                namespaceName == "System.Net.Http") ||
+               (namedType.Name == "IMemoryCache" &&
+                namespaceName == "Microsoft.Extensions.Caching.Memory") ||
+               (namedType.Name == "IHttpContextAccessor" &&
+                namespaceName == "Microsoft.AspNetCore.Http");
     }
 
     private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(

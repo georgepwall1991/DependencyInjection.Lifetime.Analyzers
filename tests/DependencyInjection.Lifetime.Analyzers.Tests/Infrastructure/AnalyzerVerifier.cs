@@ -43,6 +43,22 @@ public static class AnalyzerVerifier<TAnalyzer>
             ]);
 
     /// <summary>
+    /// Reference assemblies with common framework IServiceCollection extension packages.
+    /// </summary>
+    public static ReferenceAssemblies ReferenceAssembliesWithFrameworkExtensions { get; } =
+        ReferenceAssemblies.Net.Net80
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.Logging", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.Options", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.Http", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.Caching.Memory", "10.0.2"),
+                new PackageIdentity("Microsoft.AspNetCore.Http.Abstractions", "2.3.0"),
+                new PackageIdentity("Microsoft.Extensions.Hosting.Abstractions", "10.0.2")
+            ]);
+
+    /// <summary>
     /// Reference assemblies with DI 8.0.0 for keyed service support.
     /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
     /// </summary>

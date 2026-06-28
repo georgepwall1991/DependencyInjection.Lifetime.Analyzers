@@ -58,6 +58,34 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
 
     #region Should Report Diagnostic - TryAdd After Add
 
+    [Fact]
+    public async Task AddLoggingBetweenAddAndTryAdd_DoesNotHideIgnoredTryAdd()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class FallbackService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                    services.AddLogging();
+                    services.TryAddSingleton<IMyService, FallbackService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(14, 9)
+                .WithArguments("IMyService", "line 12"));
+    }
+
 
     [Fact]
     public async Task AddAddThenReplace_StillReportsForLeftoverDuplicate()

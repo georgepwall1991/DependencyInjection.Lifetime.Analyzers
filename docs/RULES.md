@@ -106,7 +106,7 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments. A factory that creates and provably disposes its own scope (`using var scope = sp.CreateScope();`) stays quiet for resolutions through that scope when only derived values flow into the product — one-time scoped setup is not a captive — while an escaping resolved instance or an undisposed factory scope still reports.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, typed HTTP clients registered with `AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` without explicit constructor arguments. A factory that creates and provably disposes its own scope (`using var scope = sp.CreateScope();`) stays quiet for resolutions through that scope when only derived values flow into the product — one-time scoped setup is not a captive — while an escaping resolved instance or an undisposed factory scope still reports.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -377,7 +377,7 @@ services.AddScoped<IMyService, DisposableService>();
 // or ensure explicit disposal ownership if transient is intentional
 ```
 
-DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, plain `TryAdd(ServiceDescriptor...)`, `Replace(ServiceDescriptor...)`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
+DI008 follows generic, `typeof(...)`, keyed, named-argument, typed HTTP client (`AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`), `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, plain `TryAdd(ServiceDescriptor...)`, `Replace(ServiceDescriptor...)`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
 
 **Code Fix:** Yes. Suggests safer lifetime alternatives and rewrites local descriptor lifetime arguments where the registration is unambiguous.
 
@@ -492,7 +492,7 @@ public sealed class MyService
 - `TryAdd*` calls after an `Add*` already registered that service.
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
-DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, applies `TryAddEnumerable`'s service-and-implementation pair semantics, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
+DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. Common framework registration helpers such as `AddLogging()`, `AddOptions()`, `Configure<T>()`, `AddMemoryCache()`, `AddHttpClient()`, and `AddHttpContextAccessor()` are transparent rather than opaque barriers, so later user registrations remain visible. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, applies `TryAddEnumerable`'s service-and-implementation pair semantics, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
 
@@ -606,7 +606,7 @@ services.AddSingleton<IMyService, MyService>();
 
 ### DI015 strict mode
 
-By default, DI015 assumes common host-provided framework services (logging/options/configuration) are available. EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` are also modeled as registrations, including service/implementation overload self-registrations and the `DbContextOptions<TContext>` and `IDbContextFactory<TContext>` dependencies those patterns require.
+By default, DI015 assumes common host-provided framework services are available, including logging/options/configuration, `ILoggerFactory`, and `IHostApplicationLifetime`. Explicit framework extension calls such as `AddHttpClient()`, `AddMemoryCache()`, and `AddHttpContextAccessor()` are modeled as registrations for `IHttpClientFactory`, `IMemoryCache`, and `IHttpContextAccessor`; those services still report as missing when the matching extension is absent. `TimeProvider` also reports as missing unless registered explicitly. Typed HTTP client registrations treat one constructor `HttpClient` parameter as factory-provided while still checking repeated `HttpClient` parameters and other typed-client constructor dependencies. EF Core contexts registered through `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, or `AddPooledDbContextFactory(...)` are also modeled as registrations, including service/implementation overload self-registrations and the `DbContextOptions<TContext>` and `IDbContextFactory<TContext>` dependencies those patterns require.
 Disable that assumption for stricter analysis:
 
 ```ini

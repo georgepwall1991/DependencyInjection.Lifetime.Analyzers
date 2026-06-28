@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.15] - 2026-06-28
+
+### Fixed
+
+- **Transparent framework DI extensions**: common framework registration helpers such as `AddLogging()`, `AddOptions()`, `Configure<T>()`, `AddMemoryCache()`, `AddHttpClient()`, and `AddHttpContextAccessor()` are now modeled as known framework extensions instead of opaque ordering barriers, so DI012, DI015, and DI017 keep analyzing registrations below normal host setup calls.
+- **Typed HTTP client registrations**: `AddHttpClient<TClient>()` and `AddHttpClient<TClient,TImplementation>()` now contribute transient typed-client registrations plus the companion `IHttpClientFactory` singleton, unblinding DI003, DI019, and DI008 to typed-client lifetime issues.
+- **Framework lifetime truth**: framework service lifetimes now flow through `KnownServiceLifetimeClassifier`, including `ILogger<T>`, `ILoggerFactory`, `IHttpClientFactory`, `IMemoryCache`, `IHttpContextAccessor`, and `IHostApplicationLifetime`.
+- **DI015 explicit framework services**: `IHttpClientFactory`, `IMemoryCache`, and `IHttpContextAccessor` dependencies now require the matching explicit registration extension instead of being treated as ambient host services.
+- **DI015 typed clients**: typed HTTP client constructors treat the single factory-provided `HttpClient` argument as supplied while still reporting repeated `HttpClient` parameters and other missing dependencies.
+
 ## [2.11.14] - 2026-06-28
 
 ### Fixed

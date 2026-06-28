@@ -560,23 +560,11 @@ internal sealed class ScopedDependencyGraph
 
     private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
     {
-        if (_wellKnownTypes is not null &&
-            (_wellKnownTypes.IsConfiguration(dependencyType) ||
-             _wellKnownTypes.IsLogger(dependencyType) ||
-             _wellKnownTypes.IsOptionsAbstraction(dependencyType)))
-        {
-            return true;
-        }
-
-        if (dependencyType is not INamedTypeSymbol namedType)
-        {
-            return false;
-        }
-
-        var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-        return namedType.Name is "IHostEnvironment" or "IWebHostEnvironment" &&
-               (namespaceName == "Microsoft.Extensions.Hosting" ||
-                namespaceName == "Microsoft.AspNetCore.Hosting");
+        return _lifetimeClassifier.TryGetLifetime(
+                   dependencyType,
+                   isKeyed: false,
+                   out var knownLifetime) &&
+               knownLifetime != ServiceLifetime.Scoped;
     }
 
     private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol type, out bool isEnumerable)

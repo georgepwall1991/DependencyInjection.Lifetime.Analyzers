@@ -190,6 +190,278 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task SingletonDependingOnTimeProviderWithoutRegistration_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Scheduler
+            {
+                public Scheduler(TimeProvider timeProvider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Scheduler>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithLatestDi,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(13, 9)
+                .WithArguments("Scheduler", "TimeProvider"));
+    }
+
+    [Fact]
+    public async Task SingletonDependingOnRegisteredTimeProvider_DoesNotReport()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Scheduler
+            {
+                public Scheduler(TimeProvider timeProvider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(TimeProvider.System);
+                    services.AddSingleton<Scheduler>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithLatestDi);
+    }
+
+    [Fact]
+    public async Task AddHttpContextAccessor_RegistersAccessorDependency()
+    {
+        var source = Usings + """
+            public class HttpConsumer
+            {
+                public HttpConsumer(Microsoft.AspNetCore.Http.IHttpContextAccessor accessor) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpContextAccessor();
+                    services.AddSingleton<HttpConsumer>();
+                }
+            }
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public interface IHttpContextAccessor { }
+            }
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class HttpServiceCollectionExtensions
+                {
+                    public static IServiceCollection AddHttpContextAccessor(this IServiceCollection services) => services;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheDependencyWithoutAddMemoryCache_ReportsDiagnostic()
+    {
+        var source = """
+            using Microsoft.Extensions.Caching.Memory;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Consumer
+            {
+                public Consumer(IMemoryCache cache) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Consumer>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(13, 9)
+                .WithArguments("Consumer", "IMemoryCache"));
+    }
+
+    [Fact]
+    public async Task HttpClientFactoryDependencyWithoutAddHttpClient_ReportsDiagnostic()
+    {
+        var source = """
+            using System.Net.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Consumer
+            {
+                public Consumer(IHttpClientFactory factory) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Consumer>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(13, 9)
+                .WithArguments("Consumer", "IHttpClientFactory"));
+    }
+
+    [Fact]
+    public async Task HttpContextAccessorDependencyWithoutAddHttpContextAccessor_ReportsDiagnostic()
+    {
+        var source = """
+            using Microsoft.AspNetCore.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Consumer
+            {
+                public Consumer(IHttpContextAccessor accessor) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Consumer>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(13, 9)
+                .WithArguments("Consumer", "IHttpContextAccessor"));
+    }
+
+    [Fact]
+    public async Task TypedHttpClient_WithHttpClientConstructor_DoesNotReport()
+    {
+        var source = """
+            using System.Net.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IApiClient { }
+            public sealed class ApiClient : IApiClient
+            {
+                public ApiClient(HttpClient httpClient) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpClient<IApiClient, ApiClient>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions);
+    }
+
+    [Fact]
+    public async Task TypedHttpClient_WithRepeatedHttpClientConstructorDependency_ReportsDiagnostic()
+    {
+        var source = """
+            using System.Net.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IApiClient { }
+            public sealed class ApiClient : IApiClient
+            {
+                public ApiClient(HttpClient primary, HttpClient secondary) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpClient<IApiClient, ApiClient>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(14, 9)
+                .WithArguments("IApiClient", "HttpClient"));
+    }
+
+    [Fact]
+    public async Task TypedHttpClient_WithOtherMissingConstructorDependency_ReportsDiagnostic()
+    {
+        var source = """
+            using System.Net.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IApiClient { }
+            public interface IMissingDependency { }
+            public sealed class ApiClient : IApiClient
+            {
+                public ApiClient(HttpClient httpClient, IMissingDependency missing) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddHttpClient<IApiClient, ApiClient>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(15, 9)
+                .WithArguments("IApiClient", "IMissingDependency"));
+    }
+
+    [Fact]
     public async Task Dependency_ProvidedByInstanceReplace_DoesNotReport()
     {
         // Replace with the ServiceDescriptor(Type, object) constructor registers a singleton
