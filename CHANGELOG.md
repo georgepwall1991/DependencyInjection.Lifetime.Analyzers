@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.17] - 2026-06-28
+
+### Fixed
+
+- **DI016 provider factories**: methods and lambdas that intentionally return concrete `ServiceProvider` implementations or awaited `Task<IServiceProvider>` / `ValueTask<IServiceProvider>` results no longer report `BuildServiceProvider()` misuse diagnostics.
+- **DI016 fluent registration chains**: metadata-defined `IServiceCollection` extension chains such as `builder.Services.AddSingleton<TService, TImpl>().BuildServiceProvider()` are now recognized as registration-context misuse.
+- **DI016 conditional services aliases**: locals initialized from `builder?.Services` now retain their registration-context source, so later `BuildServiceProvider()` calls on the alias are reported.
+
 ## [2.11.16] - 2026-06-28
 
 ### Fixed

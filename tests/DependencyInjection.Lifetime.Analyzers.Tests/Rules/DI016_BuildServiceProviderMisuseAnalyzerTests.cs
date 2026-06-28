@@ -479,6 +479,60 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
                 .WithLocation(12, 27));
     }
 
+    [Fact]
+    public async Task FluentMetadataRegistrationChain_WithBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IService { }
+            public sealed class Service : IService { }
+
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    builder.Services.AddSingleton<IService, Service>().{|#0:BuildServiceProvider|}();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+    }
+
+    [Fact]
+    public async Task ConditionalAccessServicesAlias_WithBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder? builder)
+                {
+                    var services = builder?.Services;
+                    services.{|#0:BuildServiceProvider|}();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic
@@ -508,6 +562,39 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
             {
                 public IServiceProvider CreateProvider(IServiceCollection services)
                 {
+                    return services.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceCollectionMethod_ThatReturnsConcreteProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class ProviderFactory
+            {
+                public ServiceProvider CreateProvider(IServiceCollection services)
+                {
+                    return services.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AsyncServiceCollectionMethod_ThatReturnsProviderTask_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class ProviderFactory
+            {
+                public async System.Threading.Tasks.Task<IServiceProvider> CreateProviderAsync(IServiceCollection services)
+                {
+                    await System.Threading.Tasks.Task.Yield();
                     return services.BuildServiceProvider();
                 }
             }
