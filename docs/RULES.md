@@ -665,10 +665,11 @@ public static IServiceCollection AddFeature(this IServiceCollection services, IM
 DI016 is intentionally conservative to reduce false positives:
 
 - It only reports symbol-confirmed DI `BuildServiceProvider()` calls in registration contexts.
-- It does not report provider-factory methods that intentionally return `IServiceProvider`.
+- It does not report provider-factory methods that intentionally return `IServiceProvider`, concrete provider implementations, or awaited provider results.
 - It recognizes assignable `IServiceCollection` abstractions and same-boundary helper/alias flows from `.Services`, but it does not warn on standalone top-level `new ServiceCollection()` composition roots.
+- It recognizes metadata-defined `IServiceCollection` fluent chains, so `builder.Services.AddSingleton<...>().BuildServiceProvider()` is treated as the same registration source as `builder.Services.BuildServiceProvider()`.
 - Builder `.Services` flows wrapped in the null-forgiving operator (`builder.Services!`) or a same-type cast (`(IServiceCollection)builder.Services`) at the call site, in helper return expressions, or in local-variable initializers are still recognized as registration contexts, while provider-factory methods that wrap the same expression stay silent because they return `IServiceProvider`.
-- Conditional-access invocations such as `builder.Services?.BuildServiceProvider()` and `builder?.Services.BuildServiceProvider()` are recognized through the enclosing `ConditionalAccessExpression` and the `MemberBindingExpression`-shaped `.Services` access, so null-safe builder flows participate in detection the same way as direct member access. Provider-factory methods wrapping the same shape stay quiet.
+- Conditional-access invocations and aliases such as `builder.Services?.BuildServiceProvider()`, `builder?.Services.BuildServiceProvider()`, and `var services = builder?.Services; services.BuildServiceProvider();` are recognized through the enclosing `ConditionalAccessExpression` and the `MemberBindingExpression`-shaped `.Services` access, so null-safe builder flows participate in detection the same way as direct member access. Provider-factory methods wrapping the same shape stay quiet.
 
 ---
 

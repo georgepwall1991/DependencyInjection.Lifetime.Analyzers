@@ -229,7 +229,9 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
             return true;
         }
 
-        return SymbolEqualityComparer.Default.Equals(methodSymbol.ReturnType, iServiceProviderType);
+        return IsAssignableToIServiceProvider(
+            UnwrapAwaitableReturnType(methodSymbol.ReturnType),
+            iServiceProviderType);
     }
 
     private static bool IsTopLevelRegistrationAccess(
@@ -303,6 +305,15 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 depth + 1,
                 visitedSymbols,
                 semanticModelsByTree);
+        }
+
+        if (expression is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull is MemberBindingExpressionSyntax conditionalMemberBinding &&
+            semanticModel.GetSymbolInfo(conditionalMemberBinding).Symbol is IPropertySymbol conditionalPropertySymbol &&
+            conditionalPropertySymbol.Name == "Services" &&
+            IsAssignableToIServiceCollection(conditionalPropertySymbol.Type, iServiceCollectionType))
+        {
+            return true;
         }
 
         if (expression is MemberAccessExpressionSyntax memberAccess &&
@@ -441,6 +452,50 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         return false;
     }
 
+    private static bool IsAssignableToIServiceProvider(
+        ITypeSymbol? type,
+        INamedTypeSymbol iServiceProviderType)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(type, iServiceProviderType))
+        {
+            return true;
+        }
+
+        foreach (var @interface in type.AllInterfaces)
+        {
+            if (SymbolEqualityComparer.Default.Equals(@interface, iServiceProviderType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ITypeSymbol UnwrapAwaitableReturnType(ITypeSymbol returnType)
+    {
+        if (returnType is INamedTypeSymbol
+            {
+                IsGenericType: true,
+                TypeArguments.Length: 1
+            } namedType)
+        {
+            var originalDefinition = namedType.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            if (originalDefinition is "global::System.Threading.Tasks.Task<TResult>" or
+                "global::System.Threading.Tasks.ValueTask<TResult>")
+            {
+                return namedType.TypeArguments[0];
+            }
+        }
+
+        return returnType;
+    }
+
     private static bool TryResolveLocalServicesSource(
         ILocalSymbol localSymbol,
         ExpressionSyntax usageExpression,
@@ -528,6 +583,19 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
             return false;
         }
 
+        if (TryResolveMetadataFluentServicesSource(
+                invocationExpression,
+                methodSymbol,
+                semanticModel,
+                iServiceCollectionType,
+                callerBoundary,
+                depth,
+                visitedSymbols,
+                semanticModelsByTree))
+        {
+            return true;
+        }
+
         var visitedMethodSymbol = methodSymbol.OriginalDefinition;
         if (!visitedSymbols.Add(visitedMethodSymbol))
         {
@@ -558,6 +626,61 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveMetadataFluentServicesSource(
+        InvocationExpressionSyntax invocationExpression,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel,
+        INamedTypeSymbol iServiceCollectionType,
+        SyntaxNode callerBoundary,
+        int depth,
+        HashSet<ISymbol> visitedSymbols,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        if (methodSymbol.DeclaringSyntaxReferences.Length != 0)
+        {
+            return false;
+        }
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        if (!sourceMethod.IsExtensionMethod ||
+            sourceMethod.Parameters.Length == 0 ||
+            !IsAssignableToIServiceCollection(sourceMethod.Parameters[0].Type, iServiceCollectionType))
+        {
+            return false;
+        }
+
+        if (methodSymbol.ReducedFrom is not null &&
+            invocationExpression.Expression is MemberAccessExpressionSyntax { Expression: var receiverExpression })
+        {
+            return IsServicesPropertySource(
+                receiverExpression,
+                semanticModel,
+                iServiceCollectionType,
+                callerBoundary,
+                depth + 1,
+                visitedSymbols,
+                semanticModelsByTree);
+        }
+
+        if (TryGetInvocationArgumentExpression(
+                invocationExpression,
+                sourceMethod,
+                sourceMethod.Parameters[0],
+                out var firstArgumentExpression))
+        {
+            return IsServicesPropertySource(
+                firstArgumentExpression,
+                semanticModel,
+                iServiceCollectionType,
+                callerBoundary,
+                depth + 1,
+                visitedSymbols,
+                semanticModelsByTree);
         }
 
         return false;
