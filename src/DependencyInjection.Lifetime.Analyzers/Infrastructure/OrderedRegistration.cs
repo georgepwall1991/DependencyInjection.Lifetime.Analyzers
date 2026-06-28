@@ -24,6 +24,17 @@ public sealed class OrderedRegistration
     public Location Location { get; }
 
     /// <summary>
+    /// Gets the root execution location for this registration.
+    /// For registrations expanded from source-defined helpers, this is the helper callsite.
+    /// </summary>
+    public Location ExecutionLocation { get; }
+
+    /// <summary>
+    /// Gets the location used when reasoning about caller/helper branch membership.
+    /// </summary>
+    public Location BranchLocation { get; }
+
+    /// <summary>
     /// Gets the analyzed service-collection flow key for this registration.
     /// Registrations on different flows should not cross-trigger DI012.
     /// </summary>
@@ -72,13 +83,17 @@ public sealed class OrderedRegistration
         int order,
         bool isTryAdd,
         string methodName,
-        bool skipIfAlreadyRegistered = false)
+        bool skipIfAlreadyRegistered = false,
+        Location? executionLocation = null,
+        Location? branchLocation = null)
     {
         ServiceType = serviceType;
         Key = key;
         IsKeyed = isKeyed;
         Lifetime = lifetime;
         Location = location;
+        ExecutionLocation = executionLocation ?? location;
+        BranchLocation = branchLocation ?? ExecutionLocation;
         FlowKey = flowKey;
         Order = order;
         IsTryAdd = isTryAdd;
