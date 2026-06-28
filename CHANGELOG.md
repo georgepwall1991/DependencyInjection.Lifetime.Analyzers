@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.13] - 2026-06-28
+
+### Fixed
+
+- **DI012 guarded fallback false positive**: `TryAdd*` fallback registrations no longer report as ignored when the earlier `Add*` is guarded by an `if` branch and the fallback executes unconditionally afterward.
+- **DI012 mutually exclusive duplicate false positive**: `if`/`else` branches that register alternative implementations of the same service no longer report duplicate overrides, because only one branch can run.
+- **DI012 nested mutually exclusive duplicate false positive**: registrations nested inside one arm of an outer `if`/`else` chain no longer report duplicates against registrations in another outer arm.
+- **DI012 nested known-true branch regression pin**: nested registrations guarded by known-true conditions now count as covering their outer branch before a later `TryAdd*` fallback.
+- **DI012 mutation-awareness regression pin**: `Add*` followed by `RemoveAll<T>()` and then `TryAdd*` is pinned as quiet, preserving the existing slot-clearing behavior.
+- **DI012 guarded `TryAdd*` regression pin**: overlapping guarded `TryAdd*` calls still report as ignored instead of being mistaken for unconditional fallbacks.
+- **DI012 intervening registration regression pin**: an unconditional `Add*` between a guarded `Add*` and a later `TryAdd*` keeps the ignored-`TryAdd*` diagnostic active.
+- **DI012 intervening `TryAdd*` path-fill regression pin**: complementary guarded `TryAdd*` calls that fill the missing branch now keep a later `TryAdd*` diagnostic active.
+- **DI012 complementary guarded `TryAdd*` false positive**: split `Add*` / `TryAdd*` sibling guards now keep the branch-local `TryAdd*` quiet while still reporting a later fallback once every path is filled.
+- **DI012 fallback `TryAdd*` baseline false positive**: unconditional fallback `TryAdd*` calls no longer become the duplicate-Add baseline for later complementary guarded `Add*` registrations.
+- **DI012 complementary fallback-chain regression pin**: complementary guarded `Add*` registrations separated by an unconditional fallback `TryAdd*` still make a later `TryAdd*` report as ignored.
+- **DI012 mutable sibling-guard regression pin**: complementary sibling guards no longer suppress duplicate Add diagnostics when the first branch mutates the guard variable before the second guard runs.
+- **DI012 deferred factory guard-write false positive**: guard-variable assignments inside registration factory lambdas no longer break complementary sibling proof, because those bodies run later, not during registration.
+- **DI012 dominating intervening guard regression pin**: a later guarded `Add*` whose opposite branch exits still keeps the following `TryAdd*` diagnostic active.
+- **DI012 multiple-guard fallback regression pin**: multiple guarded `Add*` calls followed by an unconditional `TryAdd*` keep the fallback quiet when all guards can be false.
+- **DI012 `else if` duplicate false positive**: `else if` registrations are recognized as mutually exclusive alternatives with the leading `if` branch.
+- **DI012 full branch-chain duplicate false positive**: three-arm `if`/`else if`/`else` registration chains now keep every arm tied to the same mutually exclusive chain.
+- **DI012 branch-exit fallback regression pin**: guarded `Add*` branches whose opposite branch exits still report a later ignored `TryAdd*`, because every path reaching the fallback already registered the service.
+- **DI012 nested branch-exit regression pin**: guarded `Add*` branches whose opposite branch contains an exhaustive nested `if`/`else` that exits still report a later ignored `TryAdd*`.
+- **DI012 wrapped branch-exit regression pin**: guarded `Add*` branches whose opposite branch exits through a wrapper such as `using` still report a later ignored `TryAdd*`.
+- **DI012 `goto` branch-exit regression pin**: guarded `Add*` branches whose opposite branch jumps past the fallback with `goto` still report a later ignored `TryAdd*`.
+- **DI012 scoped `goto` label regression pin**: `goto` reachability now resolves labels within the current method/local scope, so labels with the same name in earlier methods no longer suppress ignored `TryAdd*` diagnostics.
+- **DI012 reachable `goto` fallback false positive**: guarded `Add*` branches whose opposite branch jumps to a label before the fallback stay quiet, because that path still reaches the `TryAdd*` without a prior descriptor.
+- **DI012 returning `goto` label regression pin**: a branch that jumps to a label before the fallback no longer suppresses DI012 when that label exits before the fallback can run.
+- **DI012 `try`/`finally` branch-exit regression pin**: guarded `Add*` branches whose opposite branch exits through `try`/`finally` still report a later ignored `TryAdd*`.
+- **DI012 non-completing branch regression pin**: guarded `Add*` branches whose opposite branch cannot complete through an infinite loop or exhaustive exiting `switch` still report a later ignored `TryAdd*`.
+- **DI012 throw-expression branch-exit regression pin**: guarded `Add*` branches whose opposite branch exits through a throw expression inside an expression statement still report a later ignored `TryAdd*`.
+- **DI012 unstable split-guard false positive**: split guard exits are only matched as complementary when the repeated condition is stable, so calls such as `Next()` do not make a valid fallback look ignored.
+- **DI012 reassigned split-guard false positive**: split guard exits no longer treat an identifier condition as stable when that identifier is reassigned before the complementary guard.
+- **DI012 member-reassigned split-guard false positive**: split guard exits now also treat member writes such as `this._usePrimary = true` as mutations of bare field conditions.
+- **DI012 unrelated member split-guard regression pin**: writes to another object's same-named member no longer make a stable local guard look mutated.
+- **DI012 ref/out-mutated split-guard false positive**: split guard exits now treat guard variables passed by `ref` or `out` as unstable before a later fallback.
+- **DI012 split-guard exit regression pin**: guarded `Add*` followed by a complementary guard clause exit still reports a later ignored `TryAdd*`.
+- **DI012 split-guard registration regression pin**: guarded `Add*` followed by a complementary guarded `Replace` still reports a later ignored `TryAdd*`, because every path reaching the fallback already has a descriptor.
+- **DI012 fallback-chain regression pin**: once an unconditional `TryAdd*` fallback fills the slot, later `TryAdd*` calls for the same service still report as ignored.
+- **DI012 `else if` branch-exit regression pin**: `else if` registrations no longer suppress a later ignored `TryAdd*` when the other registering branch reaches the fallback and the final `else` exits.
+- **DI012 `else if` only-path regression pin**: `else if` registrations still report a later ignored `TryAdd*` when all non-registering branches exit before the fallback.
+- **DI012 complementary `else if` exhaustiveness regression pin**: `if`/`else if (!condition)` chains without a final `else` no longer treat the missing branch as a live fallback path.
+- **DI012 constant-true guard regression pin**: `if (true)` guarded registrations now still make following `TryAdd*` fallbacks report as ignored.
+- **DI012 const-local true guard regression pin**: `const bool enabled = true; if (enabled)` guarded registrations now still make following `TryAdd*` fallbacks report as ignored.
+- **DI012 outer const-local true guard regression pin**: const-local true guards declared in an enclosing block now still make nested guarded registrations dominate following `TryAdd*` fallbacks.
+- **DI012 binary complementary `else if` regression pin**: `if (mode == value)` / `else if (mode != value)` chains without a final `else` no longer treat the missing branch as a live fallback path.
+- **DI012 constant-true branch-exit regression pin**: non-registering branches that exit through `if (true)` or a const-true guard now still make following `TryAdd*` fallbacks report as ignored.
+- **DI012 exhaustive `else if (true)` regression pin**: `if`/`else if (true)` chains without a final `else` no longer invent a missing fallback path after the exhaustive true branch.
+- **DI012 boolean-comparison complement regression pin**: split guard exits written as `condition == false` or `condition != true` now match the equivalent `!condition` form before a later `TryAdd*`.
+- **DI012 relational complement regression pin**: split guard exits written with complementary relational operators such as `<` and `>=` now still report later ignored `TryAdd*` calls.
+- **DI012 trailing local-function branch-exit regression pin**: branch completion now ignores non-executed trailing local function declarations after `return` before deciding whether a fallback path can reach `TryAdd*`.
+- **DI012 unreachable trailing statement regression pin**: branch completion now stops at the first non-completing statement, so unreachable code after `return` no longer reopens an impossible fallback path.
+- **DI012 switch-section unreachable statement regression pin**: branch completion now scans switch sections in execution order, so unreachable statements after `return` no longer reopen an impossible fallback path.
+- **DI012 label fall-through regression pin**: `goto` branch-exit analysis now scans forward from the target label, so a label followed by `return` before the fallback still reports ignored `TryAdd*`.
+- **DI012 infinite-loop goto fallback false positive**: infinite loops that jump to a fallback label now count as reaching that fallback instead of making `TryAdd*` look always ignored.
+- **DI012 helper-return false positive**: branch returns inside source-defined registration helpers now flow back to caller-side fallbacks instead of making those fallbacks look unreachable.
+- **DI012 helper-callsite fallback regressions**: registrations expanded from source-defined helpers now retain the helper invocation site for guarded-fallback reachability, preserving ignored-`TryAdd*` diagnostics when the helper call is dominated by a prior registration.
+- **DI012 branch-local TryAdd fallback false positive**: `TryAdd*` fallbacks in the opposite arm of the same `if`/`else` chain no longer report as ignored.
+- **DI012 helper-callsite branch duplicate false positive**: registrations inside helpers invoked from opposite branch callsites now remain mutually exclusive instead of reporting duplicate overrides.
+- **DI012 nested helper-callsite duplicate false positive**: nested helper calls now preserve their own branch callsite so wrappers that dispatch to alternative helpers stay quiet.
+- **DI012 guarded helper fallback false positive**: helper registrations invoked from a guarded callsite no longer make a later caller-side `TryAdd*` fallback look always ignored.
+- **DI012 helper-callsite fallback regression pins**: helper registrations invoked from exhaustive `if`/`else`, nested guarded helpers, guarded internally exhaustive helpers, and complementary sibling guards now keep their caller branch location when deciding whether a later `TryAdd*` can run.
+- **DI012 nested helper branch false positive**: unguarded helper layers no longer drop an outer helper branch when a deeper helper performs the actual registration.
+- **DI012 helper-internal fallback false negative**: `TryAdd*` calls inside helpers after a returning branch now still report when every path that reaches the fallback already registered the service.
+- **DI012 looped helper `TryAdd*` regression pin**: complementary sibling guards inside loop-invoked helpers no longer suppress ignored `TryAdd*` diagnostics across iterations.
+- **DI012 switch-expression branch-exit regression pin**: guarded `Add*` branches whose opposite branch exits through an exhaustive throwing switch expression still report a later ignored `TryAdd*`.
+- **DI012 middle-branch fallback regression pin**: `if`/`else if`/`else` chains with registering outer branches and a non-registering middle branch keep the later `TryAdd*` fallback quiet.
+- **DI012 branch duplicate `Replace` regression pin**: duplicate counts are preserved across mutually exclusive alternatives so `Replace` still reports when one possible branch leaves a descriptor behind.
+- **DI012 branch-local `Replace` regression pin**: a branch-local `Replace` after an earlier unconditional registration no longer hides duplicate Add registrations in the opposite branch.
+- **DI012 repeated wrapper branch regression pin**: branch alternatives inside a source-defined registration helper no longer hide duplicate registrations when that helper is invoked more than once.
+- **DI012 repeated nested wrapper branch regression pin**: nested branch alternatives inside a repeatedly invoked source-defined registration helper no longer hide duplicate registrations.
+- **DI012 looped wrapper branch regression pin**: branch alternatives inside a source-defined registration helper no longer hide duplicate registrations when that helper is invoked from a loop.
+- **DI012 looped wrapper flow regression pin**: registrations inside looped source-defined helpers still compare against later direct registrations on the same `IServiceCollection`.
+- **DI012 nested looped wrapper regression pin**: loop state now flows through helper methods that loop while invoking another registration helper.
+- **DI012 looped branch regression pin**: mutually exclusive branch suppression no longer hides duplicate registrations inside loops, where different iterations can execute different branches.
+- **DI012 looped fallback regression pin**: guarded `Add*` plus `TryAdd*` inside loops still reports ignored `TryAdd*`, because different iterations can fill the slot before the fallback.
+- **DI012 post-guard looped fallback regression pin**: guarded `Add*` before a loop no longer suppresses ignored `TryAdd*` diagnostics inside the later loop.
+- **DI012 member guard call-mutation regression pin**: complementary sibling guards backed by fields no longer hide duplicates when an intervening `this`/implicit method call can mutate the guard state.
+- **DI012 later `else if` complement false negative**: branch-chain exhaustiveness now checks complementary guard pairs across all prior `else if` conditions, so later complementary arms still make following `TryAdd*` calls report as ignored.
+- **DI012 nested exhaustive registration false negative**: branches covered by nested exhaustive registrations now still make following `TryAdd*` calls report as ignored when every completing path has registered the service.
+- **DI012 branch-local repeated `TryAdd*` false negative**: a `TryAdd*` fallback in the opposite branch now becomes the baseline for later same-branch `TryAdd*` calls, so repeated fallbacks report as ignored.
+- **DI012 positive boolean comparison false positive**: sibling guards written as `condition == true` and `!condition` are now recognized as complementary alternatives instead of duplicate registrations.
+- **DI012 post-complement duplicate false negative**: later registrations under an already-covered sibling guard now report duplicates instead of being hidden by the complementary-branch shortcut.
+- **DI012 branch-local helper `Replace` false negative**: `Replace*` calls expanded from source-defined helpers now use the helper callsite branch when preserving earlier unconditional registrations, so later `TryAdd*` fallbacks still report as ignored.
+- **DI012 guarded helper intervening-registration false positive**: helper-expanded `Add*`/`Replace*` calls now use their guarded callsite when checking intervening registrations, keeping caller-side `TryAdd*` fallbacks quiet when the helper branch can be skipped.
+- **DI012 captured guard mutation false negative**: invoked local functions that mutate captured guard locals or parameters now break sibling-guard complement proof, so duplicate registrations still report when both branches can run.
+- **DI012 unstable `else if` complement regression pin**: complementary `else if` exhaustiveness now requires stable conditions, keeping `TryAdd*` fallbacks quiet for repeated unstable calls such as `Next()` / `!Next()`.
+
 ## [2.11.12] - 2026-06-27
 
 ### Fixed

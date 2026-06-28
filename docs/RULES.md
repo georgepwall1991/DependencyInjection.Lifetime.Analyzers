@@ -492,7 +492,7 @@ public sealed class MyService
 - `TryAdd*` calls after an `Add*` already registered that service.
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
-DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order.
+DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
 

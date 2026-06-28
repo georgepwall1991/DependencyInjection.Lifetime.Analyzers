@@ -13,6 +13,8 @@ namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 /// </summary>
 internal sealed class ServiceCollectionReachabilityAnalyzer
 {
+    private const string LoopedWrapperFlowMarker = "|looped-wrapper";
+
     private readonly Compilation _compilation;
     private readonly INamedTypeSymbol? _serviceCollectionType;
     private readonly INamedTypeSymbol? _serviceCollectionServiceExtensionsType;
@@ -83,6 +85,12 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         var key = LocationKey.Create(location);
         return key.HasValue && _opaquePredecessorRegistrations.Contains(key.Value);
     }
+
+    internal static bool IsLoopedWrapperFlowKey(string? flowKey) =>
+        flowKey?.IndexOf(LoopedWrapperFlowMarker, System.StringComparison.Ordinal) >= 0;
+
+    internal static string? NormalizeLoopedWrapperFlowKey(string? flowKey) =>
+        flowKey?.Replace(LoopedWrapperFlowMarker, string.Empty);
 
     public ImmutableArray<OrderedRegistration> AlignOrderedRegistrationsToRootFlows(
         IEnumerable<OrderedRegistration> registrations)
@@ -226,6 +234,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         }
 
         var invocationLocation = locationKey.Value;
+        var isInsideLoop = IsInsideLoop(observation.Invocation);
 
         var normalizedTarget = NormalizeMethod(targetMethod);
         var isWrapperMethod = IsContainedServiceCollectionWrapperMethod(containingMethod);
@@ -245,6 +254,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 invocationLocation,
                 observation.Invocation.SpanStart,
                 flowKey,
+                isInsideLoop,
                 isWrapperMethod);
             return true;
         }
@@ -253,9 +263,11 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         {
             observed = ObservedInvocation.WrapperCall(
                 containingMethod,
+                invocationLocation,
                 normalizedTarget,
                 observation.Invocation.SpanStart,
                 flowKey,
+                isInsideLoop,
                 isWrapperMethod);
             return true;
         }
@@ -269,8 +281,10 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
         observed = ObservedInvocation.OpaqueWrapper(
             containingMethod,
+            invocationLocation,
             observation.Invocation.SpanStart,
             flowKey,
+            isInsideLoop,
             isWrapperMethod);
         return true;
     }
@@ -325,6 +339,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 case StepKind.DirectRegistration:
                     AppendAlignedRegistrations(
                         step.Location,
+                        step.Location,
+                        step.Location,
                         CreateBarrierScopedFlowKey(
                             step.FlowKey!,
                             GetBarrierVersion(barrierVersionByFlow, step.FlowKey!)),
@@ -339,10 +355,13 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     barrierVersion = ExpandWrapperRegistrations(
                         step.TargetWrapper!,
                         wrapperFlowKey,
+                        step.Location,
+                        step.Location,
                         registrationsByLocation,
                         alignedRegistrations,
                         barrierVersion,
                         ref order,
+                        step.IsInsideLoop,
                         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default));
                     barrierVersionByFlow[wrapperFlowKey] = barrierVersion;
                     break;
@@ -357,10 +376,13 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
     private int ExpandWrapperRegistrations(
         IMethodSymbol wrapperMethod,
         string flowKey,
+        LocationKey executionLocation,
+        LocationKey branchLocation,
         Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
         ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
         int barrierVersion,
         ref int order,
+        bool isInsideLoop,
         HashSet<IMethodSymbol> wrapperStack)
     {
         if (!wrapperStack.Add(wrapperMethod))
@@ -377,7 +399,11 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     case StepKind.DirectRegistration:
                         AppendAlignedRegistrations(
                             step.Location,
-                            CreateBarrierScopedFlowKey(flowKey, barrierVersion),
+                            executionLocation,
+                            branchLocation,
+                            CreateBarrierScopedFlowKey(
+                                isInsideLoop ? CreateLoopedWrapperFlowKey(flowKey) : flowKey,
+                                barrierVersion),
                             registrationsByLocation,
                             alignedRegistrations,
                             ref order);
@@ -387,10 +413,13 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                         barrierVersion = ExpandWrapperRegistrations(
                             step.TargetWrapper!,
                             flowKey,
+                            executionLocation,
+                            SelectNestedBranchLocation(branchLocation, step.Location),
                             registrationsByLocation,
                             alignedRegistrations,
                             barrierVersion,
                             ref order,
+                            isInsideLoop || step.IsInsideLoop,
                             wrapperStack);
                         break;
 
@@ -407,6 +436,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
     private static void AppendAlignedRegistrations(
         LocationKey location,
+        LocationKey executionLocation,
+        LocationKey branchLocation,
         string flowKey,
         Dictionary<LocationKey, ImmutableArray<OrderedRegistration>> registrationsByLocation,
         ImmutableArray<OrderedRegistration>.Builder alignedRegistrations,
@@ -430,7 +461,9 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                     order++,
                     registration.IsTryAdd,
                     registration.MethodName,
-                    registration.SkipIfAlreadyRegistered));
+                    registration.SkipIfAlreadyRegistered,
+                    Location.Create(executionLocation.Tree, executionLocation.Span),
+                    Location.Create(branchLocation.Tree, branchLocation.Span)));
         }
     }
 
@@ -758,6 +791,9 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         return barrierVersion == 0 ? flowKey : flowKey + "|barrier:" + barrierVersion;
     }
 
+    private static string CreateLoopedWrapperFlowKey(string flowKey) =>
+        flowKey + LoopedWrapperFlowMarker;
+
     private static int GetBarrierVersion(Dictionary<string, int> barrierVersionByFlow, string flowKey)
     {
         return barrierVersionByFlow.TryGetValue(flowKey, out var barrierVersion)
@@ -1017,6 +1053,64 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         }
     }
 
+    private static bool IsInsideLoop(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is ForStatementSyntax ||
+                current is ForEachStatementSyntax ||
+                current is ForEachVariableStatementSyntax ||
+                current is WhileStatementSyntax ||
+                current is DoStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static LocationKey SelectNestedBranchLocation(LocationKey currentBranchLocation, LocationKey nestedCallLocation)
+    {
+        return IsInsideIfBranch(nestedCallLocation) || !IsInsideIfBranch(currentBranchLocation)
+            ? nestedCallLocation
+            : currentBranchLocation;
+    }
+
+    private static bool IsInsideIfBranch(LocationKey location)
+    {
+        var node = TryGetNode(location);
+        while (node is not null)
+        {
+            if (node.Parent is IfStatementSyntax parentIf &&
+                parentIf.Statement.Span.Contains(node.SpanStart))
+            {
+                return true;
+            }
+
+            if (node.Parent is ElseClauseSyntax parentElse &&
+                parentElse.Statement.Span.Contains(node.SpanStart))
+            {
+                return true;
+            }
+
+            node = node.Parent;
+        }
+
+        return false;
+    }
+
+    private static SyntaxNode? TryGetNode(LocationKey location)
+    {
+        if (location.Tree is null)
+        {
+            return null;
+        }
+
+        var root = location.Tree.GetRoot();
+        return root.FindNode(location.Span, getInnermostNodeForTie: true);
+    }
+
     private static IEnumerable<LocationKey> GetRegistrationLocations(IEnumerable<Location> registrationLocations)
     {
         foreach (var location in registrationLocations)
@@ -1111,12 +1205,14 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             StepKind kind,
             LocationKey location,
             string? flowKey,
-            IMethodSymbol? targetWrapper)
+            IMethodSymbol? targetWrapper,
+            bool isInsideLoop)
         {
             Kind = kind;
             Location = location;
             FlowKey = flowKey;
             TargetWrapper = targetWrapper;
+            IsInsideLoop = isInsideLoop;
         }
 
         public StepKind Kind { get; }
@@ -1127,14 +1223,16 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
         public IMethodSymbol? TargetWrapper { get; }
 
-        public static RootMethodStep DirectRegistration(LocationKey location, string flowKey) =>
-            new(StepKind.DirectRegistration, location, flowKey, targetWrapper: null);
+        public bool IsInsideLoop { get; }
 
-        public static RootMethodStep WrapperCall(string flowKey, IMethodSymbol targetWrapper) =>
-            new(StepKind.WrapperCall, default, flowKey, targetWrapper);
+        public static RootMethodStep DirectRegistration(LocationKey location, string flowKey) =>
+            new(StepKind.DirectRegistration, location, flowKey, targetWrapper: null, isInsideLoop: false);
+
+        public static RootMethodStep WrapperCall(LocationKey location, string flowKey, IMethodSymbol targetWrapper, bool isInsideLoop) =>
+            new(StepKind.WrapperCall, location, flowKey, targetWrapper, isInsideLoop);
 
         public static RootMethodStep OpaqueWrapper(string flowKey) =>
-            new(StepKind.OpaqueWrapper, default, flowKey, targetWrapper: null);
+            new(StepKind.OpaqueWrapper, default, flowKey, targetWrapper: null, isInsideLoop: false);
     }
 
     private readonly struct WrapperStep
@@ -1142,11 +1240,13 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         private WrapperStep(
             StepKind kind,
             LocationKey location,
-            IMethodSymbol? targetWrapper)
+            IMethodSymbol? targetWrapper,
+            bool isInsideLoop)
         {
             Kind = kind;
             Location = location;
             TargetWrapper = targetWrapper;
+            IsInsideLoop = isInsideLoop;
         }
 
         public StepKind Kind { get; }
@@ -1155,37 +1255,45 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
         public IMethodSymbol? TargetWrapper { get; }
 
-        public static WrapperStep DirectRegistration(LocationKey location) =>
-            new(StepKind.DirectRegistration, location, targetWrapper: null);
+        public bool IsInsideLoop { get; }
 
-        public static WrapperStep WrapperCall(IMethodSymbol targetWrapper) =>
-            new(StepKind.WrapperCall, default, targetWrapper);
+        public static WrapperStep DirectRegistration(LocationKey location) =>
+            new(StepKind.DirectRegistration, location, targetWrapper: null, isInsideLoop: false);
+
+        public static WrapperStep WrapperCall(LocationKey location, IMethodSymbol targetWrapper, bool isInsideLoop) =>
+            new(StepKind.WrapperCall, location, targetWrapper, isInsideLoop);
 
         public static WrapperStep OpaqueWrapper() =>
-            new(StepKind.OpaqueWrapper, default, targetWrapper: null);
+            new(StepKind.OpaqueWrapper, default, targetWrapper: null, isInsideLoop: false);
     }
 
     private readonly struct ObservedInvocation
     {
         private ObservedInvocation(
             IMethodSymbol containingMethod,
+            LocationKey invocationLocation,
             LocationKey? registrationLocation,
             IMethodSymbol? targetWrapper,
             int spanStart,
             string? flowKey,
             StepKind kind,
+            bool isInsideLoop,
             bool isContainedInWrapper)
         {
             ContainingMethod = containingMethod;
+            InvocationLocation = invocationLocation;
             RegistrationLocation = registrationLocation;
             TargetWrapper = targetWrapper;
             SpanStart = spanStart;
             FlowKey = flowKey;
             Kind = kind;
+            IsInsideLoop = isInsideLoop;
             IsContainedInWrapper = isContainedInWrapper;
         }
 
         public IMethodSymbol ContainingMethod { get; }
+
+        public LocationKey InvocationLocation { get; }
 
         public LocationKey? RegistrationLocation { get; }
 
@@ -1197,6 +1305,8 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
 
         public StepKind Kind { get; }
 
+        public bool IsInsideLoop { get; }
+
         public bool IsContainedInWrapper { get; }
 
         public static ObservedInvocation DirectRegistration(
@@ -1204,23 +1314,28 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             LocationKey registrationLocation,
             int spanStart,
             string? flowKey,
+            bool isInsideLoop,
             bool isContainedInWrapper) =>
-            new(containingMethod, registrationLocation, targetWrapper: null, spanStart, flowKey, StepKind.DirectRegistration, isContainedInWrapper);
+            new(containingMethod, registrationLocation, registrationLocation, targetWrapper: null, spanStart, flowKey, StepKind.DirectRegistration, isInsideLoop, isContainedInWrapper);
 
         public static ObservedInvocation WrapperCall(
             IMethodSymbol containingMethod,
+            LocationKey invocationLocation,
             IMethodSymbol targetWrapper,
             int spanStart,
             string? flowKey,
+            bool isInsideLoop,
             bool isContainedInWrapper) =>
-            new(containingMethod, registrationLocation: null, targetWrapper, spanStart, flowKey, StepKind.WrapperCall, isContainedInWrapper);
+            new(containingMethod, invocationLocation, registrationLocation: null, targetWrapper, spanStart, flowKey, StepKind.WrapperCall, isInsideLoop, isContainedInWrapper);
 
         public static ObservedInvocation OpaqueWrapper(
             IMethodSymbol containingMethod,
+            LocationKey invocationLocation,
             int spanStart,
             string? flowKey,
+            bool isInsideLoop,
             bool isContainedInWrapper) =>
-            new(containingMethod, registrationLocation: null, targetWrapper: null, spanStart, flowKey, StepKind.OpaqueWrapper, isContainedInWrapper);
+            new(containingMethod, invocationLocation, registrationLocation: null, targetWrapper: null, spanStart, flowKey, StepKind.OpaqueWrapper, isInsideLoop, isContainedInWrapper);
 
         public RootMethodStep? ToRootStep()
         {
@@ -1229,7 +1344,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 StepKind.DirectRegistration when RegistrationLocation is { } location && FlowKey is not null =>
                     RootMethodStep.DirectRegistration(location, FlowKey),
                 StepKind.WrapperCall when FlowKey is not null && TargetWrapper is not null =>
-                    RootMethodStep.WrapperCall(FlowKey, TargetWrapper),
+                    RootMethodStep.WrapperCall(InvocationLocation, FlowKey, TargetWrapper, IsInsideLoop),
                 StepKind.OpaqueWrapper when FlowKey is not null =>
                     RootMethodStep.OpaqueWrapper(FlowKey),
                 _ => null
@@ -1243,7 +1358,7 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
                 StepKind.DirectRegistration when RegistrationLocation is { } location =>
                     WrapperStep.DirectRegistration(location),
                 StepKind.WrapperCall when TargetWrapper is not null =>
-                    WrapperStep.WrapperCall(TargetWrapper),
+                    WrapperStep.WrapperCall(InvocationLocation, TargetWrapper, IsInsideLoop),
                 StepKind.OpaqueWrapper =>
                     WrapperStep.OpaqueWrapper(),
                 _ => null
