@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.18] - 2026-06-28
+
+### Fixed
+
+- **DI018 opaque factory arguments**: generic registrations with factory arguments supplied by invocations, conditionals, coalesce expressions, or delegate object creation no longer fall through to service-type self-binding, avoiding false non-instantiable implementation diagnostics for interface and abstract services.
+
 ## [2.11.17] - 2026-06-28
 
 ### Fixed

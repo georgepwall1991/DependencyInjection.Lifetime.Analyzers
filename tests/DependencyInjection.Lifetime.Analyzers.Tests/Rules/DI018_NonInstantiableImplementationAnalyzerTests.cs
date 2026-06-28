@@ -604,6 +604,96 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
+    public async Task AbstractService_WithFactoryInvocationArgument_DoesNotSelfBind()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : AbstractService { }
+
+            public class Startup
+            {
+                private static Func<IServiceProvider, IMyService> CreateFactory()
+                {
+                    return sp => new ConcreteService();
+                }
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(CreateFactory());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AbstractService_WithConditionalFactoryArgument_DoesNotSelfBind()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : AbstractService { }
+
+            public class Startup
+            {
+                private static readonly Func<IServiceProvider, IMyService> Primary = sp => new ConcreteService();
+                private static readonly Func<IServiceProvider, IMyService> Fallback = sp => new ConcreteService();
+
+                public void ConfigureServices(IServiceCollection services, bool usePrimary)
+                {
+                    services.AddSingleton<IMyService>(usePrimary ? Primary : Fallback);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AbstractService_WithCoalesceFactoryArgument_DoesNotSelfBind()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : AbstractService { }
+
+            public class Startup
+            {
+                private static readonly Func<IServiceProvider, IMyService> Fallback = sp => new ConcreteService();
+
+                public void ConfigureServices(IServiceCollection services, Func<IServiceProvider, IMyService>? configured)
+                {
+                    services.AddSingleton<IMyService>(configured ?? Fallback);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AbstractService_WithObjectCreationFactoryArgument_DoesNotSelfBind()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public class ConcreteService : AbstractService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>(new Func<IServiceProvider, IMyService>(sp => new ConcreteService()));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ImplementationInstance_WithOnlyPrivateConstructors_DoesNotReport()
     {
         var source = Usings + """

@@ -730,7 +730,7 @@ public sealed class BadPrivateCtorService : IMyService
 services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
 
-DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression, including through `ServiceDescriptor` factories, target-typed descriptor construction, stable descriptor locals, and `TryAddEnumerable(ServiceDescriptor...)`. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
+DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression, including through `ServiceDescriptor` factories, target-typed descriptor construction, stable descriptor locals, and `TryAddEnumerable(ServiceDescriptor...)`. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
 
 **Better pattern:**
 

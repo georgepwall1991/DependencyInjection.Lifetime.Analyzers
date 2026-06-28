@@ -2048,8 +2048,7 @@ public sealed class RegistrationCollector
             foreach (var argument in invocationOperation.Arguments)
             {
                 if (argument.Parameter?.Type.TypeKind != TypeKind.Delegate ||
-                    argument.Value.Syntax is not ExpressionSyntax argumentExpression ||
-                    !IsFactoryExpression(argumentExpression))
+                    argument.Value.Syntax is not ExpressionSyntax argumentExpression)
                 {
                     continue;
                 }
