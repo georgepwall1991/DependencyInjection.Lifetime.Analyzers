@@ -251,7 +251,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), dictionary value caches, recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>`, and simple holder types that only wrap a provider.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), mutable/immutable/frozen dictionary value caches, recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>`, and simple holder types that only wrap a provider.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -266,6 +266,7 @@ public static class Locator
     private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
     private static readonly Dictionary<string, Lazy<IServiceProvider>> LazyTenantProviders = new();
     private static readonly Dictionary<string, IServiceProvider> TenantProviders = new();
+    private static readonly ImmutableDictionary<string, IServiceProvider> SnapshotProviders = ImmutableDictionary<string, IServiceProvider>.Empty;
     private static ProviderHolder Holder = null!;
 }
 ```

@@ -264,7 +264,10 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             ("System.Collections.Generic", "Dictionary`2") => true,
             ("System.Collections.Generic", "IDictionary`2") => true,
             ("System.Collections.Generic", "IReadOnlyDictionary`2") => true,
+            ("System.Collections.Immutable", "ImmutableDictionary`2") => true,
+            ("System.Collections.Immutable", "IImmutableDictionary`2") => true,
             ("System.Collections.Concurrent", "ConcurrentDictionary`2") => true,
+            ("System.Collections.Frozen", "FrozenDictionary`2") => true,
             _ => false,
         };
     }
