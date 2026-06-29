@@ -202,6 +202,34 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task OpenGenericConstructor_WithIServiceProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("Repository", "IServiceProvider"));
+    }
+
+    [Fact]
     public async Task Constructor_WithIServiceProvider_InNonMiddlewareInvokeClass_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -837,6 +865,48 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
                 .WithLocation(20, 9)
                 .WithArguments("MyService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task FactoryRegistration_WithImplementationMetadata_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class OptionsServiceCollectionExtensions
+                {
+                    public static IServiceCollection AddScopedWithFactory<TService, TImplementation>(
+                        this IServiceCollection services,
+                        Func<IServiceProvider, TImplementation> factory)
+                        where TImplementation : class, TService
+                    {
+                        return services;
+                    }
+                }
+            }
+
+            public interface IMyService { }
+
+            public class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScopedWithFactory<IMyService, MyService>(_ => new MyService(new EmptyProvider()));
+                }
+            }
+
+            public sealed class EmptyProvider : IServiceProvider
+            {
+                public object? GetService(Type serviceType) => null;
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

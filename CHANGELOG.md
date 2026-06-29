@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.25] - 2026-06-29
+
+### Fixed
+
+- **DI011 registration shapes**: factory-backed registrations with implementation metadata no longer report constructor provider-injection diagnostics for constructors the container bypasses, while open-generic registrations now inspect the implementation type definition and report provider-injecting activation constructors.
+
 ## [2.11.24] - 2026-06-29
 
 ### Fixed

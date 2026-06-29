@@ -61,7 +61,8 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
 
         foreach (var registration in registrationCollector.AllRegistrations)
         {
-            if (registration.HasImplementationInstance)
+            if (registration.HasImplementationInstance ||
+                registration.FactoryExpression is not null)
             {
                 continue;
             }
@@ -72,27 +73,31 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            var activationType = implementationType.IsUnboundGenericType
+                ? implementationType.OriginalDefinition
+                : implementationType;
+
             // Skip factory-shaped classes, but do not let name-only factory markers
             // suppress provider-injection diagnostics.
-            if (IsFactoryClass(implementationType))
+            if (IsFactoryClass(activationType))
             {
                 continue;
             }
 
             // Skip real ASP.NET Core middleware classes.
-            if (IsMiddlewareClass(implementationType))
+            if (IsMiddlewareClass(activationType))
             {
                 continue;
             }
 
             // Skip infrastructure abstractions that are expected to resolve services dynamically.
-            if (IsHostedServiceClass(implementationType) || IsEndpointFilterFactoryClass(implementationType))
+            if (IsHostedServiceClass(activationType) || IsEndpointFilterFactoryClass(activationType))
             {
                 continue;
             }
 
             var constructors = ConstructorSelection.GetLikelyActivationConstructors(
-                implementationType,
+                activationType,
                 parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
             foreach (var constructor in constructors)
@@ -104,16 +109,16 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
                     // Check if parameter is IServiceProvider, IServiceScopeFactory, or IKeyedServiceProvider
                     if (wellKnownTypes.IsServiceProvider(parameterType))
                     {
-                        ReportDiagnostic(context, registration, implementationType, "IServiceProvider");
+                        ReportDiagnostic(context, registration, activationType, "IServiceProvider");
                     }
                     else if (wellKnownTypes.IsServiceScopeFactory(parameterType) &&
                              registration.Lifetime != ServiceLifetime.Singleton)
                     {
-                        ReportDiagnostic(context, registration, implementationType, "IServiceScopeFactory");
+                        ReportDiagnostic(context, registration, activationType, "IServiceScopeFactory");
                     }
                     else if (wellKnownTypes.IsKeyedServiceProvider(parameterType))
                     {
-                        ReportDiagnostic(context, registration, implementationType, "IKeyedServiceProvider");
+                        ReportDiagnostic(context, registration, activationType, "IKeyedServiceProvider");
                     }
                 }
             }
