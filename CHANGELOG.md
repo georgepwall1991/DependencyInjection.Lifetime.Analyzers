@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.41] - 2026-06-29
+
+### Fixed
+
+- **DI010 tied constructor diagnostics**: equally-greedy activation constructor sets now produce a single constructor-over-injection diagnostic at the service registration using the highest meaningful dependency count, avoiding duplicate identical reports for ambiguous DI activations.
+
 ## [2.11.40] - 2026-06-29
 
 ### Fixed

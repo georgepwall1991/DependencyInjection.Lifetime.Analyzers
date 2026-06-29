@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -105,16 +106,13 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
                 implementationType,
                 parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
-            foreach (var constructor in constructors)
-            {
-                ReportIfOverInjected(
-                    context,
-                    registration.Location,
-                    implementationType.Name,
-                    constructor,
-                    wellKnownTypes,
-                    maxDependencies);
-            }
+            ReportIfAnyConstructorOverInjected(
+                context,
+                registration.Location,
+                implementationType.Name,
+                constructors,
+                wellKnownTypes,
+                maxDependencies);
         }
     }
 
@@ -175,16 +173,13 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
             implementationType,
             parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
-        foreach (var likelyConstructor in constructors)
-        {
-            ReportIfOverInjected(
-                context,
-                registration.Location,
-                implementationType.Name,
-                likelyConstructor,
-                wellKnownTypes,
-                maxDependencies);
-        }
+        ReportIfAnyConstructorOverInjected(
+            context,
+            registration.Location,
+            implementationType.Name,
+            constructors,
+            wellKnownTypes,
+            maxDependencies);
     }
 
     private static bool TryGetConstructedImplementationFromExpression(
@@ -274,6 +269,37 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
             location,
             implementationName,
             dependencyCount);
+
+        context.ReportDiagnostic(diagnostic);
+    }
+
+    private static void ReportIfAnyConstructorOverInjected(
+        CompilationAnalysisContext context,
+        Location location,
+        string implementationName,
+        IEnumerable<IMethodSymbol> constructors,
+        WellKnownTypes? wellKnownTypes,
+        int maxDependencies)
+    {
+        var highestDependencyCount = 0;
+
+        foreach (var constructor in constructors)
+        {
+            highestDependencyCount = Math.Max(
+                highestDependencyCount,
+                CountMeaningfulDependencies(constructor, wellKnownTypes));
+        }
+
+        if (highestDependencyCount <= maxDependencies)
+        {
+            return;
+        }
+
+        var diagnostic = Diagnostic.Create(
+            DiagnosticDescriptors.ConstructorOverInjection,
+            location,
+            implementationName,
+            highestDependencyCount);
 
         context.ReportDiagnostic(diagnostic);
     }
