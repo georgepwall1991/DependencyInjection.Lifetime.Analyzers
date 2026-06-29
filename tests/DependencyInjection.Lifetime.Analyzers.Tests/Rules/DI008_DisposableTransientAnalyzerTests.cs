@@ -757,6 +757,33 @@ public class DI008_DisposableTransientAnalyzerTests
     }
 
     [Fact]
+    public async Task ServiceCollectionConditionalAdd_ServiceDescriptorTransientGeneric_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services?.Add(ServiceDescriptor.Transient<IMyService, DisposableService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(13, 18, 13, 84)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
     public async Task ServiceCollectionAdd_ServiceDescriptorKeyedTransientGeneric_ReportsDiagnostic()
     {
         var source = """

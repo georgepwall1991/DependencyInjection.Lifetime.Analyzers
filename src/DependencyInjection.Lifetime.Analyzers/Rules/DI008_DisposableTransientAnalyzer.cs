@@ -734,12 +734,13 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         // Resolve the receiver expression type and check it is (or implements) IServiceCollection.
-        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        var receiver = GetInvocationReceiver(invocation);
+        if (receiver is null)
         {
             return false;
         }
 
-        var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+        var receiverType = semanticModel.GetTypeInfo(receiver).Type;
         if (receiverType is null)
         {
             return false;
@@ -759,6 +760,35 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static ExpressionSyntax? GetInvocationReceiver(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            return memberAccess.Expression;
+        }
+
+        if (invocation.Expression is MemberBindingExpressionSyntax)
+        {
+            return GetEnclosingConditionalAccess(invocation)?.Expression;
+        }
+
+        return null;
+    }
+
+    private static ConditionalAccessExpressionSyntax? GetEnclosingConditionalAccess(InvocationExpressionSyntax invocation)
+    {
+        for (SyntaxNode? current = invocation; current?.Parent is not null; current = current.Parent)
+        {
+            if (current.Parent is ConditionalAccessExpressionSyntax conditionalAccess &&
+                conditionalAccess.WhenNotNull == current)
+            {
+                return conditionalAccess;
+            }
+        }
+
+        return null;
     }
 
     private static bool IsServiceDescriptorExtensionDescriptorMethod(
