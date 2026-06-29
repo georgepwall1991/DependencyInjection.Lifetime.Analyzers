@@ -106,7 +106,7 @@ public class DI005_AsyncDisposalAnalyzerTests
             AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
                 .WithSpan(17, 31, 17, 58)
-                .WithArguments(""));
+                .WithArguments("lambda expression"));
     }
 
     [Fact]
@@ -348,7 +348,7 @@ public class DI005_AsyncDisposalAnalyzerTests
             AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
                 .WithSpan(17, 31, 17, 58)
-                .WithArguments(""));
+                .WithArguments("anonymous method"));
     }
 
     [Fact]
@@ -480,6 +480,36 @@ public class DI005_AsyncDisposalAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_WhenAsyncScopeApiUnavailable_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var references = ReferenceAssemblies.Net.Net50
+            .AddPackages([
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "5.0.0"),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "5.0.0")
+            ]);
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(source, references);
     }
 
     [Fact]
