@@ -135,6 +135,10 @@ public sealed class DI009_OpenGenericLifetimeMismatchCodeFixProvider : CodeFixPr
         {
             expression = memberAccess.Name;
         }
+        else if (expression is MemberBindingExpressionSyntax memberBinding)
+        {
+            expression = memberBinding.Name;
+        }
 
         methodName = expression switch
         {
@@ -574,6 +578,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchCodeFixProvider : CodeFixPr
         return expression switch
         {
             MemberAccessExpressionSyntax memberAccess => memberAccess.WithName(ReplaceSimpleName(memberAccess.Name, newMethodName)),
+            MemberBindingExpressionSyntax memberBinding => memberBinding.WithName(ReplaceSimpleName(memberBinding.Name, newMethodName)),
             SimpleNameSyntax simpleName => ReplaceSimpleName(simpleName, newMethodName),
             _ => expression,
         };
@@ -611,6 +616,11 @@ public sealed class DI009_OpenGenericLifetimeMismatchCodeFixProvider : CodeFixPr
         if (invocation.Expression is SimpleNameSyntax simpleName)
         {
             return invocation.WithExpression(ReplaceSimpleName(simpleName, newMethodName));
+        }
+
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding)
+        {
+            return invocation.WithExpression(memberBinding.WithName(ReplaceSimpleName(memberBinding.Name, newMethodName)));
         }
 
         if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)

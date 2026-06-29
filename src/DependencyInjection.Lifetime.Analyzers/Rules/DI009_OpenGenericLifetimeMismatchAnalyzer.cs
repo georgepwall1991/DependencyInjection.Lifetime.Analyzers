@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,6 +64,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
     {
         var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
         var knownLifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
+        var definitelyRemovedRegistrations = BuildDefinitelyRemovedRegistrationLookup(
+            registrationCollector.AllRegistrations,
+            registrationCollector.OrderedMutations);
 
         foreach (var registration in registrationCollector.AllRegistrations)
         {
@@ -73,6 +77,11 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             }
 
             if (registration.ImplementationType is null)
+            {
+                continue;
+            }
+
+            if (IsDefinitelyRemoved(registration, definitelyRemovedRegistrations))
             {
                 continue;
             }
@@ -211,6 +220,266 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             dependencyLifetime = knownLifetime;
         }
         return dependencyLifetime is not null;
+    }
+
+    private static HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> BuildDefinitelyRemovedRegistrationLookup(
+        IEnumerable<ServiceRegistration> registrations,
+        IEnumerable<OrderedRegistrationMutation> mutations)
+    {
+        var removedRegistrations = new HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey>();
+        var registrationsByTree = registrations
+            .Where(static registration => registration.FlowKey is not null &&
+                                          registration.Location.SourceTree is not null)
+            .GroupBy(static registration => registration.Location.SourceTree!)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderBy(static registration => registration.Location.SourceSpan.Start).ToArray());
+        var mutationsByTree = mutations
+            .Where(static mutation => mutation.FlowKey is not null &&
+                                      mutation.Location.SourceTree is not null)
+            .GroupBy(static mutation => mutation.Location.SourceTree!)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderBy(static mutation => mutation.Location.SourceSpan.Start).ToArray());
+
+        foreach (var tree in registrationsByTree.Keys.Union(mutationsByTree.Keys))
+        {
+            registrationsByTree.TryGetValue(tree, out var orderedRegistrations);
+            mutationsByTree.TryGetValue(tree, out var orderedMutations);
+            orderedRegistrations ??= [];
+            orderedMutations ??= [];
+
+            var activeRegistrations = new List<ServiceRegistration>();
+            var registrationIndex = 0;
+            var mutationIndex = 0;
+
+            while (registrationIndex < orderedRegistrations.Length ||
+                   mutationIndex < orderedMutations.Length)
+            {
+                var nextRegistrationStart = registrationIndex < orderedRegistrations.Length
+                    ? orderedRegistrations[registrationIndex].Location.SourceSpan.Start
+                    : int.MaxValue;
+                var nextMutationStart = mutationIndex < orderedMutations.Length
+                    ? orderedMutations[mutationIndex].Location.SourceSpan.Start
+                    : int.MaxValue;
+
+                if (nextRegistrationStart < nextMutationStart)
+                {
+                    activeRegistrations.Add(orderedRegistrations[registrationIndex]);
+                    registrationIndex++;
+                    continue;
+                }
+
+                var mutation = orderedMutations[mutationIndex];
+                if (CanTreatMutationAsDefinite(mutation))
+                {
+                    ApplyMutation(
+                        mutation,
+                        activeRegistrations,
+                        removedRegistrations);
+                }
+
+                mutationIndex++;
+            }
+        }
+
+        return removedRegistrations;
+    }
+
+    private static bool CanTreatMutationAsDefinite(OrderedRegistrationMutation mutation)
+    {
+        var sourceTree = mutation.Location.SourceTree;
+        if (sourceTree is null)
+        {
+            return false;
+        }
+
+        var root = sourceTree.GetRoot();
+        var node = root.FindNode(mutation.Location.SourceSpan, getInnermostNodeForTie: true);
+        foreach (var ancestor in node.AncestorsAndSelf())
+        {
+            switch (ancestor)
+            {
+                case IfStatementSyntax:
+                case SwitchStatementSyntax:
+                case SwitchExpressionSyntax:
+                case ConditionalExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                case ForStatementSyntax:
+                case ForEachStatementSyntax:
+                case ForEachVariableStatementSyntax:
+                case WhileStatementSyntax:
+                case DoStatementSyntax:
+                case TryStatementSyntax:
+                case CatchClauseSyntax:
+                case FinallyClauseSyntax:
+                case LocalFunctionStatementSyntax:
+                case AnonymousFunctionExpressionSyntax:
+                    return false;
+                case BaseMethodDeclarationSyntax:
+                case AccessorDeclarationSyntax:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ApplyMutation(
+        OrderedRegistrationMutation mutation,
+        List<ServiceRegistration> activeRegistrations,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> removedRegistrations)
+    {
+        if (mutation.Kind == RegistrationMutationKind.RemoveAll)
+        {
+            for (var i = activeRegistrations.Count - 1; i >= 0; i--)
+            {
+                if (!CanMutationRemoveRegistration(mutation, activeRegistrations[i]))
+                {
+                    continue;
+                }
+
+                AddRemovedRegistration(activeRegistrations[i], removedRegistrations);
+                activeRegistrations.RemoveAt(i);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < activeRegistrations.Count; i++)
+        {
+            if (!CanMutationRemoveRegistration(mutation, activeRegistrations[i]))
+            {
+                continue;
+            }
+
+            AddRemovedRegistration(activeRegistrations[i], removedRegistrations);
+            activeRegistrations.RemoveAt(i);
+            return;
+        }
+    }
+
+    private static bool CanMutationRemoveRegistration(
+        OrderedRegistrationMutation mutation,
+        ServiceRegistration registration) =>
+        string.Equals(mutation.FlowKey, registration.FlowKey, StringComparison.Ordinal) &&
+        SymbolEqualityComparer.Default.Equals(mutation.ServiceType, registration.ServiceType) &&
+        mutation.IsKeyed == registration.IsKeyed &&
+        Equals(mutation.Key, registration.Key) &&
+        IsSameExecutionScope(mutation.Location, registration.Location) &&
+        IsSameStraightLineBlock(mutation.Location, registration.Location);
+
+    private static bool IsSameExecutionScope(Location mutationLocation, Location registrationLocation)
+    {
+        var mutationScope = GetExecutionScopeKey(mutationLocation);
+        var registrationScope = GetExecutionScopeKey(registrationLocation);
+        return mutationScope.HasValue &&
+               registrationScope.HasValue &&
+               mutationScope.Value.Equals(registrationScope.Value);
+    }
+
+    private static ServiceCollectionReachabilityAnalyzer.LocationKey? GetExecutionScopeKey(Location location)
+    {
+        var sourceTree = location.SourceTree;
+        if (sourceTree is null)
+        {
+            return null;
+        }
+
+        var root = sourceTree.GetRoot();
+        var node = root.FindNode(location.SourceSpan, getInnermostNodeForTie: true);
+        foreach (var ancestor in node.AncestorsAndSelf())
+        {
+            switch (ancestor)
+            {
+                case BaseMethodDeclarationSyntax:
+                case AccessorDeclarationSyntax:
+                case CompilationUnitSyntax:
+                    return ServiceCollectionReachabilityAnalyzer.LocationKey.Create(ancestor.GetLocation());
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsSameStraightLineBlock(Location mutationLocation, Location registrationLocation)
+    {
+        var mutationStatement = GetEnclosingStatement(mutationLocation);
+        var registrationStatement = GetEnclosingStatement(registrationLocation);
+        if (mutationStatement is null ||
+            registrationStatement is null ||
+            mutationStatement.Parent is not BlockSyntax mutationBlock ||
+            !ReferenceEquals(mutationBlock, registrationStatement.Parent))
+        {
+            return false;
+        }
+
+        var statements = mutationBlock.Statements;
+        var registrationIndex = statements.IndexOf(registrationStatement);
+        var mutationIndex = statements.IndexOf(mutationStatement);
+        if (registrationIndex < 0 || mutationIndex <= registrationIndex)
+        {
+            return false;
+        }
+
+        for (var i = registrationIndex + 1; i < mutationIndex; i++)
+        {
+            if (CanBypassLaterMutation(statements[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static StatementSyntax? GetEnclosingStatement(Location location)
+    {
+        var sourceTree = location.SourceTree;
+        if (sourceTree is null)
+        {
+            return null;
+        }
+
+        var root = sourceTree.GetRoot();
+        var node = root.FindNode(location.SourceSpan, getInnermostNodeForTie: true);
+        return node.AncestorsAndSelf().OfType<StatementSyntax>().FirstOrDefault();
+    }
+
+    private static bool CanBypassLaterMutation(StatementSyntax statement) =>
+        statement is IfStatementSyntax or
+            SwitchStatementSyntax or
+            ForStatementSyntax or
+            ForEachStatementSyntax or
+            ForEachVariableStatementSyntax or
+            WhileStatementSyntax or
+            DoStatementSyntax or
+            TryStatementSyntax or
+            ReturnStatementSyntax or
+            ThrowStatementSyntax or
+            BreakStatementSyntax or
+            ContinueStatementSyntax or
+            GotoStatementSyntax or
+            LocalFunctionStatementSyntax;
+
+    private static void AddRemovedRegistration(
+        ServiceRegistration registration,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> removedRegistrations)
+    {
+        var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(registration.Location);
+        if (locationKey.HasValue)
+        {
+            removedRegistrations.Add(locationKey.Value);
+        }
+    }
+
+    private static bool IsDefinitelyRemoved(
+        ServiceRegistration registration,
+        HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> definitelyRemovedRegistrations)
+    {
+        var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(registration.Location);
+        return locationKey.HasValue &&
+               definitelyRemovedRegistrations.Contains(locationKey.Value);
     }
 
     private static ServiceLifetime? WorstLifetime(ServiceLifetime? left, ServiceLifetime? right)
