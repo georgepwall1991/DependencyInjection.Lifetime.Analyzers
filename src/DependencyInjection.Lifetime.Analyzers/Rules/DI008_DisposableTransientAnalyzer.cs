@@ -228,6 +228,21 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                 }
 
                 break;
+
+            case CollectionExpressionSyntax collectionExpression:
+                foreach (var element in collectionExpression.Elements)
+                {
+                    if (element is ExpressionElementSyntax expressionElement)
+                    {
+                        TryHandleServiceDescriptorExpressionRecursive(context, reportLocation, expressionElement.Expression, wellKnownTypes, serviceDescriptorType, optionsProvider);
+                    }
+                    else if (element is SpreadElementSyntax spreadElement)
+                    {
+                        TryHandleServiceDescriptorExpressionRecursive(context, reportLocation, spreadElement.Expression, wellKnownTypes, serviceDescriptorType, optionsProvider);
+                    }
+                }
+
+                break;
         }
     }
 
