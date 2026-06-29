@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.29] - 2026-06-29
+
+### Fixed
+
+- **DI001 returned scope ownership**: scopes returned through identity-preserving wrappers such as casts, null-forgiving expressions, coalesce expressions, or conditional return arms are now treated as caller-owned instead of false undisposed-scope leaks.
+
 ## [2.11.28] - 2026-06-29
 
 ### Fixed

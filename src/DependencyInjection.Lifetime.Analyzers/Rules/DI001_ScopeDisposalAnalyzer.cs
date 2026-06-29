@@ -196,15 +196,47 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
         // return _factory.CreateScope(); / return _factory?.CreateScope();
         var creationExpression = GetCreationExpression(invocation.Syntax);
-        if (creationExpression.Parent is ReturnStatementSyntax)
-        {
-            return true;
-        }
+        return IsReturnedCreationExpression(creationExpression);
+    }
 
-        // Arrow expression: => CreateScope() / => _factory?.CreateScope()
-        if (creationExpression.Parent is ArrowExpressionClauseSyntax)
+    private static bool IsReturnedCreationExpression(SyntaxNode creationExpression)
+    {
+        var current = creationExpression;
+        while (current.Parent is not null)
         {
-            return true;
+            switch (current.Parent)
+            {
+                case ParenthesizedExpressionSyntax parenthesized when parenthesized.Expression == current:
+                    current = parenthesized;
+                    continue;
+
+                case CastExpressionSyntax castExpression when castExpression.Expression == current:
+                    current = castExpression;
+                    continue;
+
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression
+                    when suppression.Operand == current:
+                    current = suppression;
+                    continue;
+
+                case ConditionalExpressionSyntax conditionalExpression
+                    when conditionalExpression.WhenTrue == current || conditionalExpression.WhenFalse == current:
+                    current = conditionalExpression;
+                    continue;
+
+                case BinaryExpressionSyntax binaryExpression
+                    when binaryExpression.IsKind(SyntaxKind.CoalesceExpression) &&
+                         (binaryExpression.Left == current || binaryExpression.Right == current):
+                    current = binaryExpression;
+                    continue;
+
+                case ReturnStatementSyntax:
+                case ArrowExpressionClauseSyntax:
+                    return true;
+
+                default:
+                    return false;
+            }
         }
 
         return false;

@@ -432,6 +432,100 @@ public class DI001_ScopeDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_ReturnedThroughCast_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public object CreateNewScope()
+                {
+                    return (object)_scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_ReturnedFromConditionalArm_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IServiceScope? CreateNewScope(bool create)
+                {
+                    return create ? _scopeFactory.CreateScope() : null;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_ReturnedThroughNullForgiving_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IServiceScope CreateNewScope()
+                {
+                    return _scopeFactory.CreateScope()!;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessCreateScope_ReturnedThroughCoalesce_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider? _provider;
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceProvider? provider, IServiceScopeFactory scopeFactory)
+                {
+                    _provider = provider;
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IServiceScope CreateNewScope()
+                {
+                    return _provider?.CreateScope() ?? _scopeFactory.CreateScope();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task DisposeCallBeforeScopeCreation_ReportsDiagnostic()
     {
         var source = Usings + """
