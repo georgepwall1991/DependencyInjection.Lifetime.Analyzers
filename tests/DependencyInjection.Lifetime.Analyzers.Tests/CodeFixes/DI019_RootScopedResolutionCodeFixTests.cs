@@ -122,6 +122,154 @@ public class DI019_RootScopedResolutionCodeFixTests
     }
 
     [Fact]
+    public async Task RootResolution_InAsyncMethodInsideLock_WrapsInSynchronousScope()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IScoped { void DoWork(); }
+            public class Scoped : IScoped { public void DoWork() { } }
+
+            public class Program
+            {
+                private readonly object _gate = new();
+
+                public async Task RunAsync(IServiceCollection services)
+                {
+                    await Task.CompletedTask;
+                    var provider = services.BuildServiceProvider();
+                    lock (_gate)
+                    {
+                        var service = [|provider.GetRequiredService<IScoped>()|];
+                        service.DoWork();
+                    }
+                }
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScoped, Scoped>();
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            using System.Threading.Tasks;
+
+            public interface IScoped { void DoWork(); }
+            public class Scoped : IScoped { public void DoWork() { } }
+
+            public class Program
+            {
+                private readonly object _gate = new();
+
+                public async Task RunAsync(IServiceCollection services)
+                {
+                    await Task.CompletedTask;
+                    var provider = services.BuildServiceProvider();
+                    lock (_gate)
+                    {
+                        using var scope = provider.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IScoped>();
+                        service.DoWork();
+                    }
+                }
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScoped, Scoped>();
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource);
+    }
+
+    [Fact]
+    public async Task RootResolution_TopLevelLocalDeclaration_WrapsInScope()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            services.AddScoped<IScoped, Scoped>();
+            using var provider = services.BuildServiceProvider();
+            var service = {|#0:provider.GetRequiredService<IScoped>()|};
+            service.DoWork();
+
+            public interface IScoped { void DoWork(); }
+            public sealed class Scoped : IScoped { public void DoWork() { } }
+            """;
+
+        var fixedSource = Usings + """
+            var services = new ServiceCollection();
+            services.AddScoped<IScoped, Scoped>();
+            using var provider = services.BuildServiceProvider();
+            using var scope = provider.CreateScope();
+            var service = scope.ServiceProvider.GetRequiredService<IScoped>();
+            service.DoWork();
+
+            public interface IScoped { void DoWork(); }
+            public sealed class Scoped : IScoped { public void DoWork() { } }
+            """;
+
+        var expected = CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+            .WithLocation(0)
+            .WithArguments("IScoped", "IScoped");
+
+        await CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .VerifyCodeFixInConsoleApplicationAsync(
+                source,
+                expected,
+                fixedSource,
+                "DI019_FixTitle_WrapInScope");
+    }
+
+    [Fact]
+    public async Task RootResolution_AsyncTopLevelLocalDeclaration_WrapsInAsyncScope()
+    {
+        var source = Usings + """
+            using System.Threading.Tasks;
+
+            var services = new ServiceCollection();
+            services.AddScoped<IScoped, Scoped>();
+            await Task.CompletedTask;
+            using var provider = services.BuildServiceProvider();
+            var service = {|#0:provider.GetRequiredService<IScoped>()|};
+            service.DoWork();
+
+            public interface IScoped { void DoWork(); }
+            public sealed class Scoped : IScoped { public void DoWork() { } }
+            """;
+
+        var fixedSource = Usings + """
+            using System.Threading.Tasks;
+
+            var services = new ServiceCollection();
+            services.AddScoped<IScoped, Scoped>();
+            await Task.CompletedTask;
+            using var provider = services.BuildServiceProvider();
+            await using var scope = provider.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<IScoped>();
+            service.DoWork();
+
+            public interface IScoped { void DoWork(); }
+            public sealed class Scoped : IScoped { public void DoWork() { } }
+            """;
+
+        var expected = CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+            .WithLocation(0)
+            .WithArguments("IScoped", "IScoped");
+
+        await CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .VerifyCodeFixInConsoleApplicationAsync(
+                source,
+                expected,
+                fixedSource,
+                "DI019_FixTitle_WrapInScope");
+    }
+
+    [Fact]
     public async Task RootResolution_InAsyncMethodWithoutCreateAsyncScope_NoCodeFix()
     {
         var source = """
