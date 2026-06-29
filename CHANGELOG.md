@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.23] - 2026-06-29
+
+### Fixed
+
+- **DI008 keyed descriptor factories**: `ServiceDescriptor.KeyedTransient(...)` and `ServiceDescriptor.DescribeKeyed(..., ServiceLifetime.Transient)` now participate in disposable-transient diagnostics, including descriptor collections passed through `TryAddEnumerable`.
+
 ## [2.11.22] - 2026-06-29
 
 ### Fixed

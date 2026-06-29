@@ -378,10 +378,11 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
             var name = descriptorMethod.Name;
             ServiceLifetime? lifetime = name switch
             {
-                "Transient" => ServiceLifetime.Transient,
-                "Scoped" => ServiceLifetime.Scoped,
-                "Singleton" => ServiceLifetime.Singleton,
+                "Transient" or "KeyedTransient" => ServiceLifetime.Transient,
+                "Scoped" or "KeyedScoped" => ServiceLifetime.Scoped,
+                "Singleton" or "KeyedSingleton" => ServiceLifetime.Singleton,
                 "Describe" => ExtractLifetimeFromDescribeArgs(descriptorInvocation, semanticModel),
+                "DescribeKeyed" => ExtractLifetimeFromDescribeArgs(descriptorInvocation, semanticModel),
                 _ => null,
             };
 
