@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.31] - 2026-06-29
+
+### Fixed
+
+- **DI002 manual scope disposal**: scoped services resolved from `CreateScope()` / `CreateAsyncScope()` locals now report when they escape after explicit `Dispose()` or `DisposeAsync()` cleanup, closing the non-using scope boundary gap while preserving live caller-owned scope transfers across branch-local cleanup paths that exit before local cleanup and still reporting using-owned scope/service tuples, disposed scope/service tuples, tuples returned through an unconditional disposing `finally`, non-transfer scope references, conditionally transferred scope elements that still return the service on every path, and conditional branches (including nested composite elements) that return a scoped service without transferring the matching live scope.
+
 ## [2.11.30] - 2026-06-29
 
 ### Fixed
