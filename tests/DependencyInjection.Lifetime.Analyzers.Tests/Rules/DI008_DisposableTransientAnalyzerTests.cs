@@ -1394,6 +1394,40 @@ public class DI008_DisposableTransientAnalyzerTests
     }
 
     [Fact]
+    public async Task TryAddEnumerable_TransientDescriptorCollectionExpression_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddEnumerable(
+                    [
+                        ServiceDescriptor.Transient<IMyService, DisposableService>()
+                    ]);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(15, 9, 18, 11)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
     public async Task TryAddEnumerable_TransientDescriptorList_ReportsDiagnostic()
     {
         var source = """

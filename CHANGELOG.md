@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.39] - 2026-06-29
+
+### Fixed
+
+- **DI008 collection expressions**: `TryAddEnumerable([ ... ])` collection expressions are now walked like arrays/lists, so disposable transient descriptors nested in C# collection expressions report.
+
 ## [2.11.38] - 2026-06-29
 
 ### Fixed
