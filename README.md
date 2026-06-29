@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.34
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.35
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.34">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.35">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.34" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.35" />
 ```
 
 Then reference it from the project file:
@@ -387,7 +387,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including `Lazy<T>` wrappers around those provider types.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers, dictionary value caches, recursive dictionary values, and simple holder types that only wrap a provider.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -400,6 +400,7 @@ public static class Locator
 {
     public static IServiceProvider Provider { get; set; } = null!;
     private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
+    private static readonly Dictionary<string, Lazy<IServiceProvider>> TenantProviders = new();
 }
 ```
 
