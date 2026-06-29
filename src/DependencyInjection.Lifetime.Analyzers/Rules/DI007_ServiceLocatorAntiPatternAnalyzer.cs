@@ -140,12 +140,139 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         var serviceTypeExpression = GetInvocationArgumentExpression(invocation, method, "serviceType");
+        if (serviceTypeExpression is null)
+        {
+            return null;
+        }
+
         if (serviceTypeExpression is TypeOfExpressionSyntax typeOfExpression)
         {
             return semanticModel.GetTypeInfo(typeOfExpression.Type).Type;
         }
 
+        if (TryGetLocalTypeOfExpression(serviceTypeExpression, semanticModel, out var localTypeOfExpression))
+        {
+            return semanticModel.GetTypeInfo(localTypeOfExpression.Type).Type;
+        }
+
         return null;
+    }
+
+    private static bool TryGetLocalTypeOfExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        out TypeOfExpressionSyntax typeOfExpression)
+    {
+        typeOfExpression = null!;
+
+        if (semanticModel.GetSymbolInfo(expression).Symbol is not ILocalSymbol local ||
+            local.DeclaringSyntaxReferences.Length != 1)
+        {
+            return false;
+        }
+
+        var localSyntax = local.DeclaringSyntaxReferences[0].GetSyntax();
+        if (localSyntax is not VariableDeclaratorSyntax
+            {
+                Initializer.Value: TypeOfExpressionSyntax initializerTypeOfExpression
+            })
+        {
+            return false;
+        }
+
+        if (IsReassignedBeforeUse(local, localSyntax, expression, semanticModel))
+        {
+            return false;
+        }
+
+        typeOfExpression = initializerTypeOfExpression;
+        return true;
+    }
+
+    private static bool IsReassignedBeforeUse(
+        ILocalSymbol local,
+        SyntaxNode localSyntax,
+        ExpressionSyntax useExpression,
+        SemanticModel semanticModel)
+    {
+        if (localSyntax.SyntaxTree != useExpression.SyntaxTree)
+        {
+            return true;
+        }
+
+        var executableOwner = GetExecutableOwner(localSyntax);
+        if (!ReferenceEquals(executableOwner, GetExecutableOwner(useExpression)))
+        {
+            return true;
+        }
+
+        var containingNode = localSyntax.FirstAncestorOrSelf<BlockSyntax>() as SyntaxNode ??
+                             localSyntax.FirstAncestorOrSelf<ConstructorDeclarationSyntax>() as SyntaxNode ??
+                             localSyntax.FirstAncestorOrSelf<MethodDeclarationSyntax>() as SyntaxNode ??
+                             localSyntax.SyntaxTree.GetRoot();
+
+        foreach (var assignment in containingNode.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (assignment.SpanStart <= localSyntax.Span.End ||
+                assignment.SpanStart >= useExpression.SpanStart ||
+                !ReferenceEquals(GetExecutableOwner(assignment), executableOwner))
+            {
+                continue;
+            }
+
+            if (TargetsLocal(assignment.Left, local, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        foreach (var argument in containingNode.DescendantNodes().OfType<ArgumentSyntax>())
+        {
+            if (argument.SpanStart <= localSyntax.Span.End ||
+                argument.SpanStart >= useExpression.SpanStart ||
+                !ReferenceEquals(GetExecutableOwner(argument), executableOwner) ||
+                argument.RefOrOutKeyword.Kind() is not (SyntaxKind.RefKeyword or SyntaxKind.OutKeyword))
+            {
+                continue;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(semanticModel.GetSymbolInfo(argument.Expression).Symbol, local))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TargetsLocal(
+        ExpressionSyntax expression,
+        ILocalSymbol local,
+        SemanticModel semanticModel)
+    {
+        if (SymbolEqualityComparer.Default.Equals(semanticModel.GetSymbolInfo(expression).Symbol, local))
+        {
+            return true;
+        }
+
+        return expression switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => TargetsLocal(parenthesized.Expression, local, semanticModel),
+            TupleExpressionSyntax tuple => tuple.Arguments.Any(argument =>
+                TargetsLocal(argument.Expression, local, semanticModel)),
+            _ => false
+        };
+    }
+
+    private static SyntaxNode? GetExecutableOwner(SyntaxNode node)
+    {
+        return node.AncestorsAndSelf().FirstOrDefault(static ancestor =>
+            ancestor is AnonymousMethodExpressionSyntax or
+                ConstructorDeclarationSyntax or
+                LocalFunctionStatementSyntax or
+                MethodDeclarationSyntax or
+                ParenthesizedLambdaExpressionSyntax or
+                SimpleLambdaExpressionSyntax);
     }
 
     private static ExpressionSyntax? GetInvocationArgumentExpression(

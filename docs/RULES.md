@@ -305,7 +305,7 @@ public sealed class Locator
 
 ## DI007: Service Locator Anti-Pattern
 
-**What it catches:** resolving dependencies via `IServiceProvider` inside app logic.
+**What it catches:** resolving dependencies via `IServiceProvider` inside app logic, including non-generic resolution calls that pass a local `Type` alias initialized from `typeof(...)`.
 
 **Why it matters:** hides real dependencies, makes tests harder, and weakens architecture boundaries.
 
