@@ -875,6 +875,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     // expression produces (when not null) is that member's value.
                     expression = conditionalAccessExpression.WhenNotNull;
                     continue;
+                case BinaryExpressionSyntax binaryExpression
+                    when binaryExpression.IsKind(SyntaxKind.CoalesceExpression) &&
+                         binaryExpression.Right is ThrowExpressionSyntax:
+                    expression = binaryExpression.Left;
+                    continue;
                 default:
                     return expression;
             }

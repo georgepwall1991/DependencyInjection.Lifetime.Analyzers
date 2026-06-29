@@ -150,11 +150,8 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
         // other use -- argument, assignment, return, initializer, ref/out, lambda capture, cast --
         // can store the service beyond the scope, so we refuse the fix rather than risk a
         // use-after-dispose rewrite.
-        var containingCallable = statement.Ancestors().FirstOrDefault(
-            ancestor => ancestor is BaseMethodDeclarationSyntax
-                or LocalFunctionStatementSyntax
-                or AccessorDeclarationSyntax);
-        if (containingCallable is null)
+        var localReferenceRoot = GetLocalReferenceSearchRoot(statement);
+        if (localReferenceRoot is null)
         {
             return false;
         }
@@ -167,7 +164,7 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
                 return false;
             }
 
-            foreach (var node in containingCallable.DescendantNodes())
+            foreach (var node in localReferenceRoot.DescendantNodes())
             {
                 if (node is not IdentifierNameSyntax identifier ||
                     !SymbolEqualityComparer.Default.Equals(
@@ -176,7 +173,7 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
                     continue;
                 }
 
-                if (identifier.Ancestors().TakeWhile(ancestor => ancestor != containingCallable).Any(
+                if (identifier.Ancestors().TakeWhile(ancestor => ancestor != localReferenceRoot).Any(
                         ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
                 {
                     return false;
@@ -194,6 +191,25 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
         }
 
         return true;
+    }
+
+    private static SyntaxNode? GetLocalReferenceSearchRoot(StatementSyntax statement)
+    {
+        var containingCallable = statement.Ancestors().FirstOrDefault(
+            ancestor => ancestor is BaseMethodDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AccessorDeclarationSyntax);
+        if (containingCallable is not null)
+        {
+            return containingCallable;
+        }
+
+        if (statement.FirstAncestorOrSelf<GlobalStatementSyntax>() is { Parent: CompilationUnitSyntax compilationUnit })
+        {
+            return compilationUnit;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -308,6 +324,14 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
 
             var newStatement = localDeclaration.ReplaceNode(invocation, newInvocation);
 
+            if (localDeclaration.Parent is GlobalStatementSyntax globalStatement)
+            {
+                var scopeGlobalStatement = SyntaxFactory.GlobalStatement(scopeDeclaration);
+                var newGlobalStatement = globalStatement.WithStatement(newStatement);
+                var globalNodes = new SyntaxNode[] { scopeGlobalStatement, newGlobalStatement };
+                return document.WithSyntaxRoot(root.ReplaceNode(globalStatement, globalNodes));
+            }
+
             var nodes = new SyntaxNode[] { scopeDeclaration, newStatement };
             return document.WithSyntaxRoot(root.ReplaceNode(localDeclaration, nodes));
         }
@@ -334,8 +358,8 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
     }
 
     /// <summary>
-    /// Returns true when the nearest enclosing callable (method, local function, lambda, or
-    /// anonymous method) is declared <c>async</c>, so the rewritten scope can use
+    /// Returns true when the nearest enclosing callable or top-level program body is async,
+    /// so the rewritten scope can use
     /// <c>await using</c> / <c>CreateAsyncScope()</c>.
     /// </summary>
     private static bool IsInAsyncContext(SyntaxNode node)
@@ -350,6 +374,10 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
                     return localFunction.Modifiers.Any(SyntaxKind.AsyncKeyword);
                 case AnonymousFunctionExpressionSyntax anonymousFunction:
                     return anonymousFunction.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
+                case LockStatementSyntax:
+                    return false;
+                case GlobalStatementSyntax globalStatement:
+                    return IsAsyncTopLevelContext(globalStatement);
                 case AccessorDeclarationSyntax:
                 case ConstructorDeclarationSyntax:
                     return false;
@@ -359,15 +387,38 @@ public sealed class DI019_RootScopedResolutionCodeFixProvider : CodeFixProvider
         return false;
     }
 
+    private static bool IsAsyncTopLevelContext(GlobalStatementSyntax globalStatement)
+    {
+        if (globalStatement.Parent is not CompilationUnitSyntax compilationUnit)
+        {
+            return false;
+        }
+
+        foreach (var statement in compilationUnit.Members.OfType<GlobalStatementSyntax>())
+        {
+            foreach (var awaitExpression in statement.DescendantNodes().OfType<AwaitExpressionSyntax>())
+            {
+                if (!awaitExpression.Ancestors().TakeWhile(ancestor => ancestor != statement).Any(
+                        ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static string GenerateUniqueName(SyntaxNode node, string baseName)
     {
-        var containingCallable = node.AncestorsAndSelf().FirstOrDefault(
+        var containingScope = node.AncestorsAndSelf().FirstOrDefault(
             ancestor => ancestor is BaseMethodDeclarationSyntax
                 or LocalFunctionStatementSyntax
                 or AccessorDeclarationSyntax
                 or AnonymousFunctionExpressionSyntax);
+        containingScope ??= node.FirstAncestorOrSelf<GlobalStatementSyntax>()?.Parent;
 
-        var usedNames = (containingCallable ?? node)
+        var usedNames = (containingScope ?? node)
             .DescendantTokens()
             .Where(token => token.IsKind(SyntaxKind.IdentifierToken))
             .Select(token => token.ValueText)

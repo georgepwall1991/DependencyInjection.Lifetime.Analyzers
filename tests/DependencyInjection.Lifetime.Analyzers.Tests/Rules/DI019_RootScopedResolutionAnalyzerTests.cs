@@ -1417,6 +1417,57 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task CoalescedRootProviderAliasResolvingScoped_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    IServiceProvider? maybeRoot = services.BuildServiceProvider();
+                    var provider = maybeRoot ?? throw new InvalidOperationException();
+                    {|#0:provider.GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    IServiceProvider provider = services.BuildServiceProvider();
+                    using var scope = provider.CreateScope();
+                    IServiceProvider? scopedProvider = scope.ServiceProvider;
+                    provider = scopedProvider ?? throw new InvalidOperationException();
+                    provider.GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromScopedToRoot_ClassifiesCallsBySourceOrder()
     {
         var source = Usings + """

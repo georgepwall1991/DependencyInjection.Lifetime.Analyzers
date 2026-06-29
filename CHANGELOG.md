@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.21] - 2026-06-29
+
+### Fixed
+
+- **DI019 provider guards**: root and scoped provider aliases guarded with `?? throw` now keep their provider classification, avoiding missed root scoped resolutions and stale false positives after reassignment.
+- **DI019 scope-wrapping code fix**: fixes inside `lock` bodies now emit synchronous `using` / `CreateScope()` output instead of illegal `await using` statements, while top-level `Program.cs` local declarations now use sync or async scopes to match the top-level body when the resolved service does not escape.
+
 ## [2.11.20] - 2026-06-28
 
 ### Fixed
