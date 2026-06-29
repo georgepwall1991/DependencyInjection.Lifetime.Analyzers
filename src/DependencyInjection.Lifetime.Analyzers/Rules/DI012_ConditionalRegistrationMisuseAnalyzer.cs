@@ -128,6 +128,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
         // Track the first Add* registration and how many active descriptors the slot holds.
         OrderedRegistration? firstAddRegistration = null;
         OrderedRegistration? complementaryBranchCoverageRegistration = null;
+        OrderedRegistration? lastActiveDescriptorRegistration = null;
         var activeDescriptorCount = 0;
 
         for (var i = 0; i < registrations.Count; i++)
@@ -143,6 +144,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 {
                     activeDescriptorCount++;
                     firstAddRegistration ??= current;
+                    lastActiveDescriptorRegistration = current;
                     continue;
                 }
 
@@ -180,6 +182,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
                 {
                     firstAddRegistration = null;
                     complementaryBranchCoverageRegistration = null;
+                    lastActiveDescriptorRegistration = null;
                     continue;
                 }
 
@@ -200,15 +203,17 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
                     if (activeDescriptorCount >= 2 && firstAddRegistration is not null)
                     {
+                        var leftoverRegistration = lastActiveDescriptorRegistration ?? firstAddRegistration;
                         var replaceDiagnostic = Diagnostic.Create(
                             DiagnosticDescriptors.DuplicateRegistration,
                             current.Location,
                             serviceTypeName,
-                            $"line {registrations[i - 1].Location.GetLineSpan().StartLinePosition.Line + 1}");
+                            FormatLocation(leftoverRegistration.Location));
                         context.ReportDiagnostic(replaceDiagnostic);
                     }
 
                     activeDescriptorCount = Math.Max(activeDescriptorCount - 1, 0) + 1;
+                    lastActiveDescriptorRegistration = current;
                     if (!hasEarlierRegistrationOutsideBranchChain)
                     {
                         firstAddRegistration = current;
@@ -220,6 +225,7 @@ public sealed class DI012_ConditionalRegistrationMisuseAnalyzer : DiagnosticAnal
 
                 var activeDescriptorCountBeforeCurrent = activeDescriptorCount;
                 activeDescriptorCount++;
+                lastActiveDescriptorRegistration = current;
 
                 // This is an Add* registration
                 if (firstAddRegistration is null)

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.42] - 2026-06-29
+
+### Fixed
+
+- **DI012 Replace duplicate messages**: `Replace(...)` duplicate-registration diagnostics now cite the active Add descriptor that survives replacement, even when an ignored `TryAdd*` call sits immediately before the replacement.
+
 ## [2.11.41] - 2026-06-29
 
 ### Fixed

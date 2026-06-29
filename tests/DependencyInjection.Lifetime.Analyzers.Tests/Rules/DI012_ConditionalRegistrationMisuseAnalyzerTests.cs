@@ -124,6 +124,48 @@ public class DI012_ConditionalRegistrationMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task AddAddTryAddThenReplace_ReportsLeftoverAddLocation()
+    {
+        // The ignored TryAdd is not an active descriptor. Replace should explain that it
+        // still overrides the Add descriptor that survives the single-descriptor removal.
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService1 : IMyService { }
+            public class MyService2 : IMyService { }
+            public class FallbackService : IMyService { }
+            public class ReplacementService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService1>();
+                    services.AddScoped<IMyService, MyService2>();
+                    services.TryAddScoped<IMyService, FallbackService>();
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.Replace(
+                        services,
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithLocation(15, 9)
+                .WithArguments("IMyService", "line 14"),
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.TryAddIgnored)
+                .WithLocation(16, 9)
+                .WithArguments("IMyService", "line 14"),
+            AnalyzerVerifier<DI012_ConditionalRegistrationMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DuplicateRegistration)
+                .WithLocation(17, 9)
+                .WithArguments("IMyService", "line 15"));
+    }
+
+    [Fact]
     public async Task AddThenReplace_DoesNotReportDuplicate()
     {
         // Replace removes the earlier descriptor before adding its own — intentional override
