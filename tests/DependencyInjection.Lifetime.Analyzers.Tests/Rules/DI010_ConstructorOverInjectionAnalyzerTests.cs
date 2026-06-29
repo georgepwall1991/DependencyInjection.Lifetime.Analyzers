@@ -246,6 +246,54 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task Constructor_WithTiedOverInjectedConstructors_ReportsSingleDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+            public interface IDep6 { }
+            public class Dep6 : IDep6 { }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+
+                public MyService(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep6 d6) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    services.AddScoped<IDep6, Dep6>();
+                    {|#0:services.AddScoped<IMyService, MyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(0)
+                .WithArguments("MyService", 5));
+    }
+
+    [Fact]
     public async Task FactoryRegistration_WithDirectObjectCreation_ReportsDiagnostic()
     {
         var source = Usings + """
