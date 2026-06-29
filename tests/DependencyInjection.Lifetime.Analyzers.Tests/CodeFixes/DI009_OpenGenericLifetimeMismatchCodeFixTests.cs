@@ -72,6 +72,60 @@ public class DI009_OpenGenericLifetimeMismatchCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_OpenGenericConditionalAccessSingleton_ChangesToScoped()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IScopedService { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddScoped<IScopedService, ScopedService>();
+                    services?.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+
+            public class ScopedService : IScopedService { }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IRepository<T> { }
+            public interface IScopedService { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection? services)
+                {
+                    services?.AddScoped<IScopedService, ScopedService>();
+                    services?.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+
+            public class ScopedService : IScopedService { }
+            """;
+
+        var expected = CodeFixVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer, DI009_OpenGenericLifetimeMismatchCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+            .WithSpan(16, 18, 16, 76)
+            .WithArguments("Repository", "scoped", "IScopedService");
+
+        await CodeFixVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer, DI009_OpenGenericLifetimeMismatchCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI009_ChangeToScoped");
+    }
+
+    [Fact]
     public async Task CodeFix_OpenGenericSingletonCapturingTransient_ChangesToScoped()
     {
         var source = Usings + """

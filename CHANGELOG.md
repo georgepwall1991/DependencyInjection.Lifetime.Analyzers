@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.26] - 2026-06-29
+
+### Fixed
+
+- **DI009 registration mutations**: open-generic singleton diagnostics now respect later same-block, straight-line, same-key `RemoveAll` and `Replace` calls, avoiding stale captive-dependency warnings for registrations that are no longer effective while still reporting branch-local, cross-method, branch-exit-bypassed, and keyed/unkeyed mismatched removals.
+- **DI009 conditional-access fixes**: the lifetime code fix now rewrites `services?.AddSingleton(...)` and related conditional-access registrations to scoped or transient forms.
+- **DI009 EF coverage**: `AddDbContext`-provided scoped options are pinned as captive dependencies when captured by open-generic singletons.
+
 ## [2.11.25] - 2026-06-29
 
 ### Fixed
