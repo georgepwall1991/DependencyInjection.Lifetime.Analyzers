@@ -275,6 +275,97 @@ public class DI006_StaticProviderCacheCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromNestedType()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+
+                private sealed class Nested
+                {
+                    public object? Resolve()
+                    {
+                        return _provider.GetService(typeof(object));
+                    }
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedThroughTypeQualification()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+
+                public object? Resolve()
+                {
+                    return MyClass._provider.GetService(typeof(object));
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromInstanceFieldInitializer()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+                private object? _service = _provider.GetService(typeof(object));
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenStaticFieldIsUsedFromInstancePropertyInitializer()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private static IServiceProvider _provider;
+                private object? Service { get; } = _provider.GetService(typeof(object));
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+            .WithSpan(5, 37, 5, 46)
+            .WithArguments("IServiceProvider", "_provider");
+
+        await CodeFixVerifier<DI006_StaticProviderCacheAnalyzer, DI006_StaticProviderCacheCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, expected, "DI006_RemoveStatic");
+    }
+
+    [Fact]
     public async Task CodeFix_NotOffered_WhenMultiVariableFieldDeclaration()
     {
         var source = Usings + """

@@ -295,7 +295,7 @@ public sealed class Locator
 }
 ```
 
-**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid.
+**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid; it is suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access.
 
 **Options:** `dotnet_code_quality.DI006.detect_holder_pattern = false` disables the simple holder-type detector if a codebase intentionally uses provider-wrapper types.
 
