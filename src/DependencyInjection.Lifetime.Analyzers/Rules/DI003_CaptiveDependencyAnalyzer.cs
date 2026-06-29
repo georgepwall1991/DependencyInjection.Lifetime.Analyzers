@@ -20,17 +20,20 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
     private readonly struct ReportedDiagnosticKey : System.IEquatable<ReportedDiagnosticKey>
     {
+        public SyntaxTree? RegistrationTree { get; }
         public int RegistrationStart { get; }
         public ITypeSymbol DependencyType { get; }
         public object? Key { get; }
         public bool IsKeyed { get; }
 
         public ReportedDiagnosticKey(
+            SyntaxTree? registrationTree,
             int registrationStart,
             ITypeSymbol dependencyType,
             object? key,
             bool isKeyed)
         {
+            RegistrationTree = registrationTree;
             RegistrationStart = registrationStart;
             DependencyType = dependencyType;
             Key = key;
@@ -39,7 +42,8 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
 
         public bool Equals(ReportedDiagnosticKey other)
         {
-            return RegistrationStart == other.RegistrationStart &&
+            return ReferenceEquals(RegistrationTree, other.RegistrationTree) &&
+                   RegistrationStart == other.RegistrationStart &&
                    SymbolEqualityComparer.Default.Equals(DependencyType, other.DependencyType) &&
                    Equals(Key, other.Key) &&
                    IsKeyed == other.IsKeyed;
@@ -49,7 +53,8 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         {
             unchecked
             {
-                var hashCode = RegistrationStart;
+                var hashCode = RegistrationTree?.GetHashCode() ?? 0;
+                hashCode = (hashCode * 397) ^ RegistrationStart;
                 hashCode = (hashCode * 397) ^ SymbolEqualityComparer.Default.GetHashCode(DependencyType);
                 hashCode = (hashCode * 397) ^ (Key?.GetHashCode() ?? 0);
                 hashCode = (hashCode * 397) ^ IsKeyed.GetHashCode();
@@ -909,6 +914,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
         var reportKey = new ReportedDiagnosticKey(
+            registration.Location.SourceTree,
             registration.Location.SourceSpan.Start,
             dependencyType,
             key,

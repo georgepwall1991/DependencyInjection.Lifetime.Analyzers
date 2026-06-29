@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.27] - 2026-06-29
+
+### Fixed
+
+- **DI003 cross-file diagnostics**: captive-dependency diagnostic de-duplication now includes the registration syntax tree, so same-offset singleton registrations in different files each report instead of one file suppressing the other.
+
 ## [2.11.26] - 2026-06-29
 
 ### Fixed

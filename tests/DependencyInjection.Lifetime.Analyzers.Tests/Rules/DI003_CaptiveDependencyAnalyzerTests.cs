@@ -284,6 +284,77 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonRegistrationsAtSameSpanInDifferentFiles_ReportBothDiagnostics()
+    {
+        const string shared = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Common;
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            """;
+        const string featureA = """
+            using Common;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace FeatureA;
+
+            public interface ISingletonServiceA { }
+            public class SingletonServiceA : ISingletonServiceA
+            {
+                public SingletonServiceA(IScopedService scoped) { }
+            }
+
+            public class StartupA
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#0:services.AddSingleton<ISingletonServiceA, SingletonServiceA>()|};
+                }
+            }
+            """;
+        const string featureB = """
+            using Common;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace FeatureB;
+
+            public interface ISingletonServiceB { }
+            public class SingletonServiceB : ISingletonServiceB
+            {
+                public SingletonServiceB(IScopedService scoped) { }
+            }
+
+            public class StartupB
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    {|#1:services.AddSingleton<ISingletonServiceB, SingletonServiceB>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            [
+                ("Common.cs", shared),
+                ("FeatureA.cs", featureA),
+                ("FeatureB.cs", featureB),
+            ],
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("SingletonServiceA", "scoped", "IScopedService"),
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(1)
+                .WithArguments("SingletonServiceB", "scoped", "IScopedService"));
+    }
+
+    [Fact]
     public async Task SingletonCapturingScopedEnumerable_ViaConstructor_ReportsDiagnostic()
     {
         var source = Usings + """
