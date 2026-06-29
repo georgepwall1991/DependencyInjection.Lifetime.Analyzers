@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.24] - 2026-06-29
+
+### Fixed
+
+- **DI007 factory boundaries**: service-locator diagnostics now stay quiet inside `ServiceDescriptor` provider factories, including descriptors passed through `TryAddEnumerable`, and inside composition-root resolution from `static Main` or top-level statements.
+
 ## [2.11.23] - 2026-06-29
 
 ### Fixed

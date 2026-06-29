@@ -88,6 +88,16 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies that the analyzer produces no diagnostics for executable-style source.
+    /// </summary>
+    public static async Task VerifyNoDiagnosticsAsConsoleApplicationAsync(string source)
+    {
+        var test = CreateTest(source);
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies that the analyzer produces no diagnostics for the given source and editorconfig.
     /// </summary>
     public static async Task VerifyNoDiagnosticsAsync(string source, string editorConfig)

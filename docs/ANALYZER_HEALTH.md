@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-29 (latest hardening: Pass 21 DI008 keyed descriptor factories; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
-**Version:** 2.11.23 (release-bound DI008 keyed descriptor factories pass)
-**Test result:** 2026-06-29 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1799 passed, 0 failed, 0 skipped after the Pass 21 DI008 keyed descriptor factories hardening plus Codex review.
+**Date:** 2026-06-29 (latest hardening: Pass 22 DI007 factory-boundary precision; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
+**Version:** 2.11.24 (release-bound DI007 factory-boundary precision pass)
+**Test result:** 2026-06-29 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1804 passed, 0 failed, 0 skipped after the Pass 22 DI007 factory-boundary precision hardening plus Codex review.
 **Analyzers:** 22 classes / 23 rule IDs (DI001-DI022 plus DI024; DI021 and DI022 share one analyzer, DI023 is reserved for Task.Run/WhenAll fan-out)
 **Code fix providers:** 14
 
@@ -16,7 +16,7 @@
 | DI004 | Use After Dispose | Warn | 68 | 13 | 8.8 | 8.8 | 2.10.5 fixed the audit's branch-precision gap for explicit `Dispose()`; 2026-06-11 threads the same mutual-exclusivity guard to `using`-statement/declaration paths, stops counting `out` arguments as uses (the out-write also clears tracking), and the pragma suppression wraps the enclosing line-starting statement so unbraced embedded statements no longer produce CS1040. Remaining cross-boundary limit: field-stored scopes are invisible (shared design limit) |
 | DI005 | Async Disposal | Warn | 25 | 13 | 9.4 | 8.5 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside top-level async, nested async, and direct-resource fixer coverage; 2026-06-28: diagnostics require `AsyncServiceScope`/`CreateAsyncScope()` availability, explicit `IServiceScope` using declarations/statements rewrite to `var` before `await using`, and lambda/anonymous-method diagnostics name the async context |
 | DI006 | Static Provider Cache | Warn | 28 | 20 | 9.0 | 8.5 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails; 2026-06-28: the remove-static fixer is also suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access |
-| DI007 | Service Locator | Info | 38 | -- | 8.7 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
+| DI007 | Service Locator | Info | 43 | -- | 9.0 | -- | Hardened: exact hosting/options/middleware/factory method checks, bounded provider-factory delegate suppression, `ServiceDescriptor` provider factories, and composition-root `Main`/top-level statement resolution |
 | DI008 | Disposable Transient | Warn | 51 | 18 | 9.0 | 9.0 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, plain `TryAdd(ServiceDescriptor)` and `Replace(ServiceDescriptor)` descriptor extensions, typed `AddHttpClient` clients, open generics, descriptor collections, keyed descriptor factories, factory guardrails, allowlist option, and descriptor lifetime fixes |
 | DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.0 | 8.7 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
 | DI010 | Constructor Over-Injection | Info | 34 | -- | 8.9 | -- | Strongest info-level rule, public-constructor and factory-return precise; 2026-06-11 crash fix: cross-file method-group factories no longer AD0001, primary constructors pinned |
@@ -96,9 +96,9 @@ Symbol-level rule with low ambiguity. Coverage now spans direct provider types, 
 
 ### DI007 -- Service Locator Anti-Pattern (Info)
 
-**Analyzer: 9.6/10** | Tests: 38
+**Analyzer: 9.0/10** | Tests: 43
 
-Informational by design, now context-aware via symbol checks rather than method-name spelling alone. Allowed contexts cover factory registrations, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods with `HttpContext` as the first parameter, value-returning `Create*`/`Build*` factory methods including `Task<T>` / `ValueTask<T>` async factories, exact hosting entry points (`BackgroundService.ExecuteAsync` overrides, `IHostedService.StartAsync`/`StopAsync`, and `IHostedLifecycleService` lifecycle methods), exact options implementations (`IConfigureOptions<T>.Configure`, `IConfigureNamedOptions<T>`, `IPostConfigureOptions<T>.PostConfigure`, `IValidateOptions<T>.Validate`), and provider-aware DI/options factory delegates only when the lambda is an argument to a recognized factory boundary. Guardrails keep arbitrary `Invoke` methods, `void` or plain-`Task` `Create*`/`Build*` side-effect methods, local `Func<IServiceProvider, T>` delegates, and helper methods inside hosted/options types reportable. No code fix -- service locator elimination requires architectural decisions.
+Informational by design, now context-aware via symbol checks rather than method-name spelling alone. Allowed contexts cover factory registrations, `ServiceDescriptor` provider factories including descriptors passed through `TryAddEnumerable`, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods with `HttpContext` as the first parameter, composition-root resolution from `static Main` or top-level statements, value-returning `Create*`/`Build*` factory methods including `Task<T>` / `ValueTask<T>` async factories, exact hosting entry points (`BackgroundService.ExecuteAsync` overrides, `IHostedService.StartAsync`/`StopAsync`, and `IHostedLifecycleService` lifecycle methods), exact options implementations (`IConfigureOptions<T>.Configure`, `IConfigureNamedOptions<T>`, `IPostConfigureOptions<T>.PostConfigure`, `IValidateOptions<T>.Validate`), and provider-aware DI/options factory delegates only when the lambda is an argument to a recognized factory boundary. Guardrails keep arbitrary `Invoke` methods, `void` or plain-`Task` `Create*`/`Build*` side-effect methods, local `Func<IServiceProvider, T>` delegates, and helper methods inside hosted/options types reportable. No code fix -- service locator elimination requires architectural decisions.
 
 ### DI008 -- Disposable Transient (Warning)
 
@@ -242,13 +242,13 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 1763 passed locally on 2026-06-28 Release verification |
-| Analyzer tests | Historical 2026-06-11 breakdown not re-counted by directory; DI002 analyzer tests now 102; DI003 analyzer tests now 139; DI008 analyzer tests now 51; DI012 analyzer tests now 125; DI015 analyzer tests now 132; DI018 analyzer tests now 39 |
+| Total tests | 1804 passed locally on 2026-06-29 Release verification |
+| Analyzer tests | Historical 2026-06-11 breakdown not re-counted by directory; DI002 analyzer tests now 102; DI003 analyzer tests now 139; DI007 analyzer tests now 43; DI008 analyzer tests now 51; DI012 analyzer tests now 125; DI015 analyzer tests now 132; DI018 analyzer tests now 39 |
 | Code fix tests | Historical 2026-06-11 breakdown not re-counted by directory; DI015 fixer tests now 17 |
 | Infrastructure tests | Historical 2026-06-11 breakdown not re-counted by directory; RegistrationCollector descriptor coverage now 5 + 2 rule-level tests |
 | Analyzer mean score | 8.7/10 (2026-06-11 re-audit; DI002 raised to 9.0 on 2026-06-27, full mean not recomputed) |
 | Fixer mean score | 8.4/10 (2026-06-11 re-audit; was 8.9) |
-| Rules at 9+ | 7/22 analyzers (DI002 9.0, DI003 9.2, DI005 9.2, DI006 9.0, DI009 9.0, DI015 9.4, DI019 9.4) |
+| Rules at 9+ | 8/22 analyzers (DI002 9.0, DI003 9.2, DI005 9.2, DI006 9.0, DI007 9.0, DI009 9.0, DI015 9.4, DI019 9.4) |
 | Fixers at 8+ | 14/14 (100%, lowest 8.0) |
 | Rules needing pass | 24-pass overnight queue, every rule + 2 infrastructure passes (see Work Priority) |
 | TODO/FIXME in source | 0 (verified 2026-06-10) |
@@ -538,9 +538,9 @@ One pass, four collector gaps — the 2.10.6 Replace-bug class; unblinds DI012/D
 ### ~~Pass 21 — DI008: keyed descriptor factories~~ ✅ Done 2026-06-29 (2.11.23)
 - ~~**DI008-2 (FN, M)**~~ **Fixed.** `ServiceDescriptor.KeyedTransient`/`KeyedScoped`/`KeyedSingleton`/`DescribeKeyed` now share the descriptor lifetime path, so keyed transient descriptors report while keyed scoped/singleton descriptors stay quiet.
 
-### Pass 22 — DI007: factory-boundary precision
-- **DI007-1 (FP, M)** — provider-factory lambdas inside `ServiceDescriptor.*` creators (incl. under `TryAddEnumerable`) report: `IsFactoryBoundaryInvocation` accepts only Add*/TryAdd* extensions and Options methods (`DI007_ServiceLocatorAntiPatternAnalyzer.cs:279-287`).
-- **DI007-2 (FP, S)** — composition-root resolution in `static Main`/top-level statements reports (`:184-223`, `:407-444`) — the one place resolving from the provider is the intended pattern.
+### ~~Pass 22 — DI007: factory-boundary precision~~ ✅ Done 2026-06-29 (2.11.24)
+- ~~**DI007-1 (FP, M)**~~ **Fixed.** Provider-factory lambdas inside `ServiceDescriptor.*` creators, including descriptors nested under `TryAddEnumerable`, are now recognized as DI factory boundaries instead of ordinary service-locator sites.
+- ~~**DI007-2 (FP, S)**~~ **Fixed.** Composition-root resolution in `static Main` and top-level statements now stays quiet, while ordinary static helper and extension methods remain reportable.
 
 ### Pass 23 — DI011: registration-shape gates
 - **DI011-1 (FP, S)** — factory registrations are not skipped (no `FactoryExpression is not null` check, `DI011_ServiceProviderInjectionAnalyzer.cs:62-73`): the rule reports a constructor the container never activates.
