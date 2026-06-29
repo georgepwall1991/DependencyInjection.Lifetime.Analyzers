@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.34] - 2026-06-29
+
+### Fixed
+
+- **DI005 concrete scope factories**: async-disposal diagnostics now report parameterless `IServiceScope CreateScope()` calls on concrete types that implement `IServiceScopeFactory`, not only exact interface-typed receivers, while unrelated overloads stay quiet and direct static extension calls remain covered.
+
 ## [2.11.33] - 2026-06-29
 
 ### Fixed
