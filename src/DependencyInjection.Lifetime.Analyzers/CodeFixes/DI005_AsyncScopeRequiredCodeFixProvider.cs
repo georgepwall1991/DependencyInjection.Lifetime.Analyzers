@@ -137,6 +137,7 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
         // First, replace CreateScope with CreateAsyncScope in the declaration
         var newInvocation = ReplaceCreateScopeWithCreateAsyncScope(invocation);
         var newDeclaration = localDeclaration.ReplaceNode(invocation, newInvocation);
+        newDeclaration = RewriteDeclarationTypeToVar(newDeclaration);
 
         // Then add the await keyword
         var awaitKeyword = SyntaxFactory.Token(SyntaxKind.AwaitKeyword)
@@ -157,6 +158,7 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
         // First, replace CreateScope with CreateAsyncScope in the statement
         var newInvocation = ReplaceCreateScopeWithCreateAsyncScope(invocation);
         var newUsingStatement = usingStatement.ReplaceNode(invocation, newInvocation);
+        newUsingStatement = RewriteDeclarationTypeToVar(newUsingStatement);
 
         // Then add the await keyword
         var awaitKeyword = SyntaxFactory.Token(SyntaxKind.AwaitKeyword)
@@ -169,6 +171,46 @@ public sealed class DI005_AsyncScopeRequiredCodeFixProvider : CodeFixProvider
             .WithAwaitKeyword(awaitKeyword)
             .WithUsingKeyword(newUsingKeyword);
     }
+
+    private static LocalDeclarationStatementSyntax RewriteDeclarationTypeToVar(
+        LocalDeclarationStatementSyntax localDeclaration)
+    {
+        var rewrittenDeclaration = RewriteDeclarationTypeToVar(localDeclaration.Declaration);
+        return ReferenceEquals(rewrittenDeclaration, localDeclaration.Declaration)
+            ? localDeclaration
+            : localDeclaration.WithDeclaration(rewrittenDeclaration);
+    }
+
+    private static UsingStatementSyntax RewriteDeclarationTypeToVar(
+        UsingStatementSyntax usingStatement)
+    {
+        if (usingStatement.Declaration is null)
+        {
+            return usingStatement;
+        }
+
+        var rewrittenDeclaration = RewriteDeclarationTypeToVar(usingStatement.Declaration);
+        return ReferenceEquals(rewrittenDeclaration, usingStatement.Declaration)
+            ? usingStatement
+            : usingStatement.WithDeclaration(rewrittenDeclaration);
+    }
+
+    private static VariableDeclarationSyntax RewriteDeclarationTypeToVar(
+        VariableDeclarationSyntax declaration)
+    {
+        if (IsVarType(declaration.Type))
+        {
+            return declaration;
+        }
+
+        var varType = SyntaxFactory.IdentifierName("var")
+            .WithTriviaFrom(declaration.Type);
+        return declaration.WithType(varType);
+    }
+
+    private static bool IsVarType(TypeSyntax type) =>
+        type is IdentifierNameSyntax identifier &&
+        identifier.Identifier.ValueText == "var";
 
     private static InvocationExpressionSyntax ReplaceCreateScopeWithCreateAsyncScope(InvocationExpressionSyntax invocation)
     {

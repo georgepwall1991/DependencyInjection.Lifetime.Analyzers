@@ -47,6 +47,11 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (wellKnownTypes.AsyncServiceScope is null)
+        {
+            return;
+        }
+
         // Check if this invocation is inside an async context
         var containingMethod = GetContainingAsyncContext(invocation);
         if (containingMethod is null)
@@ -167,7 +172,9 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
             MethodDeclarationSyntax method => method.Identifier.Text,
             LocalFunctionStatementSyntax localFunc => localFunc.Identifier.Text,
             GlobalStatementSyntax => "top-level statements",
-            _ => string.Empty // Anonymous methods and lambdas don't have names
+            LambdaExpressionSyntax => "lambda expression",
+            AnonymousMethodExpressionSyntax => "anonymous method",
+            _ => "anonymous async context"
         };
     }
 

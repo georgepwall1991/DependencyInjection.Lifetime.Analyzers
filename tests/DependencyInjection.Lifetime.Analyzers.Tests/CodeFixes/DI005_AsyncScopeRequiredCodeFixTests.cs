@@ -117,7 +117,55 @@ public class DI005_AsyncScopeRequiredCodeFixTests
         var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
             .WithSpan(17, 31, 17, 58)
-            .WithArguments("");
+            .WithArguments("lambda expression");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public async Task CodeFix_RewritesExplicitIServiceScopeUsingVarDeclarationToVar()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using IServiceScope scope = _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 37, 15, 64)
+            .WithArguments("DoWorkAsync");
 
         await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .VerifyCodeFixAsync(source, expected, fixedSource);
@@ -169,6 +217,58 @@ public class DI005_AsyncScopeRequiredCodeFixTests
         var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
             .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
             .WithSpan(15, 28, 15, 55)
+            .WithArguments("DoWorkAsync");
+
+        await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource);
+    }
+
+    [Fact]
+    public async Task CodeFix_RewritesExplicitIServiceScopeUsingStatementToVar()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using (IServiceScope scope = _scopeFactory.CreateScope())
+                    {
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    await using (var scope = _scopeFactory.CreateAsyncScope())
+                    {
+                        await Task.Delay(100);
+                    }
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+            .WithSpan(15, 38, 15, 65)
             .WithArguments("DoWorkAsync");
 
         await CodeFixVerifier<DI005_AsyncDisposalAnalyzer, DI005_AsyncScopeRequiredCodeFixProvider>

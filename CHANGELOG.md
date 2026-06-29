@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.19] - 2026-06-28
+
+### Fixed
+
+- **DI005 explicit scope declarations**: code fixes now rewrite explicitly typed `IServiceScope` using declarations/statements to `var` when switching to `CreateAsyncScope()`, avoiding invalid `await using` output.
+- **DI005 API availability**: diagnostics now stay quiet when `AsyncServiceScope` / `CreateAsyncScope()` APIs are unavailable, such as Microsoft.Extensions.DependencyInjection 5.x projects.
+- **DI005 async context names**: lambda and anonymous-method diagnostics now name the async context instead of rendering an empty method name.
+
 ## [2.11.18] - 2026-06-28
 
 ### Fixed
