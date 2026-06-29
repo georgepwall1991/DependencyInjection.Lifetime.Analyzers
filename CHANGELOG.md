@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.40] - 2026-06-29
+
+### Fixed
+
+- **DI008 conditional descriptor adds**: `services?.Add(ServiceDescriptor.Transient(...))` now resolves the null-conditional receiver as an `IServiceCollection`, so disposable transient descriptors hidden behind conditional access report while preserving existing code-fix discovery.
+
 ## [2.11.39] - 2026-06-29
 
 ### Fixed

@@ -342,6 +342,50 @@ public class DI008_DisposableTransientCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_ServiceDescriptorConditionalTransientGeneric_ChangesToScoped()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services?.Add(ServiceDescriptor.Transient<IMyService, DisposableService>());
+                }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public interface IMyService { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services?.Add(ServiceDescriptor.Scoped<IMyService, DisposableService>());
+                }
+            }
+            """;
+
+        var expected = CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+            .WithSpan(13, 18, 13, 84)
+            .WithArguments("DisposableService", "IDisposable");
+
+        await CodeFixVerifier<DI008_DisposableTransientAnalyzer, DI008_DisposableTransientCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI008_ChangeToScoped");
+    }
+
+    [Fact]
     public async Task CodeFix_ServiceDescriptorTransientTypeOf_ChangesToSingleton()
     {
         var source = Usings + """

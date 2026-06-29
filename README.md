@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.39
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.40
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.39">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.40">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.39" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.40" />
 ```
 
 Then reference it from the project file:
@@ -499,7 +499,7 @@ services.AddScoped<IMyService, DisposableService>();
 // or ensure explicit disposal ownership if transient is intentional
 ```
 
-DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
+DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, conditional `services?.Add(ServiceDescriptor.Transient(...))`, `TryAddTransient`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
 
 **Code Fix:** Yes. Suggests safer lifetime alternatives and rewrites local descriptor lifetime arguments where the registration is unambiguous.
 
