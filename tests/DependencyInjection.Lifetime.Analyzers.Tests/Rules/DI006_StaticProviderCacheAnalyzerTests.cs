@@ -183,6 +183,70 @@ public class DI006_StaticProviderCacheAnalyzerTests
     }
 
     [Fact]
+    public async Task StaticField_ImmutableDictionaryOfProviders_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Collections.Immutable;
+
+            public class MyClass
+            {
+                private static ImmutableDictionary<string, IServiceProvider> _providers;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(6, 66, 6, 76)
+                .WithArguments("ImmutableDictionary<String, IServiceProvider>", "_providers"));
+    }
+
+    [Fact]
+    public async Task StaticField_IImmutableDictionaryOfProviders_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Collections.Immutable;
+
+            public class MyClass
+            {
+                private static IImmutableDictionary<string, IServiceProvider> _providers;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(6, 67, 6, 77)
+                .WithArguments("IImmutableDictionary<String, IServiceProvider>", "_providers"));
+    }
+
+    [Fact]
+    public async Task StaticField_FrozenDictionaryOfProviders_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Collections.Frozen;
+
+            public class MyClass
+            {
+                private static FrozenDictionary<string, IServiceProvider> _providers;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.ReferenceAssembliesWithLatestDi,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(6, 63, 6, 73)
+                .WithArguments("FrozenDictionary<String, IServiceProvider>", "_providers"));
+    }
+
+    [Fact]
     public async Task StaticField_DictionaryOfNonProviderValueType_NoDiagnostic()
     {
         var source = """

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.36] - 2026-06-29
+
+### Fixed
+
+- **DI006 immutable and frozen dictionaries**: static provider-cache diagnostics now report provider abstractions stored in `ImmutableDictionary<,>`, `IImmutableDictionary<,>`, and `FrozenDictionary<,>` value caches.
+
 ## [2.11.35] - 2026-06-29
 
 ### Fixed
