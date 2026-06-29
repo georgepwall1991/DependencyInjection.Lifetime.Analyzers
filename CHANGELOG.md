@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.33] - 2026-06-29
+
+### Fixed
+
+- **DI004 wrapped use receivers**: use-after-dispose diagnostics now report when a tracked service local is used through null-forgiving or casted member receivers such as `service!.DoWork()` and `((IMyService)service).DoWork()`.
+
 ## [2.11.32] - 2026-06-29
 
 ### Fixed

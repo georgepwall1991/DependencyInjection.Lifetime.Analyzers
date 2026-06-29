@@ -623,11 +623,13 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             if (node is InvocationExpressionSyntax invocationAfter &&
                 invocationAfter.Expression is MemberAccessExpressionSyntax memberAccess &&
-                memberAccess.Expression is IdentifierNameSyntax identifier &&
-                semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol symbol &&
-                serviceVariables.ContainsKey(symbol))
+                TryGetTrackedLocalReference(
+                    memberAccess.Expression,
+                    semanticModel,
+                    serviceVariables,
+                    out var receiverServiceName))
             {
-                ReportDiagnostic(context, invocationAfter, identifier.Identifier.Text, reportedSpans);
+                ReportDiagnostic(context, invocationAfter, receiverServiceName, reportedSpans);
             }
 
             if (node is InvocationExpressionSyntax invocationWithTrackedArgument)
@@ -701,11 +703,13 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
 
             if (node is MemberAccessExpressionSyntax memberAccessAfter &&
                 memberAccessAfter.Parent is not InvocationExpressionSyntax &&
-                memberAccessAfter.Expression is IdentifierNameSyntax identifierAccess &&
-                semanticModel.GetSymbolInfo(identifierAccess).Symbol is ILocalSymbol symbolAccess &&
-                serviceVariables.ContainsKey(symbolAccess))
+                TryGetTrackedLocalReference(
+                    memberAccessAfter.Expression,
+                    semanticModel,
+                    serviceVariables,
+                    out var memberServiceName))
             {
-                ReportDiagnostic(context, memberAccessAfter, identifierAccess.Identifier.Text, reportedSpans);
+                ReportDiagnostic(context, memberAccessAfter, memberServiceName, reportedSpans);
             }
 
             if (node is ReturnStatementSyntax { Expression: IdentifierNameSyntax returnIdentifier } &&
@@ -1378,6 +1382,17 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         if (expression is ParenthesizedExpressionSyntax parenthesized)
         {
             return TryGetTrackedLocalReference(parenthesized.Expression, semanticModel, serviceVariables, out serviceName);
+        }
+
+        if (expression is PostfixUnaryExpressionSyntax nullForgiving &&
+            nullForgiving.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+        {
+            return TryGetTrackedLocalReference(nullForgiving.Operand, semanticModel, serviceVariables, out serviceName);
+        }
+
+        if (expression is CastExpressionSyntax castExpression)
+        {
+            return TryGetTrackedLocalReference(castExpression.Expression, semanticModel, serviceVariables, out serviceName);
         }
 
         if (expression is IdentifierNameSyntax identifier &&
