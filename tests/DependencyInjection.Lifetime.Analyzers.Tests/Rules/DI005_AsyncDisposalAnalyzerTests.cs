@@ -169,6 +169,40 @@ public class DI005_AsyncDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task CreateScope_OnConcreteScopeFactory_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class CustomScopeFactory : IServiceScopeFactory
+            {
+                public IServiceScope CreateScope() => throw new NotImplementedException();
+            }
+
+            public class MyService
+            {
+                private readonly CustomScopeFactory _scopeFactory;
+
+                public MyService(CustomScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithSpan(20, 27, 20, 54)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
     public async Task CreateScope_InAsyncLocalFunction_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -226,6 +260,35 @@ public class DI005_AsyncDisposalAnalyzerTests
             AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
                 .WithSpan(15, 27, 15, 50)
+                .WithArguments("DoWorkAsync"));
+    }
+
+    [Fact]
+    public async Task StaticExtensionCreateScope_InAsyncMethod_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyService(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = {|#0:ServiceProviderServiceExtensions.CreateScope(_provider)|};
+                    await Task.Delay(100);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.AsyncScopeRequired)
+                .WithLocation(0)
                 .WithArguments("DoWorkAsync"));
     }
 
@@ -529,6 +592,37 @@ public class DI005_AsyncDisposalAnalyzerTests
                 {
                     using var scope = _scopeFactory.CreateScope();
                     // synchronous work
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI005_AsyncDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_OverloadOnConcreteScopeFactory_InAsyncMethod_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class CustomScopeFactory : IServiceScopeFactory
+            {
+                public IServiceScope CreateScope() => throw new NotImplementedException();
+
+                public IServiceScope CreateScope(string name) => throw new NotImplementedException();
+            }
+
+            public class MyService
+            {
+                private readonly CustomScopeFactory _scopeFactory;
+
+                public MyService(CustomScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task DoWorkAsync()
+                {
+                    using var scope = _scopeFactory.CreateScope("worker");
+                    await Task.Delay(100);
                 }
             }
             """;

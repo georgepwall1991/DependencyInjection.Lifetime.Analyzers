@@ -72,14 +72,19 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (!IsCreateScopeSignature(wellKnownTypes, methodSymbol))
+        {
+            return;
+        }
+
         var containingType = methodSymbol.ContainingType;
         if (containingType is null)
         {
             return;
         }
 
-        // Check if it's IServiceScopeFactory.CreateScope or the extension method
-        if (!wellKnownTypes.IsServiceScopeFactory(containingType) &&
+        // Check if it's IServiceScopeFactory.CreateScope, a concrete implementation, or the extension method
+        if (!IsServiceScopeFactoryOrImplementation(wellKnownTypes, containingType) &&
             !IsServiceProviderServiceExtensionsCreateScope(containingType, methodSymbol))
         {
             return;
@@ -237,6 +242,41 @@ public sealed class DI005_AsyncDisposalAnalyzer : DiagnosticAnalyzer
             method.Name == "CreateScope")
         {
             return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCreateScopeSignature(WellKnownTypes wellKnownTypes, IMethodSymbol method)
+    {
+        if (!wellKnownTypes.IsServiceScope(method.ReturnType))
+        {
+            return false;
+        }
+
+        if (method.Parameters.Length == 0)
+        {
+            return true;
+        }
+
+        return method.IsExtensionMethod &&
+               method.Parameters.Length == 1 &&
+               wellKnownTypes.IsServiceProvider(method.Parameters[0].Type);
+    }
+
+    private static bool IsServiceScopeFactoryOrImplementation(WellKnownTypes wellKnownTypes, ITypeSymbol type)
+    {
+        if (wellKnownTypes.IsServiceScopeFactory(type))
+        {
+            return true;
+        }
+
+        foreach (var iface in type.AllInterfaces)
+        {
+            if (wellKnownTypes.IsServiceScopeFactory(iface))
+            {
+                return true;
+            }
         }
 
         return false;
