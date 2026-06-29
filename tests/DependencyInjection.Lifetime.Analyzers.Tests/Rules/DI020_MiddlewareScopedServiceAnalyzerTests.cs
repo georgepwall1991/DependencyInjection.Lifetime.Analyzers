@@ -1,6 +1,10 @@
 using System.Threading.Tasks;
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Rules;
@@ -964,6 +968,280 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
     }
 
     [Fact]
+    public async Task Middleware_NumericWideningArgumentDoesNotSelectGreedyScopedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next)
+                {
+                    _next = next;
+                }
+
+                public MyMiddleware(RequestDelegate next, long id, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>(1);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_UserDefinedConversionArgumentDoesNotSelectGreedyScopedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public sealed class MiddlewareOption
+            {
+                public static implicit operator MiddlewareOption(string value) => new();
+            }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next)
+                {
+                    _next = next;
+                }
+
+                public MyMiddleware(RequestDelegate next, MiddlewareOption option, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>("name");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_NullableLiftingArgumentDoesNotSelectGreedyScopedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next)
+                {
+                    _next = next;
+                }
+
+                public MyMiddleware(RequestDelegate next, int? id, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>(1);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_BaseTypedArgumentDoesNotSelectDerivedGreedyScopedConstructor_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+            public sealed class MiddlewareOption { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, object option)
+                {
+                    _next = next;
+                }
+
+                public MyMiddleware(RequestDelegate next, MiddlewareOption option, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    object option = new MiddlewareOption();
+                    app.UseMiddleware<MyMiddleware>(option);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_ExplicitObjectArrayArgumentExpandsParamsAndReportsScopedDependency()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, string name, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>(new object[] { "name" });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_MetadataConstructorReportsAtUseMiddlewareCall()
+    {
+        var externalSource = """
+            using System.Threading.Tasks;
+
+            namespace Microsoft.AspNetCore.Http
+            {
+                public class HttpContext { }
+                public delegate Task RequestDelegate(HttpContext context);
+            }
+
+            namespace ExternalMiddlewareLibrary
+            {
+                using Microsoft.AspNetCore.Http;
+
+                public interface IScopedService { }
+
+                public sealed class ExternalMiddleware
+                {
+                    public ExternalMiddleware(RequestDelegate next, IScopedService scoped) { }
+
+                    public Task InvokeAsync(HttpContext context) => Task.CompletedTask;
+                }
+            }
+            """;
+
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using ExternalMiddlewareLibrary;
+            using Microsoft.AspNetCore.Builder;
+            using Microsoft.AspNetCore.Http;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Microsoft.AspNetCore.Builder
+            {
+                public interface IApplicationBuilder
+                {
+                    IApplicationBuilder UseMiddleware<TMiddleware>(params object[] args);
+                }
+            }
+
+            public sealed class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    {|#0:app.UseMiddleware<ExternalMiddleware>()|};
+                }
+            }
+            """;
+
+        var expected = AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>
+            .Diagnostic(DiagnosticDescriptors.MiddlewareScopedService)
+            .WithLocation(0)
+            .WithArguments("ExternalMiddleware", "IScopedService");
+
+        await VerifyDiagnosticsWithExternalReferenceAsync(source, externalSource, expected);
+    }
+
+    [Fact]
     public async Task Middleware_WithResolvableGreedyScopedConstructor_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -1135,5 +1413,40 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    private static async Task VerifyDiagnosticsWithExternalReferenceAsync(
+        string source,
+        string externalSource,
+        params DiagnosticResult[] expected)
+    {
+        var externalReference = await CreateExternalReferenceAsync(externalSource);
+        var test = new CSharpAnalyzerTest<DI020_MiddlewareScopedServiceAnalyzer, DefaultVerifier>
+        {
+            MarkupOptions = MarkupOptions.UseFirstDescriptor,
+            TestCode = source,
+            ReferenceAssemblies = AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.ReferenceAssembliesWithDi60
+        };
+        test.TestState.AdditionalReferences.Add(externalReference);
+        test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    private static async Task<MetadataReference> CreateExternalReferenceAsync(string source)
+    {
+        var references = await ReferenceAssemblies.Net.Net60.ResolveAsync(LanguageNames.CSharp, default);
+        var compilation = CSharpCompilation.Create(
+            "ExternalMiddlewareLibrary",
+            [CSharpSyntaxTree.ParseText(source)],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var stream = new System.IO.MemoryStream();
+        var result = compilation.Emit(stream);
+        Assert.True(
+            result.Success,
+            string.Join(System.Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.ToString())));
+
+        return MetadataReference.CreateFromImage(stream.ToArray());
     }
 }

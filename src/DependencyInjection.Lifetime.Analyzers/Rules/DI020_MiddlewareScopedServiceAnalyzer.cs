@@ -152,10 +152,48 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var argumentTypes = explicitArguments
-            .Select(argument => semanticModel.GetTypeInfo(argument.Expression).Type)
-            .ToImmutableArray();
-        usage = new MiddlewareUsage(middlewareType, argumentTypes);
+        var argumentTypes = GetExplicitArgumentTypes(explicitArguments, semanticModel);
+        usage = new MiddlewareUsage(middlewareType, argumentTypes, invocation.GetLocation());
+        return true;
+    }
+
+    private static ImmutableArray<ITypeSymbol?> GetExplicitArgumentTypes(
+        IEnumerable<ArgumentSyntax> explicitArguments,
+        SemanticModel semanticModel)
+    {
+        var argumentTypes = ImmutableArray.CreateBuilder<ITypeSymbol?>();
+        foreach (var argument in explicitArguments)
+        {
+            if (TryGetExpandedObjectArrayArgumentTypes(argument.Expression, semanticModel, argumentTypes))
+            {
+                continue;
+            }
+
+            argumentTypes.Add(semanticModel.GetTypeInfo(argument.Expression).Type);
+        }
+
+        return argumentTypes.ToImmutable();
+    }
+
+    private static bool TryGetExpandedObjectArrayArgumentTypes(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        ImmutableArray<ITypeSymbol?>.Builder argumentTypes)
+    {
+        if (expression is not ArrayCreationExpressionSyntax { Initializer: { } initializer } ||
+            semanticModel.GetTypeInfo(expression).Type is not IArrayTypeSymbol
+            {
+                ElementType.SpecialType: SpecialType.System_Object
+            })
+        {
+            return false;
+        }
+
+        foreach (var element in initializer.Expressions)
+        {
+            argumentTypes.Add(semanticModel.GetTypeInfo(element).Type);
+        }
+
         return true;
     }
 
@@ -179,19 +217,19 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         // Collect every explicit-argument shape each middleware type is activated with: different
         // UseMiddleware calls can pass different argument types (even with the same arity) and so
         // select different constructors.
-        var argumentShapesByType = new Dictionary<INamedTypeSymbol, List<ImmutableArray<ITypeSymbol?>>>(SymbolEqualityComparer.Default);
+        var usagesByType = new Dictionary<INamedTypeSymbol, List<MiddlewareUsage>>(SymbolEqualityComparer.Default);
         foreach (var usage in middlewareUsages)
         {
-            if (!argumentShapesByType.TryGetValue(usage.Type, out var shapes))
+            if (!usagesByType.TryGetValue(usage.Type, out var usages))
             {
-                shapes = new List<ImmutableArray<ITypeSymbol?>>();
-                argumentShapesByType[usage.Type] = shapes;
+                usages = new List<MiddlewareUsage>();
+                usagesByType[usage.Type] = usages;
             }
 
-            shapes.Add(usage.ArgumentTypes);
+            usages.Add(usage);
         }
 
-        foreach (var pair in argumentShapesByType)
+        foreach (var pair in usagesByType)
         {
             var type = pair.Key;
             if (!MiddlewareHelpers.IsMiddlewareClass(type))
@@ -210,11 +248,11 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             // Each observed argument shape can select a different constructor, so consider them all and
             // analyze each distinct selected constructor once (so non-selectable overloads stay quiet
             // and no real capture is hidden by argument-shape ordering).
-            var selectedConstructors = new Dictionary<IMethodSymbol, List<bool[]>>(SymbolEqualityComparer.Default);
-            foreach (var argumentTypes in pair.Value)
+            var selectedConstructors = new Dictionary<IMethodSymbol, List<ActivationFill>>(SymbolEqualityComparer.Default);
+            foreach (var usage in pair.Value)
             {
                 var selected = SelectActivatedConstructor(
-                    type, argumentTypes, resolutionEngine, requestDelegateType, context.Compilation, out var filled);
+                    type, usage.ArgumentTypes, resolutionEngine, requestDelegateType, context.Compilation, out var filled);
                 if (selected is null)
                 {
                     continue;
@@ -222,11 +260,11 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
 
                 if (!selectedConstructors.TryGetValue(selected, out var fills))
                 {
-                    fills = new List<bool[]>();
+                    fills = new List<ActivationFill>();
                     selectedConstructors[selected] = fills;
                 }
 
-                fills.Add(filled);
+                fills.Add(new ActivationFill(filled, usage.Location));
             }
 
             foreach (var pairSelected in selectedConstructors)
@@ -241,7 +279,7 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         INamedTypeSymbol middlewareType,
         IMethodSymbol constructor,
-        List<bool[]> argumentFills,
+        List<ActivationFill> argumentFills,
         ScopedDependencyGraph scopedGraph,
         INamedTypeSymbol? requestDelegateType)
     {
@@ -258,7 +296,7 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             // site is never resolved from the container at pipeline-build time; one unfilled
             // site is enough to capture from DI.
             var parameterIndex = index;
-            if (argumentFills.Count > 0 && argumentFills.All(filled => filled[parameterIndex]))
+            if (argumentFills.Count > 0 && argumentFills.All(filled => filled.FilledParameters[parameterIndex]))
             {
                 continue;
             }
@@ -280,11 +318,25 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
 
             var diagnostic = Diagnostic.Create(
                 DiagnosticDescriptors.MiddlewareScopedService,
-                parameter.Locations[0],
+                GetDiagnosticLocation(parameter, parameterIndex, argumentFills),
                 middlewareType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
                 scopedMatch.ScopedType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
             context.ReportDiagnostic(diagnostic);
         }
+    }
+
+    private static Location GetDiagnosticLocation(
+        IParameterSymbol parameter,
+        int parameterIndex,
+        List<ActivationFill> argumentFills)
+    {
+        var sourceLocation = parameter.Locations.FirstOrDefault(location => location.IsInSource);
+        if (sourceLocation is not null)
+        {
+            return sourceLocation;
+        }
+
+        return argumentFills.FirstOrDefault(fill => !fill.FilledParameters[parameterIndex]).Location ?? Location.None;
     }
 
     /// <summary>
@@ -407,21 +459,38 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        return SymbolEqualityComparer.Default.Equals(argumentType, parameterType) ||
-               compilation.HasImplicitConversion(argumentType, parameterType);
+        var conversion = compilation.ClassifyConversion(argumentType, parameterType);
+        return conversion.IsIdentity ||
+               (conversion.IsImplicit && (conversion.IsReference || conversion.IsBoxing));
     }
 
     private readonly struct MiddlewareUsage
     {
-        public MiddlewareUsage(INamedTypeSymbol type, ImmutableArray<ITypeSymbol?> argumentTypes)
+        public MiddlewareUsage(INamedTypeSymbol type, ImmutableArray<ITypeSymbol?> argumentTypes, Location location)
         {
             Type = type;
             ArgumentTypes = argumentTypes;
+            Location = location;
         }
 
         public INamedTypeSymbol Type { get; }
 
         public ImmutableArray<ITypeSymbol?> ArgumentTypes { get; }
+
+        public Location Location { get; }
+    }
+
+    private readonly struct ActivationFill
+    {
+        public ActivationFill(bool[] filledParameters, Location location)
+        {
+            FilledParameters = filledParameters;
+            Location = location;
+        }
+
+        public bool[] FilledParameters { get; }
+
+        public Location Location { get; }
     }
 
     private static ITypeSymbol UnwrapEnumerableDependency(ITypeSymbol type, out bool isEnumerable)
