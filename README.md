@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.41
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.42
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.41">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.42">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.41" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.42" />
 ```
 
 Then reference it from the project file:
@@ -613,6 +613,7 @@ public sealed class MyService
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
 DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, and for mutually exclusive `if`/`else if`/`else` alternative registrations.
+When a `Replace(...)` still leaves a duplicate descriptor behind, DI012 reports the active registration that survives the single-descriptor replacement, ignoring inactive `TryAdd*` calls when choosing the message location.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
 

@@ -495,6 +495,7 @@ public sealed class MyService
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
 DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. Common framework registration helpers such as `AddLogging()`, `AddOptions()`, `Configure<T>()`, `AddMemoryCache()`, `AddHttpClient()`, and `AddHttpContextAccessor()` are transparent rather than opaque barriers, so later user registrations remain visible. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, applies `TryAddEnumerable`'s service-and-implementation pair semantics, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
+When a `Replace(...)` still leaves a duplicate descriptor behind, DI012 reports the active registration that survives the single-descriptor replacement, ignoring inactive `TryAdd*` calls when choosing the message location.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
 
