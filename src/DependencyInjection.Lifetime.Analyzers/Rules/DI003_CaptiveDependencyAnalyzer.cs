@@ -197,8 +197,7 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                         invocation,
                         invocationSemanticModel,
                         out var implementationType,
-                        out var hasExplicitConstructorArguments) &&
-                    !hasExplicitConstructorArguments)
+                        out _))
                 {
                     AnalyzeActivatorUtilitiesConstruction(
                         context,
@@ -206,6 +205,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                         registrationCollector,
                         lifetimeClassifier,
                         implementationType,
+                        invocation,
+                        methodSymbol,
+                        invocationSemanticModel,
                         invocation.GetLocation(),
                         reportedDiagnostics);
                 }
@@ -863,14 +865,24 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         KnownServiceLifetimeClassifier lifetimeClassifier,
         INamedTypeSymbol implementationType,
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel,
         Location diagnosticLocation,
         HashSet<ReportedDiagnosticKey> reportedDiagnostics)
     {
+        var explicitArgumentTypes = GetActivatorUtilitiesExplicitArgumentTypes(invocation, methodSymbol, semanticModel);
         var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType);
         foreach (var constructor in constructors)
         {
+            var consumedExplicitArguments = new bool[explicitArgumentTypes.Length];
             foreach (var parameter in constructor.Parameters)
             {
+                if (TryConsumeExplicitArgument(parameter, explicitArgumentTypes, consumedExplicitArguments, semanticModel.Compilation))
+                {
+                    continue;
+                }
+
                 var parameterType = UnwrapEnumerableDependency(parameter.Type, out var isEnumerableDependency);
                 var serviceKey = GetServiceKey(parameter);
                 if (serviceKey.IsUnknown ||
@@ -900,6 +912,88 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
                     reportedDiagnostics);
             }
         }
+    }
+
+    private static ImmutableArray<ITypeSymbol?> GetActivatorUtilitiesExplicitArgumentTypes(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol methodSymbol,
+        SemanticModel semanticModel)
+    {
+        var builder = ImmutableArray.CreateBuilder<ITypeSymbol?>();
+        var positionalArgumentIndex = 0;
+        var fixedArgumentCount = methodSymbol.IsGenericMethod ? 1 : 2;
+
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (argument.NameColon is { } nameColon)
+            {
+                var name = nameColon.Name.Identifier.Text;
+                if (name is "provider" or "instanceType" or "type")
+                {
+                    continue;
+                }
+            }
+            else if (positionalArgumentIndex++ < fixedArgumentCount)
+            {
+                continue;
+            }
+
+            foreach (var expression in ExpandParamsArgument(argument.Expression))
+            {
+                builder.Add(semanticModel.GetTypeInfo(expression).Type);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static IEnumerable<ExpressionSyntax> ExpandParamsArgument(ExpressionSyntax expression)
+    {
+        expression = UnwrapExpression(expression);
+        if (expression is ArrayCreationExpressionSyntax { Initializer: { } arrayInitializer })
+        {
+            return arrayInitializer.Expressions;
+        }
+
+        if (expression is ImplicitArrayCreationExpressionSyntax { Initializer: { } implicitArrayInitializer })
+        {
+            return implicitArrayInitializer.Expressions;
+        }
+
+        return new[] { expression };
+    }
+
+    private static bool TryConsumeExplicitArgument(
+        IParameterSymbol parameter,
+        ImmutableArray<ITypeSymbol?> explicitArgumentTypes,
+        bool[] consumedExplicitArguments,
+        Compilation compilation)
+    {
+        for (var i = 0; i < explicitArgumentTypes.Length; i++)
+        {
+            if (consumedExplicitArguments[i] ||
+                explicitArgumentTypes[i] is not { } argumentType ||
+                !IsActivatorUtilitiesAssignable(argumentType, parameter.Type, compilation))
+            {
+                continue;
+            }
+
+            consumedExplicitArguments[i] = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsActivatorUtilitiesAssignable(
+        ITypeSymbol argumentType,
+        ITypeSymbol parameterType,
+        Compilation compilation)
+    {
+        var conversion = compilation.ClassifyConversion(argumentType, parameterType);
+        return conversion.Exists &&
+               conversion.IsImplicit &&
+               (conversion.IsIdentity || conversion.IsReference || conversion.IsBoxing);
     }
 
     private static void ReportDiagnostic(

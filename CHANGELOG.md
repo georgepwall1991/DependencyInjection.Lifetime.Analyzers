@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.28] - 2026-06-29
+
+### Fixed
+
+- **DI003 ActivatorUtilities explicit arguments**: `ActivatorUtilities.CreateInstance(...)` factories now match explicit constructor arguments to the parameters they supply and still report scoped dependencies that remain container-resolved, while factories that explicitly supply the scoped parameter stay quiet.
+
 ## [2.11.27] - 2026-06-29
 
 ### Fixed

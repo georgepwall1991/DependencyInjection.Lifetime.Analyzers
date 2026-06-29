@@ -4326,6 +4326,46 @@ public class DI003_CaptiveDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task SingletonFactory_WithActivatorUtilitiesExplicitArgumentAndContainerScopedDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ActivatorUtilities
+                {
+                    public static T CreateInstance<T>(IServiceProvider provider, params object[] arguments) => throw new System.NotImplementedException();
+                }
+            }
+
+            public interface IScopedDependency { }
+            public class ScopedDependency : IScopedDependency { }
+
+            public interface ISingletonService { }
+            public class SingletonService : ISingletonService
+            {
+                public SingletonService(string marker, IScopedDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedDependency, ScopedDependency>();
+                    services.AddSingleton<ISingletonService>(
+                        sp => {|#0:ActivatorUtilities.CreateInstance<SingletonService>(sp, "configured")|});
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CaptiveDependency)
+                .WithLocation(0)
+                .WithArguments("ISingletonService", "scoped", "IScopedDependency"));
+    }
+
+    [Fact]
     public async Task SingletonFactory_WithOpenGenericScopedRegistration_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -4419,9 +4459,12 @@ public class DI003_CaptiveDependencyAnalyzerTests
     public async Task SingletonFactory_WithActivatorUtilitiesCreateInstanceAndExplicitArguments_NoDiagnostic()
     {
         var source = Usings + """
-            public static class ActivatorUtilities
+            namespace Microsoft.Extensions.DependencyInjection
             {
-                public static T CreateInstance<T>(IServiceProvider provider, params object[] arguments) => throw new System.NotImplementedException();
+                public static class ActivatorUtilities
+                {
+                    public static T CreateInstance<T>(IServiceProvider provider, params object[] arguments) => throw new System.NotImplementedException();
+                }
             }
 
             public interface IScopedDependency { }
@@ -4439,7 +4482,7 @@ public class DI003_CaptiveDependencyAnalyzerTests
                 {
                     services.AddScoped<IScopedDependency, ScopedDependency>();
                     services.AddSingleton<ISingletonService>(
-                        sp => ActivatorUtilities.CreateInstance<SingletonService>(sp, new object()));
+                        sp => ActivatorUtilities.CreateInstance<SingletonService>(sp, new ScopedDependency(), new object()));
                 }
             }
             """;
