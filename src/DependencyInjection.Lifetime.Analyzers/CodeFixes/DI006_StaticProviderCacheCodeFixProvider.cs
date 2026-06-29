@@ -135,13 +135,41 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
                 continue;
             }
 
-            if (IsInStaticContext(identifier))
+            if (IsReferenceOutsideContainingType(identifier, containingType) ||
+                IsTypeQualifiedMemberReference(identifier, containingType, semanticModel) ||
+                IsInStaticContext(identifier) ||
+                IsInInstanceMemberInitializer(identifier, declaration))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool IsReferenceOutsideContainingType(
+        IdentifierNameSyntax identifier,
+        TypeDeclarationSyntax containingType)
+    {
+        var nearestType = identifier.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+        return nearestType is not null && nearestType != containingType;
+    }
+
+    private static bool IsTypeQualifiedMemberReference(
+        IdentifierNameSyntax identifier,
+        TypeDeclarationSyntax containingType,
+        SemanticModel semanticModel)
+    {
+        if (identifier.Parent is not MemberAccessExpressionSyntax memberAccess ||
+            memberAccess.Name != identifier)
+        {
+            return false;
+        }
+
+        var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+        var containingTypeSymbol = semanticModel.GetDeclaredSymbol(containingType);
+        return receiverType is not null &&
+            SymbolEqualityComparer.Default.Equals(receiverType, containingTypeSymbol);
     }
 
     private static bool IsInStaticContext(SyntaxNode node)
@@ -170,6 +198,28 @@ public sealed class DI006_StaticProviderCacheCodeFixProvider : CodeFixProvider
         }
 
         return false;
+    }
+
+    private static bool IsInInstanceMemberInitializer(
+        IdentifierNameSyntax identifier,
+        MemberDeclarationSyntax declaration)
+    {
+        var equalsValue = identifier.FirstAncestorOrSelf<EqualsValueClauseSyntax>();
+        if (equalsValue is null)
+        {
+            return false;
+        }
+
+        return equalsValue.Parent switch
+        {
+            VariableDeclaratorSyntax variableDeclarator
+                when variableDeclarator.Parent?.Parent is FieldDeclarationSyntax fieldDeclaration &&
+                    fieldDeclaration != declaration =>
+                !HasStaticModifier(fieldDeclaration.Modifiers),
+            PropertyDeclarationSyntax propertyDeclaration when propertyDeclaration != declaration =>
+                !HasStaticModifier(propertyDeclaration.Modifiers),
+            _ => false
+        };
     }
 
     private static bool IsPrivateMember(MemberDeclarationSyntax declaration)

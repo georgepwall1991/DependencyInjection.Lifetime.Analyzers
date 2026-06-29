@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-28 (latest hardening: Pass 17 DI005 fixer type rewrite, API availability, and message quality; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
-**Version:** 2.11.19 (release-bound DI005 async-scope pass)
-**Test result:** 2026-06-28 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1780 passed, 0 failed, 0 skipped after the Pass 17 DI005 async-scope fix plus Codex review.
+**Date:** 2026-06-28 (latest hardening: Pass 18 DI006 remove-static fixer guardrails; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
+**Version:** 2.11.20 (release-bound DI006 remove-static fixer pass)
+**Test result:** 2026-06-28 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1784 passed, 0 failed, 0 skipped after the Pass 18 DI006 remove-static fixer guardrails plus Codex review.
 **Analyzers:** 22 classes / 23 rule IDs (DI001-DI022 plus DI024; DI021 and DI022 share one analyzer, DI023 is reserved for Task.Run/WhenAll fan-out)
 **Code fix providers:** 14
 
@@ -15,7 +15,7 @@
 | DI003 | Captive Dependency | Warn | 139 | 14 | 9.2 | 8.6 | Hardened: known framework scoped lifetimes, stable local delegate factories, EF factory/pooled contexts, fixer shape coverage, conditional-access lifetime rewrite, and `TryAddEnumerable` descriptor pair preservation; 2026-06-28: typed `AddHttpClient` clients are modeled as transient dependencies; 2026-06-11: own-disposed-scope factory resolutions stay quiet (one-time scoped setup) and the lifetime rewrite only targets the framework's own registration types (type allowlist, not just namespace — user helpers declared inside the MEDI namespace are excluded too) |
 | DI004 | Use After Dispose | Warn | 68 | 13 | 8.8 | 8.8 | 2.10.5 fixed the audit's branch-precision gap for explicit `Dispose()`; 2026-06-11 threads the same mutual-exclusivity guard to `using`-statement/declaration paths, stops counting `out` arguments as uses (the out-write also clears tracking), and the pragma suppression wraps the enclosing line-starting statement so unbraced embedded statements no longer produce CS1040. Remaining cross-boundary limit: field-stored scopes are invisible (shared design limit) |
 | DI005 | Async Disposal | Warn | 25 | 13 | 9.4 | 8.5 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside top-level async, nested async, and direct-resource fixer coverage; 2026-06-28: diagnostics require `AsyncServiceScope`/`CreateAsyncScope()` availability, explicit `IServiceScope` using declarations/statements rewrite to `var` before `await using`, and lambda/anonymous-method diagnostics name the async context |
-| DI006 | Static Provider Cache | Warn | 28 | 16 | 9.0 | 8.0 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails |
+| DI006 | Static Provider Cache | Warn | 28 | 20 | 9.0 | 8.5 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails; 2026-06-28: the remove-static fixer is also suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access |
 | DI007 | Service Locator | Info | 38 | -- | 8.7 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
 | DI008 | Disposable Transient | Warn | 47 | 18 | 8.9 | 9.0 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, plain `TryAdd(ServiceDescriptor)` and `Replace(ServiceDescriptor)` descriptor extensions, typed `AddHttpClient` clients, open generics, descriptor collections, factory guardrails, allowlist option, and descriptor lifetime fixes |
 | DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.0 | 8.7 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
@@ -522,8 +522,8 @@ One pass, four collector gaps — the 2.10.6 Replace-bug class; unblinds DI012/D
 - ~~**DI005-2 (FP, M)**~~ **Fixed.** DI005 now requires `AsyncServiceScope` availability before reporting, keeping Microsoft.Extensions.DI 5.x projects quiet.
 - ~~**DI005-3 (message-quality, S)**~~ **Fixed.** Lambda and anonymous-method diagnostics now render `lambda expression` and `anonymous method` instead of an empty async method name.
 
-### Pass 18 — DI006: fixer static-removal gates
-- **DI006-1/2/3 (fixer-output, S×3)** — the remove-`static` fix emits broken code for: references from nested types (the scan includes them but never rejects, `DI006_StaticProviderCacheCodeFixProvider.cs:125-142`), type-qualified `C._sp` accesses left behind, and references from instance field initializers (CS0236; `IsInStaticContext:147-173`). Three gates, one pass.
+### ~~Pass 18 — DI006: fixer static-removal gates~~ ✅ Done 2026-06-28 (2.11.20)
+- ~~**DI006-1/2/3 (fixer-output, S×3)**~~ **Fixed.** The remove-`static` fixer now rejects references from nested types, type-qualified `C._sp` accesses, and instance field/property initializers, so the code action is only offered when existing references remain valid after the member becomes instance-scoped.
 
 ### Pass 19 — DI019: coalesce guards + fixer contexts
 - **DI019-1 (FP+FN, M)** — `?? throw` provider guards defeat classification: `Unwrap` (`DI019_RootScopedResolutionAnalyzer.cs:857-882`) strips parens/casts/`!`/`?.` but not coalesce, losing scoped-provider facts (FP inside singletons) and root-alias facts (FN).

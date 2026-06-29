@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.19
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.20
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.19">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.20">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.19" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.20" />
 ```
 
 Then reference it from the project file:
@@ -417,7 +417,7 @@ public sealed class Locator
 }
 ```
 
-**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid.
+**Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid; it is suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access.
 
 ---
 

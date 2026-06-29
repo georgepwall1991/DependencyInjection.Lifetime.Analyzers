@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.20] - 2026-06-28
+
+### Fixed
+
+- **DI006 remove-static code fix**: the fix is no longer offered when nested-type references, type-qualified references, or instance field/property initializers would be left with non-compiling code after removing `static`.
+
 ## [2.11.19] - 2026-06-28
 
 ### Fixed
