@@ -16,6 +16,95 @@ public class DI004_UseAfterDisposeAnalyzerTests
     #region Should Report Diagnostic
 
     [Fact]
+    public async Task ServiceUsedAfterConditionalAccessDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    scope?.Dispose();
+                    {|DI004:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ProviderAliasServiceUsedAfterConditionalAccessDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService
+            {
+                void DoWork();
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void ProcessWork()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var provider = scope.ServiceProvider;
+                    var service = provider.GetRequiredService<IMyService>();
+                    scope?.Dispose();
+                    {|DI004:service.DoWork()|};
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                }
+            }
+
+            public class MyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI004_UseAfterDisposeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ServiceUsedAfterOwnBranchDispose_BothBranchesDispose_ReportsDiagnostic()
     {
         // The else branch has its own dispose before the use — exclusivity with the then-branch

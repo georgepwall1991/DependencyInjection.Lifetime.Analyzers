@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.32] - 2026-06-29
+
+### Fixed
+
+- **DI004 conditional-access disposal**: `scope?.Dispose()` calls on tracked scope locals now count as explicit dispose sites, so services resolved directly or through provider aliases report when used afterward.
+
 ## [2.11.31] - 2026-06-29
 
 ### Fixed
