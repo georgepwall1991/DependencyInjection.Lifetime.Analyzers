@@ -123,9 +123,9 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             // Dictionary-of-providers shapes: TValue is a provider type.
             if (IsKnownProviderDictionary(namedType) &&
                 namedType.TypeArguments.Length == 2 &&
-                wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(namedType.TypeArguments[1]))
+                TryGetStaticCacheTypeName(namedType.TypeArguments[1], wellKnownTypes, detectHolderPattern, out var valueTypeName))
             {
-                typeName = $"{GetSimpleTypeName(namedType)}<{GetSimpleTypeName(namedType.TypeArguments[0])}, {GetSimpleTypeName(namedType.TypeArguments[1])}>";
+                typeName = $"{GetSimpleTypeName(namedType)}<{GetSimpleTypeName(namedType.TypeArguments[0])}, {valueTypeName}>";
                 return true;
             }
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.35] - 2026-06-29
+
+### Fixed
+
+- **DI006 recursive dictionary values**: static provider-cache diagnostics now report provider abstractions hidden inside recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>` and nested provider dictionaries.
+
 ## [2.11.34] - 2026-06-29
 
 ### Fixed

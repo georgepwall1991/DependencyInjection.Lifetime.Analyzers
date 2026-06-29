@@ -140,6 +140,49 @@ public class DI006_StaticProviderCacheAnalyzerTests
     }
 
     [Fact]
+    public async Task StaticField_DictionaryOfLazyProviders_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Collections.Generic;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class MyClass
+            {
+                private static Dictionary<string, Lazy<IServiceProvider>> _providers;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(7, 63, 7, 73)
+                .WithArguments("Dictionary<String, Lazy<IServiceProvider>>", "_providers"));
+    }
+
+    [Fact]
+    public async Task StaticField_NestedDictionaryOfProviders_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Collections.Generic;
+
+            public class MyClass
+            {
+                private static Dictionary<string, Dictionary<string, IServiceProvider>> _providers;
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.StaticProviderCache)
+                .WithSpan(6, 77, 6, 87)
+                .WithArguments("Dictionary<String, Dictionary<String, IServiceProvider>>", "_providers"));
+    }
+
+    [Fact]
     public async Task StaticField_DictionaryOfNonProviderValueType_NoDiagnostic()
     {
         var source = """
