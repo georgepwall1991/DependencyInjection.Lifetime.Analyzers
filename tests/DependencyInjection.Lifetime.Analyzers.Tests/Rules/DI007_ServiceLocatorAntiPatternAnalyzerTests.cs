@@ -467,6 +467,58 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     }
 
     [Fact]
+    public async Task GetRequiredService_InServiceDescriptorFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public interface IDependency { }
+
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.Transient<IMyService>(
+                        sp => new MyService(sp.GetRequiredService<IDependency>())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InTryAddEnumerableServiceDescriptorFactory_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public interface IDependency { }
+
+            public class MyService : IMyService
+            {
+                public MyService(IDependency dependency) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.TryAddEnumerable(ServiceDescriptor.Transient<IMyService, MyService>(
+                        sp => new MyService(sp.GetRequiredService<IDependency>())));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task GetRequiredService_InInvokeMethod_NoDiagnostic()
     {
         var source = Usings + """
@@ -623,6 +675,46 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InStaticMainCompositionRoot_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public class MyService : IMyService { }
+
+            public class Program
+            {
+                public static void Main()
+                {
+                    var services = new ServiceCollection();
+                    services.AddTransient<IMyService, MyService>();
+                    using var provider = services.BuildServiceProvider();
+                    var service = provider.GetRequiredService<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+            .VerifyNoDiagnosticsAsConsoleApplicationAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InTopLevelCompositionRoot_NoDiagnostic()
+    {
+        var source = Usings + """
+            var services = new ServiceCollection();
+            services.AddTransient<IMyService, MyService>();
+            using var provider = services.BuildServiceProvider();
+            var service = provider.GetRequiredService<IMyService>();
+
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+            .VerifyNoDiagnosticsAsConsoleApplicationAsync(source);
     }
 
     [Fact]
@@ -790,6 +882,29 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
             AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
                 .WithSpan(9, 16, 9, 57)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_InStaticMainHelperWhenNotEntryPoint_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public static class Helper
+            {
+                public static void Main(IServiceProvider provider)
+                {
+                    var service = {|#0:provider.GetRequiredService<IMyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithLocation(0)
                 .WithArguments("IMyService"));
     }
 

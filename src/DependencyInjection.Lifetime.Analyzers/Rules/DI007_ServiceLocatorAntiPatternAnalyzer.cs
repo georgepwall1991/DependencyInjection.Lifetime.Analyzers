@@ -204,7 +204,11 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
                     {
                         return true;
                     }
+
                     break;
+
+                case GlobalStatementSyntax:
+                    return true;
 
                 // Check if we're inside a method
                 case MethodDeclarationSyntax methodDecl:
@@ -283,7 +287,17 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         WellKnownTypes wellKnownTypes)
     {
         return IsServiceCollectionFactoryBoundary(invocation, method, semanticModel, wellKnownTypes) ||
+               IsServiceDescriptorFactoryBoundary(method) ||
                IsOptionsFactoryBoundary(invocation, method, semanticModel);
+    }
+
+    private static bool IsServiceDescriptorFactoryBoundary(IMethodSymbol method)
+    {
+        var originalMethod = method.ReducedFrom ?? method;
+        return originalMethod.ContainingType?.Name == "ServiceDescriptor" &&
+               originalMethod.ContainingNamespace?.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" &&
+               originalMethod.Name is "Transient" or "Scoped" or "Singleton" or
+                   "KeyedTransient" or "KeyedScoped" or "KeyedSingleton" or "Describe" or "DescribeKeyed";
     }
 
     private static bool IsServiceCollectionFactoryBoundary(
@@ -408,6 +422,11 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
     {
         var methodName = methodDecl.Identifier.Text;
 
+        if (methodName == "Main" && IsApplicationEntryPoint(methodDecl, semanticModel))
+        {
+            return true;
+        }
+
         // Allow real ASP.NET Core middleware Invoke/InvokeAsync methods.
         if (methodName == "Invoke" || methodName == "InvokeAsync")
         {
@@ -441,6 +460,14 @@ public sealed class DI007_ServiceLocatorAntiPatternAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsApplicationEntryPoint(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(methodDecl);
+        var entryPoint = semanticModel.Compilation.GetEntryPoint(default);
+        return symbol is not null &&
+               SymbolEqualityComparer.Default.Equals(symbol, entryPoint);
     }
 
     private static bool IsFactoryLikeMethod(MethodDeclarationSyntax methodDecl, SemanticModel semanticModel)
