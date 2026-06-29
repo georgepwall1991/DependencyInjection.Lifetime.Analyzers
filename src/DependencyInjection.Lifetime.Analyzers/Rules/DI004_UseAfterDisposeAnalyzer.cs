@@ -970,15 +970,20 @@ public sealed class DI004_UseAfterDisposeAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         ILocalSymbol scopeSymbol)
     {
-        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
-            memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync") ||
-            memberAccess.Expression is not IdentifierNameSyntax scopeIdentifier ||
-            semanticModel.GetSymbolInfo(scopeIdentifier).Symbol is not ILocalSymbol localSymbol)
+        ExpressionSyntax? receiver = invocation.Expression switch
         {
-            return false;
-        }
+            MemberAccessExpressionSyntax memberAccess
+                when memberAccess.Name.Identifier.Text is "Dispose" or "DisposeAsync" =>
+                memberAccess.Expression,
+            MemberBindingExpressionSyntax memberBinding
+                when memberBinding.Name.Identifier.Text is "Dispose" or "DisposeAsync" =>
+                TryGetConditionalAccessReceiver(memberBinding),
+            _ => null,
+        };
 
-        return SymbolEqualityComparer.Default.Equals(localSymbol, scopeSymbol);
+        return receiver is IdentifierNameSyntax scopeIdentifier &&
+               semanticModel.GetSymbolInfo(scopeIdentifier).Symbol is ILocalSymbol localSymbol &&
+               SymbolEqualityComparer.Default.Equals(localSymbol, scopeSymbol);
     }
 
     private static bool TryGetResolutionLifetime(
