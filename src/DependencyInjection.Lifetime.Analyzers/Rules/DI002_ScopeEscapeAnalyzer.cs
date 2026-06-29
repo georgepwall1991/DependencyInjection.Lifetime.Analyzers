@@ -159,21 +159,24 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax fieldAssignment &&
-                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol fieldSymbol &&
+                TryGetAssignmentTargetSymbol(fieldAssignment.Left, semanticModel, out var fieldTargetSymbol) &&
+                fieldTargetSymbol is IFieldSymbol fieldSymbol &&
                 AssignmentTargetOutlivesScope(fieldAssignment.Left, semanticModel, executableBody, fieldAssignment))
             {
                 ReportDiagnostic(context, invocation, fieldSymbol.Name, reportedSpans);
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax propertyAssignment &&
-                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol propertySymbol &&
+                TryGetAssignmentTargetSymbol(propertyAssignment.Left, semanticModel, out var propertyTargetSymbol) &&
+                propertyTargetSymbol is IPropertySymbol propertySymbol &&
                 AssignmentTargetOutlivesScope(propertyAssignment.Left, semanticModel, executableBody, propertyAssignment))
             {
                 ReportDiagnostic(context, invocation, propertySymbol.Name, reportedSpans);
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax parameterAssignment &&
-                semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameterSymbol &&
+                TryGetAssignmentTargetSymbol(parameterAssignment.Left, semanticModel, out var parameterTargetSymbol) &&
+                parameterTargetSymbol is IParameterSymbol parameterSymbol &&
                 IsEscapingParameter(parameterSymbol))
             {
                 ReportDiagnostic(context, invocation, parameterSymbol.Name, reportedSpans);
@@ -256,7 +259,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     out var source,
                     out var fieldAssignmentLocal) &&
                 SourceCanReachSink(source, fieldAssignment, fieldAssignmentLocal, semanticModel) &&
-                semanticModel.GetSymbolInfo(fieldAssignment.Left).Symbol is IFieldSymbol field &&
+                TryGetAssignmentTargetSymbol(fieldAssignment.Left, semanticModel, out var trackedFieldTargetSymbol) &&
+                trackedFieldTargetSymbol is IFieldSymbol field &&
                 AssignmentTargetOutlivesScope(fieldAssignment.Left, semanticModel, executableBody, fieldAssignment))
             {
                 ReportDiagnostic(context, source, field.Name, reportedSpans);
@@ -269,7 +273,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     serviceVariables,
                     capturedDelegateVariables,
                     out var delegateFieldSource) &&
-                semanticModel.GetSymbolInfo(delegateFieldAssignment.Left).Symbol is IFieldSymbol delegateField)
+                TryGetAssignmentTargetSymbol(delegateFieldAssignment.Left, semanticModel, out var delegateFieldTargetSymbol) &&
+                delegateFieldTargetSymbol is IFieldSymbol delegateField &&
+                AssignmentTargetOutlivesScope(
+                    delegateFieldAssignment.Left,
+                    semanticModel,
+                    executableBody,
+                    delegateFieldAssignment))
             {
                 ReportDiagnostic(context, delegateFieldSource, delegateField.Name, reportedSpans);
             }
@@ -282,7 +292,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     out var propertySource,
                     out var propertyAssignmentLocal) &&
                 SourceCanReachSink(propertySource, propertyAssignment, propertyAssignmentLocal, semanticModel) &&
-                semanticModel.GetSymbolInfo(propertyAssignment.Left).Symbol is IPropertySymbol property &&
+                TryGetAssignmentTargetSymbol(propertyAssignment.Left, semanticModel, out var trackedPropertyTargetSymbol) &&
+                trackedPropertyTargetSymbol is IPropertySymbol property &&
                 AssignmentTargetOutlivesScope(propertyAssignment.Left, semanticModel, executableBody, propertyAssignment))
             {
                 ReportDiagnostic(context, propertySource, property.Name, reportedSpans);
@@ -295,7 +306,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     serviceVariables,
                     capturedDelegateVariables,
                     out var delegatePropertySource) &&
-                semanticModel.GetSymbolInfo(delegatePropertyAssignment.Left).Symbol is IPropertySymbol delegateProperty)
+                TryGetAssignmentTargetSymbol(delegatePropertyAssignment.Left, semanticModel, out var delegatePropertyTargetSymbol) &&
+                delegatePropertyTargetSymbol is IPropertySymbol delegateProperty &&
+                AssignmentTargetOutlivesScope(
+                    delegatePropertyAssignment.Left,
+                    semanticModel,
+                    executableBody,
+                    delegatePropertyAssignment))
             {
                 ReportDiagnostic(context, delegatePropertySource, delegateProperty.Name, reportedSpans);
             }
@@ -308,7 +325,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     out var parameterSource,
                     out var parameterAssignmentLocal) &&
                 SourceCanReachSink(parameterSource, parameterAssignment, parameterAssignmentLocal, semanticModel) &&
-                semanticModel.GetSymbolInfo(parameterAssignment.Left).Symbol is IParameterSymbol parameter &&
+                TryGetAssignmentTargetSymbol(parameterAssignment.Left, semanticModel, out var trackedParameterTargetSymbol) &&
+                trackedParameterTargetSymbol is IParameterSymbol parameter &&
                 IsEscapingParameter(parameter))
             {
                 ReportDiagnostic(context, parameterSource, parameter.Name, reportedSpans);
@@ -321,7 +339,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     serviceVariables,
                     capturedDelegateVariables,
                     out var delegateParameterSource) &&
-                semanticModel.GetSymbolInfo(delegateParameterAssignment.Left).Symbol is IParameterSymbol delegateParameter &&
+                TryGetAssignmentTargetSymbol(delegateParameterAssignment.Left, semanticModel, out var delegateParameterTargetSymbol) &&
+                delegateParameterTargetSymbol is IParameterSymbol delegateParameter &&
                 IsEscapingParameter(delegateParameter))
             {
                 ReportDiagnostic(context, delegateParameterSource, delegateParameter.Name, reportedSpans);
@@ -846,9 +865,39 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             return ReceiverRootOutlivesScope(memberAccess.Expression, semanticModel, executableBody, assignment);
         }
 
+        if (target is MemberBindingExpressionSyntax memberBinding &&
+            TryGetConditionalAccessReceiver(memberBinding) is { } conditionalReceiver)
+        {
+            return ReceiverRootOutlivesScope(conditionalReceiver, semanticModel, executableBody, assignment);
+        }
+
         if (target is ElementAccessExpressionSyntax elementAccess)
         {
             return ReceiverRootOutlivesScope(elementAccess.Expression, semanticModel, executableBody, assignment);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetAssignmentTargetSymbol(
+        ExpressionSyntax target,
+        SemanticModel semanticModel,
+        out ISymbol symbol)
+    {
+        symbol = null!;
+
+        var symbolInfo = semanticModel.GetSymbolInfo(target);
+        if (symbolInfo.Symbol is { } directSymbol)
+        {
+            symbol = directSymbol;
+            return true;
+        }
+
+        if (target is MemberBindingExpressionSyntax memberBinding &&
+            semanticModel.GetSymbolInfo(memberBinding.Name).Symbol is { } memberBindingSymbol)
+        {
+            symbol = memberBindingSymbol;
+            return true;
         }
 
         return false;

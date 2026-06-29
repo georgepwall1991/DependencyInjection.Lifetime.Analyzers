@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.30] - 2026-06-29
+
+### Fixed
+
+- **DI002 conditional-access assignment sinks**: scoped services assigned through null-conditional field/property receivers such as `_holder?.Service = service` now report when the receiver outlives the scope, while delegate captures stored only on fresh local holders stay quiet.
+
 ## [2.11.29] - 2026-06-29
 
 ### Fixed
