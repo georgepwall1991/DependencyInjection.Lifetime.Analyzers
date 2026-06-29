@@ -60,6 +60,98 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
+    public async Task ScopedService_ReturnedAfterManualScopeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public IMyService GetService()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    scope.Dispose();
+                    return service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedAfterManualAsyncScopeDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public async Task<IMyService> GetServiceAsync()
+                {
+                    var scope = _scopeFactory.CreateAsyncScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    await scope.DisposeAsync();
+                    return service;
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
+    }
+
+    [Fact]
     public async Task ScopedService_AssignedToField_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -2670,6 +2762,590 @@ public class DI002_ScopeEscapeAnalyzerTests
 
         // This pattern is intentional - caller manages the scope
         await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithUsingScope_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope Scope, IMyService Service) GetScopedService()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|#0:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    return (scope, service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(0)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeOnTransferPathBeforeManualDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope? Scope, IMyService? Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (transfer)
+                    {
+                        return (scope, service);
+                    }
+
+                    scope.Dispose();
+                    return (null, null);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedFromConditionalBranchWithoutScopeTransfer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope? Scope, IMyService? Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    var otherService = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return transfer ? (scope, service) : (null, otherService);
+                    }
+                    finally
+                    {
+                        if (!transfer)
+                        {
+                            scope.Dispose();
+                        }
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(19, 28, 19, 82)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ResolvedInlineFromConditionalBranchWithoutScopeTransfer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope? Scope, IMyService? Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return transfer
+                            ? (scope, service)
+                            : (null, scope.ServiceProvider.GetRequiredService<IMyService>());
+                    }
+                    finally
+                    {
+                        if (!transfer)
+                        {
+                            scope.Dispose();
+                        }
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(23, 26, 23, 80)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedFromNestedConditionalCompositeBranchWithoutScopeTransfer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public ((IServiceScope? Scope, IMyService? Service) Lease, string Tag) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    var otherService = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return (transfer ? (scope, service) : (null, otherService), "tag");
+                    }
+                    finally
+                    {
+                        if (!transfer)
+                        {
+                            scope.Dispose();
+                        }
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(19, 28, 19, 82)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeAfterExitingManualDisposeBranch_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope? Scope, IMyService? Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (!transfer)
+                    {
+                        scope.Dispose();
+                        return (null, null);
+                    }
+
+                    return (scope, service);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeAfterConditionalManualDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope Scope, IMyService Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = {|#0:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    if (!transfer)
+                    {
+                        scope.Dispose();
+                    }
+
+                    return (scope, service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithLocation(0)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeFromTryFinallyConditionalDispose_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope Scope, IMyService Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return (scope, service);
+                    }
+                    finally
+                    {
+                        if (!transfer)
+                        {
+                            scope.Dispose();
+                        }
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeReferenceButNoScopeTransfer_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (bool Missing, IMyService? Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    if (transfer)
+                    {
+                        return (scope == null, service);
+                    }
+
+                    scope.Dispose();
+                    return (false, null);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithConditionallyTransferredScope_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope? Scope, IMyService Service) GetScopedService(bool transfer)
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return (transfer ? scope : null, service);
+                    }
+                    finally
+                    {
+                        if (!transfer)
+                        {
+                            scope.Dispose();
+                        }
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeAfterManualDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope Scope, IMyService Service) GetScopedService()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    scope.Dispose();
+                    return (scope, service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
+    }
+
+    [Fact]
+    public async Task ScopedService_ReturnedWithScopeFromTryFinallyDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public (IServiceScope Scope, IMyService Service) GetScopedService()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    try
+                    {
+                        return (scope, service);
+                    }
+                    finally
+                    {
+                        scope.Dispose();
+                    }
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public void DoWork() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+                .WithSpan(18, 23, 18, 77)
+                .WithArguments("return"));
     }
 
     [Fact]

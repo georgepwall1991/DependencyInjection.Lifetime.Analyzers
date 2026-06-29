@@ -108,6 +108,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         var providerAliases = CollectScopeProviderAliases(executableBody, semanticModel, scopeVariables);
         var serviceVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
+        var serviceScopeVariables = new Dictionary<ILocalSymbol, ILocalSymbol>(SymbolEqualityComparer.Default);
         var capturedDelegateVariables = new Dictionary<ILocalSymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         var reportedSpans = new HashSet<TextSpan>();
 
@@ -121,7 +122,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     providerAliases,
                     registrationCollector,
                     wellKnownTypes,
-                    out var lifetime) ||
+                    out var lifetime,
+                    out var scopeSymbol) ||
                 !ShouldReportScopedEscape(lifetime))
             {
                 continue;
@@ -137,6 +139,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
             {
                 serviceVariables[localSymbol] = invocation;
+                serviceScopeVariables[localSymbol] = scopeSymbol;
             }
 
             if (consumption.Parent is AssignmentExpressionSyntax assignment &&
@@ -144,16 +147,36 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 semanticModel.GetSymbolInfo(assignmentIdentifier).Symbol is ILocalSymbol assignedLocalSymbol)
             {
                 serviceVariables[assignedLocalSymbol] = invocation;
+                serviceScopeVariables[assignedLocalSymbol] = scopeSymbol;
             }
 
-            if (consumption.Parent is ReturnStatementSyntax)
+            if (consumption.Parent is ReturnStatementSyntax returnStatement &&
+                !ReturnTransfersScope(
+                    returnStatement.Expression,
+                    scopeSymbol,
+                    semanticModel,
+                    invocation.Span,
+                    trackedLocal: null,
+                    returnStatement,
+                    executableBody,
+                    returnStatement.SpanStart))
             {
                 ReportDiagnostic(context, invocation, "return", reportedSpans);
             }
 
             // return (resolution, x); / return new { Service = resolution }; — the composite
             // hands the service out with the return.
-            if (IsInsideReturnedComposite(consumption))
+            if (IsInsideReturnedComposite(consumption) &&
+                GetEnclosingReturnStatement(consumption) is { } compositeReturnStatement &&
+                !ReturnTransfersScope(
+                    compositeReturnStatement.Expression,
+                    scopeSymbol,
+                    semanticModel,
+                    invocation.Span,
+                    trackedLocal: null,
+                    compositeReturnStatement,
+                    executableBody,
+                    compositeReturnStatement.SpanStart))
             {
                 ReportDiagnostic(context, invocation, "return", reportedSpans);
             }
@@ -211,7 +234,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
-            TrackServiceAlias(node, semanticModel, serviceVariables);
+            TrackServiceAlias(node, semanticModel, serviceVariables, serviceScopeVariables);
             TrackDelegateCapture(node, semanticModel, serviceVariables, capturedDelegateVariables);
 
             if (node is ReturnStatementSyntax returnStmt &&
@@ -221,7 +244,16 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     serviceVariables,
                     out var sourceInvocation,
                     out var returnLocal) &&
-                SourceCanReachSink(sourceInvocation, returnStmt, returnLocal, semanticModel))
+                SourceCanReachSink(sourceInvocation, returnStmt, returnLocal, semanticModel) &&
+                !ReturnTransfersTrackedScope(
+                    returnStmt.Expression,
+                    sourceInvocation,
+                    returnLocal,
+                    serviceScopeVariables,
+                    semanticModel,
+                    returnStmt,
+                    executableBody,
+                    returnStmt.SpanStart))
             {
                 ReportDiagnostic(context, sourceInvocation, "return", reportedSpans);
             }
@@ -239,16 +271,25 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
             // return (service, x); / return new { Service = service }; — composite construction
             // smuggles the tracked service (or a capturing delegate) out with the return.
-            if (node is ReturnStatementSyntax compositeReturn &&
-                compositeReturn.Expression is TupleExpressionSyntax or AnonymousObjectCreationExpressionSyntax)
+            if (node is ReturnStatementSyntax { Expression: { } returnExpression } compositeReturn &&
+                ReturnExpressionContainsComposite(returnExpression))
             {
                 ReportCompositeReturnEscapes(
                     context,
-                    compositeReturn.Expression,
+                    returnExpression,
+                    returnExpression,
                     semanticModel,
+                    scopeVariables,
+                    providerAliases,
+                    registrationCollector,
+                    wellKnownTypes,
                     serviceVariables,
+                    serviceScopeVariables,
                     capturedDelegateVariables,
-                    reportedSpans);
+                    reportedSpans,
+                    compositeReturn,
+                    executableBody,
+                    compositeReturn.SpanStart);
             }
 
             if (node is AssignmentExpressionSyntax fieldAssignment &&
@@ -581,6 +622,15 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     sawComposite = true;
                     current = anonymous.Parent;
                     continue;
+                case ConditionalExpressionSyntax conditional
+                    when conditional.WhenTrue == current || conditional.WhenFalse == current:
+                    current = conditional.Parent;
+                    continue;
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.CoalesceExpression) &&
+                         (binary.Left == current || binary.Right == current):
+                    current = binary.Parent;
+                    continue;
                 case ReturnStatementSyntax:
                     return sawComposite;
                 default:
@@ -589,6 +639,418 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static ReturnStatementSyntax? GetEnclosingReturnStatement(SyntaxNode node)
+    {
+        for (SyntaxNode? current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is ReturnStatementSyntax returnStatement)
+            {
+                return returnStatement;
+            }
+
+            if (current is StatementSyntax or MemberDeclarationSyntax)
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ReturnTransfersTrackedScope(
+        ExpressionSyntax? returnExpression,
+        InvocationExpressionSyntax sourceInvocation,
+        ILocalSymbol trackedLocal,
+        Dictionary<ILocalSymbol, ILocalSymbol> serviceScopeVariables,
+        SemanticModel semanticModel,
+        ReturnStatementSyntax returnStatement,
+        SyntaxNode executableBody,
+        int returnSpanStart) =>
+        serviceScopeVariables.TryGetValue(trackedLocal, out var scopeLocal) &&
+        ReturnTransfersScope(
+            returnExpression,
+            scopeLocal,
+            semanticModel,
+            sourceInvocation.Span,
+            trackedLocal,
+            returnStatement,
+            executableBody,
+            returnSpanStart);
+
+    private static bool ReturnTransfersScope(
+        ExpressionSyntax? returnExpression,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel,
+        TextSpan sourceInvocationSpan,
+        ILocalSymbol? trackedLocal,
+        ReturnStatementSyntax returnStatement,
+        SyntaxNode executableBody,
+        int returnSpanStart)
+    {
+        if (returnExpression is null ||
+            ScopeLocalIsUsingOwned(scopeLocal) ||
+            ScopeLocalIsDisposedBeforeEscape(scopeLocal, executableBody, semanticModel, returnStatement, returnSpanStart))
+        {
+            return false;
+        }
+
+        return ReturnExpressionTransfersScopeForSource(
+            returnExpression,
+            scopeLocal,
+            semanticModel,
+            sourceInvocationSpan,
+            trackedLocal);
+    }
+
+    private static bool ReturnExpressionTransfersScopeForSource(
+        ExpressionSyntax returnExpression,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel,
+        TextSpan sourceInvocationSpan,
+        ILocalSymbol? trackedLocal)
+    {
+        returnExpression = UnwrapParentheses(returnExpression);
+
+        if (returnExpression is ConditionalExpressionSyntax conditional)
+        {
+            var trueContainsSource = ReturnExpressionContainsSource(
+                conditional.WhenTrue,
+                sourceInvocationSpan,
+                trackedLocal,
+                semanticModel);
+            var falseContainsSource = ReturnExpressionContainsSource(
+                conditional.WhenFalse,
+                sourceInvocationSpan,
+                trackedLocal,
+                semanticModel);
+
+            if (trueContainsSource || falseContainsSource)
+            {
+                return (!trueContainsSource ||
+                        ReturnExpressionTransfersScopeForSource(
+                            conditional.WhenTrue,
+                            scopeLocal,
+                            semanticModel,
+                            sourceInvocationSpan,
+                            trackedLocal)) &&
+                       (!falseContainsSource ||
+                        ReturnExpressionTransfersScopeForSource(
+                            conditional.WhenFalse,
+                            scopeLocal,
+                            semanticModel,
+                            sourceInvocationSpan,
+                            trackedLocal));
+            }
+        }
+
+        if (returnExpression is BinaryExpressionSyntax binary &&
+            binary.IsKind(SyntaxKind.CoalesceExpression))
+        {
+            var leftContainsSource = ReturnExpressionContainsSource(
+                binary.Left,
+                sourceInvocationSpan,
+                trackedLocal,
+                semanticModel);
+            var rightContainsSource = ReturnExpressionContainsSource(
+                binary.Right,
+                sourceInvocationSpan,
+                trackedLocal,
+                semanticModel);
+
+            if (leftContainsSource || rightContainsSource)
+            {
+                return (!leftContainsSource ||
+                        ReturnExpressionTransfersScopeForSource(
+                            binary.Left,
+                            scopeLocal,
+                            semanticModel,
+                            sourceInvocationSpan,
+                            trackedLocal)) &&
+                       (!rightContainsSource ||
+                        ReturnExpressionTransfersScopeForSource(
+                            binary.Right,
+                            scopeLocal,
+                            semanticModel,
+                            sourceInvocationSpan,
+                            trackedLocal));
+            }
+        }
+
+        return ExpressionTransfersScope(returnExpression, scopeLocal, semanticModel, sourceInvocationSpan);
+    }
+
+    private static bool ExpressionTransfersScope(
+        ExpressionSyntax expression,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel,
+        TextSpan sourceInvocationSpan)
+    {
+        expression = UnwrapParentheses(expression);
+        switch (expression)
+        {
+            case TupleExpressionSyntax tuple:
+                return tuple.Arguments.Any(argument =>
+                    ExpressionTransfersScope(argument.Expression, scopeLocal, semanticModel, sourceInvocationSpan));
+            case AnonymousObjectCreationExpressionSyntax anonymous:
+                return anonymous.Initializers.Any(initializer =>
+                    ExpressionTransfersScope(initializer.Expression, scopeLocal, semanticModel, sourceInvocationSpan));
+            case ConditionalExpressionSyntax conditional:
+                return ExpressionTransfersScope(conditional.WhenTrue, scopeLocal, semanticModel, sourceInvocationSpan) &&
+                       ExpressionTransfersScope(conditional.WhenFalse, scopeLocal, semanticModel, sourceInvocationSpan);
+            case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression):
+                return ExpressionTransfersScope(binary.Left, scopeLocal, semanticModel, sourceInvocationSpan) &&
+                       ExpressionTransfersScope(binary.Right, scopeLocal, semanticModel, sourceInvocationSpan);
+        }
+
+        foreach (var identifier in expression.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+        {
+            if (sourceInvocationSpan.Contains(identifier.SpanStart) ||
+                !ScopeIdentifierTransfersValue(identifier) ||
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    scopeLocal))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ReturnExpressionContainsSource(
+        ExpressionSyntax expression,
+        TextSpan sourceInvocationSpan,
+        ILocalSymbol? trackedLocal,
+        SemanticModel semanticModel)
+    {
+        if (sourceInvocationSpan.Length > 0 &&
+            expression.Span.Contains(sourceInvocationSpan.Start) &&
+            expression.Span.Contains(sourceInvocationSpan.End - 1))
+        {
+            return true;
+        }
+
+        return trackedLocal is not null &&
+               expression
+                   .DescendantNodesAndSelf()
+                   .OfType<IdentifierNameSyntax>()
+                   .Any(identifier =>
+                       SymbolEqualityComparer.Default.Equals(
+                           semanticModel.GetSymbolInfo(identifier).Symbol,
+                           trackedLocal));
+    }
+
+    private static bool ReturnExpressionContainsComposite(ExpressionSyntax? expression)
+    {
+        expression = expression is null ? null : UnwrapParentheses(expression);
+        return expression switch
+        {
+            TupleExpressionSyntax or AnonymousObjectCreationExpressionSyntax => true,
+            ConditionalExpressionSyntax conditional =>
+                ReturnExpressionContainsComposite(conditional.WhenTrue) ||
+                ReturnExpressionContainsComposite(conditional.WhenFalse),
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression) =>
+                ReturnExpressionContainsComposite(binary.Left) ||
+                ReturnExpressionContainsComposite(binary.Right),
+            _ => false
+        };
+    }
+
+    private static bool ScopeLocalIsDisposedBeforeEscape(
+        ILocalSymbol scopeLocal,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        ReturnStatementSyntax returnStatement,
+        int returnSpanStart) =>
+        ScopeLocalIsDisposedBefore(scopeLocal, executableBody, semanticModel, returnSpanStart) ||
+        ScopeLocalIsDisposedByEnclosingFinally(scopeLocal, semanticModel, returnStatement);
+
+    private static bool ScopeLocalIsUsingOwned(ILocalSymbol scopeLocal)
+    {
+        foreach (var syntaxReference in scopeLocal.DeclaringSyntaxReferences)
+        {
+            if (syntaxReference.GetSyntax() is not VariableDeclaratorSyntax variable)
+            {
+                continue;
+            }
+
+            if (variable.Parent?.Parent is LocalDeclarationStatementSyntax localDeclaration &&
+                (localDeclaration.UsingKeyword != default || localDeclaration.AwaitKeyword != default))
+            {
+                return true;
+            }
+
+            if (variable.Parent?.Parent is UsingStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ScopeLocalIsDisposedBefore(
+        ILocalSymbol scopeLocal,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int beforeSpanStart)
+    {
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node is InvocationExpressionSyntax invocation &&
+                invocation.SpanStart < beforeSpanStart &&
+                IsDisposeInvocationForLocal(invocation, scopeLocal, semanticModel) &&
+                DisposalCanReachReturn(invocation, beforeSpanStart))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ScopeLocalIsDisposedByEnclosingFinally(
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel,
+        ReturnStatementSyntax returnStatement)
+    {
+        foreach (var tryStatement in returnStatement.Ancestors().OfType<TryStatementSyntax>())
+        {
+            if (tryStatement.Finally is not { } finallyClause ||
+                !TryStatementBodyContainsReturn(tryStatement, returnStatement))
+            {
+                continue;
+            }
+
+            if (FinallyDefinitelyDisposesScope(finallyClause, scopeLocal, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryStatementBodyContainsReturn(
+        TryStatementSyntax tryStatement,
+        ReturnStatementSyntax returnStatement) =>
+        tryStatement.Block.Span.Contains(returnStatement.SpanStart) ||
+        tryStatement.Catches.Any(catchClause => catchClause.Block.Span.Contains(returnStatement.SpanStart));
+
+    private static bool FinallyDefinitelyDisposesScope(
+        FinallyClauseSyntax finallyClause,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel)
+    {
+        foreach (var statement in finallyClause.Block.Statements)
+        {
+            if (statement is ExpressionStatementSyntax expressionStatement &&
+                IsDirectDisposeExpression(expressionStatement.Expression, scopeLocal, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDirectDisposeExpression(
+        ExpressionSyntax expression,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel)
+    {
+        expression = UnwrapParentheses(expression);
+        if (expression is AwaitExpressionSyntax awaitExpression)
+        {
+            expression = UnwrapParentheses(awaitExpression.Expression);
+        }
+
+        return expression is InvocationExpressionSyntax invocation &&
+               IsDisposeInvocationForLocal(invocation, scopeLocal, semanticModel);
+    }
+
+    private static bool DisposalCanReachReturn(InvocationExpressionSyntax disposeInvocation, int returnSpanStart)
+    {
+        foreach (var ifStatement in disposeInvocation.Ancestors().OfType<IfStatementSyntax>())
+        {
+            var branch = ifStatement.Statement.Span.Contains(disposeInvocation.SpanStart)
+                ? ifStatement.Statement
+                : ifStatement.Else?.Statement.Span.Contains(disposeInvocation.SpanStart) == true
+                    ? ifStatement.Else.Statement
+                    : null;
+
+            if (branch is not null &&
+                returnSpanStart > ifStatement.Span.End &&
+                BranchExitsAfterDispose(branch, disposeInvocation.SpanStart))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool BranchExitsAfterDispose(StatementSyntax branch, int disposeSpanStart)
+    {
+        if (branch is BlockSyntax block)
+        {
+            return block.Statements.Any(statement =>
+                statement.SpanStart > disposeSpanStart &&
+                statement is ReturnStatementSyntax or ThrowStatementSyntax);
+        }
+
+        return branch.SpanStart > disposeSpanStart &&
+               branch is ReturnStatementSyntax or ThrowStatementSyntax;
+    }
+
+    private static bool ScopeIdentifierTransfersValue(IdentifierNameSyntax identifier)
+    {
+        SyntaxNode current = identifier;
+        while (true)
+        {
+            switch (current.Parent)
+            {
+                case ParenthesizedExpressionSyntax parenthesized
+                    when parenthesized.Expression == current:
+                    current = parenthesized;
+                    continue;
+                case PostfixUnaryExpressionSyntax postfix
+                    when postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression) &&
+                         postfix.Operand == current:
+                    current = postfix;
+                    continue;
+                case CastExpressionSyntax cast
+                    when cast.Expression == current:
+                    current = cast;
+                    continue;
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.CoalesceExpression) &&
+                         (binary.Left == current || binary.Right == current):
+                    current = binary;
+                    continue;
+                case ConditionalExpressionSyntax conditional
+                    when conditional.WhenTrue == current || conditional.WhenFalse == current:
+                    current = conditional;
+                    continue;
+                default:
+                    break;
+            }
+
+            break;
+        }
+
+        return current.Parent switch
+        {
+            ArgumentSyntax argument when argument.Expression == current &&
+                                         argument.Parent is TupleExpressionSyntax => true,
+            AnonymousObjectMemberDeclaratorSyntax member when member.Expression == current => true,
+            ReturnStatementSyntax returnStatement when returnStatement.Expression == current => true,
+            _ => false
+        };
     }
 
     private static bool SourceCanReachSink(
@@ -802,36 +1264,94 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     private static void ReportCompositeReturnEscapes(
         CompilationAnalysisContext context,
         ExpressionSyntax composite,
+        ExpressionSyntax returnedComposite,
         SemanticModel semanticModel,
+        HashSet<ILocalSymbol> scopeVariables,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes wellKnownTypes,
         Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, ILocalSymbol> serviceScopeVariables,
         Dictionary<ILocalSymbol, InvocationExpressionSyntax> capturedDelegateVariables,
-        HashSet<TextSpan> reportedSpans)
+        HashSet<TextSpan> reportedSpans,
+        ReturnStatementSyntax returnStatement,
+        SyntaxNode executableBody,
+        int returnSpanStart)
     {
         IEnumerable<ExpressionSyntax> elements = composite switch
         {
             TupleExpressionSyntax tuple => tuple.Arguments.Select(argument => argument.Expression),
             AnonymousObjectCreationExpressionSyntax anonymous =>
                 anonymous.Initializers.Select(initializer => initializer.Expression),
+            ConditionalExpressionSyntax conditional => [conditional.WhenTrue, conditional.WhenFalse],
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.CoalesceExpression) => [binary.Left, binary.Right],
             _ => Enumerable.Empty<ExpressionSyntax>()
         };
 
         foreach (var element in elements)
         {
-            if (element is TupleExpressionSyntax or AnonymousObjectCreationExpressionSyntax)
+            if (ReturnExpressionContainsComposite(element))
             {
                 ReportCompositeReturnEscapes(
-                    context, element, semanticModel, serviceVariables, capturedDelegateVariables, reportedSpans);
+                    context,
+                    element,
+                    element is ConditionalExpressionSyntax ||
+                    element is BinaryExpressionSyntax binary && binary.IsKind(SyntaxKind.CoalesceExpression)
+                        ? element
+                        : returnedComposite,
+                    semanticModel,
+                    scopeVariables,
+                    providerAliases,
+                    registrationCollector,
+                    wellKnownTypes,
+                    serviceVariables,
+                    serviceScopeVariables,
+                    capturedDelegateVariables,
+                    reportedSpans,
+                    returnStatement,
+                    executableBody,
+                    returnSpanStart);
                 continue;
             }
 
-            if (TryGetTrackedLocalReference(
+            if (TryGetInlineCompositeResolution(
+                    element,
+                    semanticModel,
+                    scopeVariables,
+                    providerAliases,
+                    registrationCollector,
+                    wellKnownTypes,
+                    out var inlineSource,
+                    out var inlineScope) &&
+                !ReturnTransfersScope(
+                    returnedComposite,
+                    inlineScope,
+                    semanticModel,
+                    inlineSource.Span,
+                    trackedLocal: null,
+                    returnStatement,
+                    executableBody,
+                    returnSpanStart))
+            {
+                ReportDiagnostic(context, inlineSource, "return", reportedSpans);
+            }
+            else if (TryGetTrackedLocalReference(
                     element,
                     semanticModel,
                     serviceVariables,
                     out var trackedSource,
                     out var trackedLocal))
             {
-                if (SourceCanReachSink(trackedSource, composite, trackedLocal, semanticModel))
+                if (SourceCanReachSink(trackedSource, composite, trackedLocal, semanticModel) &&
+                    !ReturnTransfersTrackedScope(
+                        returnedComposite,
+                        trackedSource,
+                        trackedLocal,
+                        serviceScopeVariables,
+                        semanticModel,
+                        returnStatement,
+                        executableBody,
+                        returnSpanStart))
                 {
                     ReportDiagnostic(context, trackedSource, "return", reportedSpans);
                 }
@@ -842,6 +1362,40 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 ReportDiagnostic(context, delegateSource, "return", reportedSpans);
             }
         }
+    }
+
+    private static bool TryGetInlineCompositeResolution(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        HashSet<ILocalSymbol> scopeVariables,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes wellKnownTypes,
+        out InvocationExpressionSyntax sourceInvocation,
+        out ILocalSymbol scopeSymbol)
+    {
+        sourceInvocation = null!;
+        scopeSymbol = null!;
+
+        foreach (var invocation in expression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (TryGetResolutionLifetime(
+                    invocation,
+                    semanticModel,
+                    scopeVariables,
+                    providerAliases,
+                    registrationCollector,
+                    wellKnownTypes,
+                    out var lifetime,
+                    out scopeSymbol) &&
+                ShouldReportScopedEscape(lifetime))
+            {
+                sourceInvocation = invocation;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsEscapingParameter(IParameterSymbol parameter) =>
@@ -2214,6 +2768,19 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     }
                 }
             }
+            else if (node is LocalDeclarationStatementSyntax manualLocalDecl)
+            {
+                foreach (var variable in manualLocalDecl.Declaration.Variables)
+                {
+                    if (UnwrapToInvocation(variable.Initializer?.Value) is { } invocation &&
+                        IsCreateScopeInvocation(invocation, semanticModel, wellKnownTypes) &&
+                        semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol localSymbol &&
+                        ScopeLocalIsManuallyDisposed(localSymbol, executableBody, semanticModel, variable.SpanStart))
+                    {
+                        scopeVariables.Add(localSymbol);
+                    }
+                }
+            }
 
             if (node is UsingStatementSyntax usingStmt &&
                 TryGetScopeSymbolFromUsingStatement(usingStmt, semanticModel, wellKnownTypes, out var scopeSymbol))
@@ -2223,6 +2790,50 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         return scopeVariables;
+    }
+
+    private static bool ScopeLocalIsManuallyDisposed(
+        ILocalSymbol scopeLocal,
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        int declarationSpanStart)
+    {
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node is InvocationExpressionSyntax invocation &&
+                invocation.SpanStart > declarationSpanStart &&
+                IsDisposeInvocationForLocal(invocation, scopeLocal, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDisposeInvocationForLocal(
+        InvocationExpressionSyntax invocation,
+        ILocalSymbol scopeLocal,
+        SemanticModel semanticModel)
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
+            methodSymbol.Name is not ("Dispose" or "DisposeAsync") ||
+            methodSymbol.Parameters.Length != 0)
+        {
+            return false;
+        }
+
+        ExpressionSyntax? receiver = invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Expression,
+            MemberBindingExpressionSyntax memberBinding => TryGetConditionalAccessReceiver(memberBinding),
+            _ => null,
+        };
+
+        return receiver is IdentifierNameSyntax identifier &&
+               SymbolEqualityComparer.Default.Equals(
+                   semanticModel.GetSymbolInfo(identifier).Symbol,
+                   scopeLocal);
     }
 
     private static Dictionary<ILocalSymbol, ILocalSymbol> CollectScopeProviderAliases(
@@ -2378,9 +2989,11 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes,
-        out ServiceLifetime? lifetime)
+        out ServiceLifetime? lifetime,
+        out ILocalSymbol scopeSymbol)
     {
         lifetime = null;
+        scopeSymbol = null!;
 
         if (!TryGetResolvedServiceInfo(
                 invocation,
@@ -2390,7 +3003,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 wellKnownTypes,
                 out var serviceType,
                 out var key,
-                out var isKeyed))
+                out var isKeyed,
+                out scopeSymbol))
         {
             return false;
         }
@@ -2412,11 +3026,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         WellKnownTypes wellKnownTypes,
         out ITypeSymbol? serviceType,
         out object? key,
-        out bool isKeyed)
+        out bool isKeyed,
+        out ILocalSymbol scopeSymbol)
     {
         serviceType = null;
         key = null;
         isKeyed = false;
+        scopeSymbol = null!;
 
         // The provider is the receiver of the resolution member itself: the member-access
         // expression, or -- for `provider?.GetRequiredService<T>()` member bindings -- the
@@ -2435,7 +3051,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 semanticModel,
                 scopeVariables,
                 providerAliases,
-                out _))
+                out scopeSymbol))
         {
             return false;
         }
@@ -2529,7 +3145,8 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     private static void TrackServiceAlias(
         SyntaxNode node,
         SemanticModel semanticModel,
-        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables)
+        Dictionary<ILocalSymbol, InvocationExpressionSyntax> serviceVariables,
+        Dictionary<ILocalSymbol, ILocalSymbol> serviceScopeVariables)
     {
         if (node is LocalDeclarationStatementSyntax localDeclaration)
         {
@@ -2545,6 +3162,10 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 }
 
                 serviceVariables[aliasLocal] = sourceInvocation;
+                if (serviceScopeVariables.TryGetValue(sourceLocal, out var sourceScope))
+                {
+                    serviceScopeVariables[aliasLocal] = sourceScope;
+                }
             }
         }
 
@@ -2564,10 +3185,15 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 !SourceCanReachSink(invocation, assignment, rightLocal, semanticModel))
             {
                 serviceVariables.Remove(leftLocal);
+                serviceScopeVariables.Remove(leftLocal);
                 return;
             }
 
             serviceVariables[leftLocal] = invocation;
+            if (serviceScopeVariables.TryGetValue(rightLocal, out var rightScope))
+            {
+                serviceScopeVariables[leftLocal] = rightScope;
+            }
         }
     }
 
