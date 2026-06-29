@@ -1,8 +1,8 @@
 # Analyzer Health Report
 
-**Date:** 2026-06-29 (latest hardening: Pass 20 DI020 ActivatorUtilities fidelity; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
-**Version:** 2.11.22 (release-bound DI020 ActivatorUtilities fidelity pass)
-**Test result:** 2026-06-29 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1795 passed, 0 failed, 0 skipped after the Pass 20 DI020 ActivatorUtilities fidelity hardening plus Codex review.
+**Date:** 2026-06-29 (latest hardening: Pass 21 DI008 keyed descriptor factories; deep re-audit was 2026-06-11 — see "2026-06-11 Deep Re-Audit" and Work Priority)
+**Version:** 2.11.23 (release-bound DI008 keyed descriptor factories pass)
+**Test result:** 2026-06-29 local Release verification passed: `dotnet restore && dotnet build --no-restore --configuration Release && dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage` reported 1799 passed, 0 failed, 0 skipped after the Pass 21 DI008 keyed descriptor factories hardening plus Codex review.
 **Analyzers:** 22 classes / 23 rule IDs (DI001-DI022 plus DI024; DI021 and DI022 share one analyzer, DI023 is reserved for Task.Run/WhenAll fan-out)
 **Code fix providers:** 14
 
@@ -17,7 +17,7 @@
 | DI005 | Async Disposal | Warn | 25 | 13 | 9.4 | 8.5 | Hardened: conditional-access receivers (`provider?.CreateScope()`) participate in detection alongside top-level async, nested async, and direct-resource fixer coverage; 2026-06-28: diagnostics require `AsyncServiceScope`/`CreateAsyncScope()` availability, explicit `IServiceScope` using declarations/statements rewrite to `var` before `await using`, and lambda/anonymous-method diagnostics name the async context |
 | DI006 | Static Provider Cache | Warn | 28 | 20 | 9.0 | 8.5 | Hardened: nested wrappers, provider dictionaries, holder detection, and static-context fixer guardrails; 2026-06-28: the remove-static fixer is also suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access |
 | DI007 | Service Locator | Info | 38 | -- | 8.7 | -- | Hardened: exact hosting/options/middleware/factory method checks and bounded provider-factory delegate suppression |
-| DI008 | Disposable Transient | Warn | 47 | 18 | 8.9 | 9.0 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, plain `TryAdd(ServiceDescriptor)` and `Replace(ServiceDescriptor)` descriptor extensions, typed `AddHttpClient` clients, open generics, descriptor collections, factory guardrails, allowlist option, and descriptor lifetime fixes |
+| DI008 | Disposable Transient | Warn | 51 | 18 | 9.0 | 9.0 | Hardened: `ServiceDescriptor`/`TryAdd*` shapes, plain `TryAdd(ServiceDescriptor)` and `Replace(ServiceDescriptor)` descriptor extensions, typed `AddHttpClient` clients, open generics, descriptor collections, keyed descriptor factories, factory guardrails, allowlist option, and descriptor lifetime fixes |
 | DI009 | Open Generic Mismatch | Warn | 27 | 15 | 9.0 | 8.7 | Hardened: known scoped framework services (IOptionsSnapshot<T>) participate in open-generic singleton captive analysis, explicit closed user registrations override the classifier, IEnumerable<T> captures take the worst lifetime across user and framework registrations, and IOptions<T>/IOptionsMonitor<T> stay quiet |
 | DI010 | Constructor Over-Injection | Info | 34 | -- | 8.9 | -- | Strongest info-level rule, public-constructor and factory-return precise; 2026-06-11 crash fix: cross-file method-group factories no longer AD0001, primary constructors pinned |
 | DI011 | Service Provider Injection | Info | 28 | -- | 8.9 | -- | Activation-constructor logic with middleware, factory-shape, singleton scope-factory, and non-public-constructor guardrails |
@@ -102,9 +102,9 @@ Informational by design, now context-aware via symbol checks rather than method-
 
 ### DI008 -- Disposable Transient (Warning)
 
-**Analyzer: 9.6/10** | Tests: 47 | **Fixer: 9.3/10** | Fix Tests: 18
+**Analyzer: 9.7/10** | Tests: 51 | **Fixer: 9.3/10** | Fix Tests: 18
 
-Strong coverage across generic registrations, `typeof`, keyed registrations, typed HTTP client registrations, open generics, `IDisposable`, and `IAsyncDisposable`. The latest pass extends detection to `AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`, `services.Add(ServiceDescriptor.Transient<...>())`, `services.Add(ServiceDescriptor.Describe(..., ServiceLifetime.Transient))`, `services.Add(new ServiceDescriptor(..., ServiceLifetime.Transient))`, plain `TryAdd(ServiceDescriptor.Transient<...>())` and `Replace(ServiceDescriptor.Transient<...>())`, `TryAddTransient` / `TryAddKeyedTransient` from `ServiceCollectionDescriptorExtensions`, and both single-descriptor and collection-shaped `TryAddEnumerable(...)` calls. Lifetime is recognised through both descriptor factory methods and explicit `ServiceLifetime` arguments, and factory shapes (lambdas, method groups, delegate-typed arguments) continue to suppress correctly inside the descriptor path. Receiver-type analysis on `services.Add(...)` filters out arbitrary `ICollection<T>.Add` calls. Named `serviceType:` / `implementationType:` mapping uses bound Roslyn parameters so out-of-order named overloads report the disposable implementation correctly. `dotnet_code_quality.DI008.allowed_disposable_types` supports intentional disposable-transient allowlists by simple or full type name. Fixer changes transient to scoped/singleton across direct `AddTransient`, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, and `new ServiceDescriptor(..., ServiceLifetime.Transient)` forms, with factory conversion still restricted to safe generic direct registrations.
+Strong coverage across generic registrations, `typeof`, keyed registrations, typed HTTP client registrations, open generics, `IDisposable`, and `IAsyncDisposable`. The latest pass extends detection to `AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`, `services.Add(ServiceDescriptor.Transient<...>())`, `services.Add(ServiceDescriptor.KeyedTransient<...>())`, `services.Add(ServiceDescriptor.Describe(..., ServiceLifetime.Transient))`, `services.Add(ServiceDescriptor.DescribeKeyed(..., ServiceLifetime.Transient))`, `services.Add(new ServiceDescriptor(..., ServiceLifetime.Transient))`, plain `TryAdd(ServiceDescriptor.Transient<...>())` and `Replace(ServiceDescriptor.Transient<...>())`, `TryAddTransient` / `TryAddKeyedTransient` from `ServiceCollectionDescriptorExtensions`, and both single-descriptor and collection-shaped `TryAddEnumerable(...)` calls. Lifetime is recognised through both descriptor factory methods and explicit `ServiceLifetime` arguments, and factory shapes (lambdas, method groups, delegate-typed arguments) continue to suppress correctly inside the descriptor path. Receiver-type analysis on `services.Add(...)` filters out arbitrary `ICollection<T>.Add` calls. Named `serviceType:` / `implementationType:` mapping uses bound Roslyn parameters so out-of-order named overloads report the disposable implementation correctly. `dotnet_code_quality.DI008.allowed_disposable_types` supports intentional disposable-transient allowlists by simple or full type name. Fixer changes transient to scoped/singleton across direct `AddTransient`, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, and `new ServiceDescriptor(..., ServiceLifetime.Transient)` forms, with factory conversion still restricted to safe generic direct registrations.
 
 ### DI009 -- Open Generic Lifetime Mismatch (Warning)
 
@@ -243,7 +243,7 @@ Scope-per-invocation rewrite driven entirely by the diagnostic properties bag: i
 | Metric | Value |
 |--------|-------|
 | Total tests | 1763 passed locally on 2026-06-28 Release verification |
-| Analyzer tests | Historical 2026-06-11 breakdown not re-counted by directory; DI002 analyzer tests now 102; DI003 analyzer tests now 139; DI008 analyzer tests now 47; DI012 analyzer tests now 125; DI015 analyzer tests now 132; DI018 analyzer tests now 39 |
+| Analyzer tests | Historical 2026-06-11 breakdown not re-counted by directory; DI002 analyzer tests now 102; DI003 analyzer tests now 139; DI008 analyzer tests now 51; DI012 analyzer tests now 125; DI015 analyzer tests now 132; DI018 analyzer tests now 39 |
 | Code fix tests | Historical 2026-06-11 breakdown not re-counted by directory; DI015 fixer tests now 17 |
 | Infrastructure tests | Historical 2026-06-11 breakdown not re-counted by directory; RegistrationCollector descriptor coverage now 5 + 2 rule-level tests |
 | Analyzer mean score | 8.7/10 (2026-06-11 re-audit; DI002 raised to 9.0 on 2026-06-27, full mean not recomputed) |
@@ -531,12 +531,12 @@ One pass, four collector gaps — the 2.10.6 Replace-bug class; unblinds DI012/D
 - ~~**DI019-4 (FN, M)**~~ **Fixed.** Top-level `Program.cs` local declarations now receive safe sync or async scope-wrapping fixes when the resolved service stays within the top-level executable body.
 
 ### ~~Pass 20 — DI020: ActivatorUtilities fidelity~~ ✅ Done 2026-06-29 (2.11.22)
-- ~~**DI020-1 (FP, S)**~~ **Fixed.** Explicit `UseMiddleware` arguments now bind only through identity, reference, or boxing conversions, so numeric widening, nullable lifting, and user-defined conversions no longer make unselected greedy scoped constructors report.
+- ~~**DI020-1 (FP, S)**~~ **Fixed.** Explicit `UseMiddleware` arguments now bind only through identity plus implicit reference or boxing conversions, so numeric widening, nullable lifting, user-defined conversions, and non-implicit reference conversions no longer make unselected greedy scoped constructors report.
 - ~~**DI020-2 (FN, M)**~~ **Fixed.** Explicit `new object[] { ... }` params-array arguments are expanded before constructor selection, so scoped dependencies in the selected middleware constructor report.
 - ~~**DI020-3 (message-quality, S)**~~ **Fixed.** Middleware from referenced assemblies now reports at the triggering `UseMiddleware` invocation when constructor parameter source locations are unavailable.
 
-### Pass 21 — DI008: keyed descriptor factories
-- **DI008-2 (FN, M)** — `ServiceDescriptor.KeyedTransient`/`KeyedScoped`/`KeyedSingleton`/`DescribeKeyed` are unrecognized in the descriptor paths (name switch, `DI008_DisposableTransientAnalyzer.cs:364-371`). (DI008-1 lands in Pass 12.)
+### ~~Pass 21 — DI008: keyed descriptor factories~~ ✅ Done 2026-06-29 (2.11.23)
+- ~~**DI008-2 (FN, M)**~~ **Fixed.** `ServiceDescriptor.KeyedTransient`/`KeyedScoped`/`KeyedSingleton`/`DescribeKeyed` now share the descriptor lifetime path, so keyed transient descriptors report while keyed scoped/singleton descriptors stay quiet.
 
 ### Pass 22 — DI007: factory-boundary precision
 - **DI007-1 (FP, M)** — provider-factory lambdas inside `ServiceDescriptor.*` creators (incl. under `TryAddEnumerable`) report: `IsFactoryBoundaryInvocation` accepts only Add*/TryAdd* extensions and Options methods (`DI007_ServiceLocatorAntiPatternAnalyzer.cs:279-287`).
