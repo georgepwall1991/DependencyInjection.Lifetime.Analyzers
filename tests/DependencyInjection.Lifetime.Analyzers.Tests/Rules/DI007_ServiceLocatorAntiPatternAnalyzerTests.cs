@@ -235,6 +235,95 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     }
 
     [Fact]
+    public async Task GetRequiredService_TypeofLocal_InRegularMethod_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork()
+                {
+                    var serviceType = typeof(IMyService);
+                    var service = (IMyService)_provider.GetRequiredService(serviceType);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(17, 35, 17, 76)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetService_TypeofLocal_InConstructor_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IMyService _service;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    var serviceType = typeof(IMyService);
+                    _service = (IMyService)provider.GetService(serviceType)!;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(12, 32, 12, 64)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
+    public async Task GetRequiredService_TypeofLocalWithNestedDeferredAssignment_ReportsResolvedTypeName()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    Action mutate = () => serviceType = Type.GetType(typeName)!;
+                    var service = (IMyService)_provider.GetRequiredService(serviceType);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceLocatorAntiPattern)
+                .WithSpan(18, 35, 18, 76)
+                .WithArguments("IMyService"));
+    }
+
+    [Fact]
     public async Task GetRequiredKeyedService_Typeof_InRegularMethod_ReportsResolvedTypeName()
     {
         var source = Usings + """
@@ -441,6 +530,152 @@ public class DI007_ServiceLocatorAntiPatternAnalyzerTests
     #endregion
 
     #region Should Not Report Diagnostic
+
+    [Fact]
+    public async Task GetRequiredService_ReassignedTypeofLocal_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    serviceType = Type.GetType(typeName)!;
+                    var service = _provider.GetRequiredService(serviceType);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_RefReassignedTypeofLocal_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    Replace(ref serviceType, typeName);
+                    var service = _provider.GetRequiredService(serviceType);
+                }
+
+                private static void Replace(ref Type serviceType, string typeName)
+                {
+                    serviceType = Type.GetType(typeName)!;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_TupleReassignedTypeofLocal_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    (serviceType, _) = (Type.GetType(typeName)!, 0);
+                    var service = _provider.GetRequiredService(serviceType);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_CapturedTypeofLocalReassignedBeforeLambdaInvocation_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    Action resolve = () => _provider.GetRequiredService(serviceType);
+                    serviceType = Type.GetType(typeName)!;
+                    resolve();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetRequiredService_CapturedTypeofLocalReassignedBeforeLocalFunctionInvocation_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceProvider _provider;
+
+                public MyClass(IServiceProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void DoWork(string typeName)
+                {
+                    var serviceType = typeof(IMyService);
+                    void Resolve()
+                    {
+                        _provider.GetRequiredService(serviceType);
+                    }
+
+                    serviceType = Type.GetType(typeName)!;
+                    Resolve();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI007_ServiceLocatorAntiPatternAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 
     [Fact]
     public async Task GetRequiredService_InFactoryRegistration_NoDiagnostic()

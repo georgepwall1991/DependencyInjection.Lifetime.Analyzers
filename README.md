@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.36
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.37
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.36">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.37">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.36" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.37" />
 ```
 
 Then reference it from the project file:
@@ -469,7 +469,7 @@ public sealed class MyService
 
 **Code Fix:** No. This is usually architectural refactoring.
 
-DI007 stays quiet in recognized composition/factory boundaries: DI registration factories, value-returning `Create*`/`Build*` factory methods, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
+DI007 follows generic resolutions, direct `typeof(...)` arguments, and local `Type` aliases initialized from `typeof(...)` when they are not reassigned before the resolution call. It stays quiet in recognized composition/factory boundaries: DI registration factories, value-returning `Create*`/`Build*` factory methods, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
 
 ---
 

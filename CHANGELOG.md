@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.37] - 2026-06-29
+
+### Fixed
+
+- **DI007 local Type aliases**: non-generic service-locator diagnostics now resolve same-scope local `Type` aliases initialized from `typeof(...)` while staying quiet once the alias is reassigned.
+
 ## [2.11.36] - 2026-06-29
 
 ### Fixed
