@@ -184,7 +184,7 @@ Repository and unit-of-work abstractions are reported when their registered life
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()` (including `scope?.Dispose()` for scope locals), services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Uses in branches mutually exclusive with the disposal — whether the dispose is explicit or a `using` statement/declaration — stay quiet, and `out` arguments are writes rather than uses (the rewritten local is fresh afterwards), while `ref` arguments still report.
+**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()` (including `scope?.Dispose()` for scope locals), wrapped use receivers such as `service!.DoWork()` and `((IService)service).DoWork()`, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Uses in branches mutually exclusive with the disposal — whether the dispose is explicit or a `using` statement/declaration — stay quiet, and `out` arguments are writes rather than uses (the rewritten local is fresh afterwards), while `ref` arguments still report.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
