@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.22] - 2026-06-29
+
+### Fixed
+
+- **DI020 ActivatorUtilities fidelity**: explicit `UseMiddleware` arguments now match constructor parameters only through identity, implicit reference, or implicit boxing conversions, avoiding false middleware scoped-capture diagnostics from numeric widening, nullable lifting, user-defined conversions, or non-implicit reference conversions that ActivatorUtilities would not use.
+- **DI020 explicit params arrays**: `new object[] { ... }` arguments passed to `UseMiddleware` are expanded before constructor selection, so scoped dependencies in the actually selected middleware constructor are reported.
+- **DI020 metadata middleware diagnostics**: middleware types loaded from referenced assemblies now report at the triggering `UseMiddleware` call when constructor parameter source locations are unavailable.
+
 ## [2.11.21] - 2026-06-29
 
 ### Fixed
