@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.38] - 2026-06-29
+
+### Fixed
+
+- **DI008 keyed descriptor Type keys**: keyed `ServiceDescriptor` transient diagnostics now bind descriptor arguments by Roslyn parameter names, so a `typeof(...)` service key is not mistaken for the implementation type.
+
 ## [2.11.37] - 2026-06-29
 
 ### Fixed

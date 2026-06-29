@@ -414,7 +414,8 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                 return (null, null, false);
             }
 
-            var (implType, hasFactory) = ExtractImplFromDescriptorCtorArgs(creation.ArgumentList, semanticModel);
+            var constructor = semanticModel.GetSymbolInfo(creation).Symbol as IMethodSymbol;
+            var (implType, hasFactory) = ExtractImplFromDescriptorCtorArgs(creation.ArgumentList, semanticModel, constructor);
             return (lifetime, implType, hasFactory);
         }
 
@@ -499,17 +500,18 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
         if (method.IsGenericMethod && method.TypeArguments.Length > 0)
         {
             var implIndex = method.TypeArguments.Length > 1 ? 1 : 0;
-            var (_, hasFactory) = ExtractImplFromDescriptorCtorArgs(invocation.ArgumentList, semanticModel);
+            var (_, hasFactory) = ExtractImplFromDescriptorCtorArgs(invocation.ArgumentList, semanticModel, method);
             return (method.TypeArguments[implIndex] as INamedTypeSymbol, hasFactory);
         }
 
         // Non-generic: walk argument list for typeof(...) and factory lambdas
-        return ExtractImplFromDescriptorCtorArgs(invocation.ArgumentList, semanticModel);
+        return ExtractImplFromDescriptorCtorArgs(invocation.ArgumentList, semanticModel, method);
     }
 
     private static (INamedTypeSymbol? implementationType, bool hasFactory) ExtractImplFromDescriptorCtorArgs(
         ArgumentListSyntax? argumentList,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel,
+        IMethodSymbol? method = null)
     {
         if (argumentList is null)
         {
@@ -538,6 +540,13 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                 var typeInfo = semanticModel.GetTypeInfo(typeofExpr.Type);
                 if (typeInfo.Type is INamedTypeSymbol named)
                 {
+                    if (name is null &&
+                        method is not null &&
+                        TryGetArgumentParameter(method, arg, i, out var parameter))
+                    {
+                        name = parameter.Name;
+                    }
+
                     if (name == "implementationType")
                     {
                         implementationType = named;
@@ -545,6 +554,10 @@ public sealed class DI008_DisposableTransientAnalyzer : DiagnosticAnalyzer
                     else if (name == "serviceType")
                     {
                         serviceType = named;
+                    }
+                    else if (name == "serviceKey")
+                    {
+                        continue;
                     }
                     else
                     {

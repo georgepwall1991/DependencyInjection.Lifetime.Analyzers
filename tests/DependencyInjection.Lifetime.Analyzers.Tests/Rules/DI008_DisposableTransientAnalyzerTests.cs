@@ -788,6 +788,41 @@ public class DI008_DisposableTransientAnalyzerTests
     }
 
     [Fact]
+    public async Task ServiceCollectionAdd_ServiceDescriptorKeyedTransientTypeOfKey_ReportsImplementationDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public sealed class ServiceKey { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.KeyedTransient(
+                        typeof(IMyService),
+                        typeof(ServiceKey),
+                        typeof(DisposableService)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.ReferenceAssembliesWithKeyedDi,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(15, 9, 18, 40)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
     public async Task ServiceCollectionAdd_ServiceDescriptorKeyedScoped_NoDiagnostic()
     {
         var source = """
@@ -846,6 +881,42 @@ public class DI008_DisposableTransientAnalyzerTests
             AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.DisposableTransient)
                 .WithSpan(14, 9, 18, 40)
+                .WithArguments("DisposableService", "IDisposable"));
+    }
+
+    [Fact]
+    public async Task ServiceCollectionAdd_ServiceDescriptorDescribeKeyed_TypeOfKey_ReportsImplementationDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IMyService { }
+            public sealed class ServiceKey { }
+            public class DisposableService : IMyService, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.Add(ServiceDescriptor.DescribeKeyed(
+                        typeof(IMyService),
+                        typeof(ServiceKey),
+                        typeof(DisposableService),
+                        ServiceLifetime.Transient));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>.ReferenceAssembliesWithKeyedDi,
+            AnalyzerVerifier<DI008_DisposableTransientAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.DisposableTransient)
+                .WithSpan(15, 9, 19, 40)
                 .WithArguments("DisposableService", "IDisposable"));
     }
 
