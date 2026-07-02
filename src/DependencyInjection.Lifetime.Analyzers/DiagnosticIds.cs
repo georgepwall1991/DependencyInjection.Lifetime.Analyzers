@@ -119,4 +119,11 @@ public static class DiagnosticIds
     /// long-running execution loop instead of once per iteration.
     /// </summary>
     public const string HostedServiceScopePerIteration = "DI024";
+
+    /// <summary>
+    /// DI025: Shorter-lived service subscribes to an event on a longer-lived publisher
+    /// without a matching unsubscription, rooting every subscriber instance in the
+    /// publisher's delegate list.
+    /// </summary>
+    public const string EventSubscriptionLeak = "DI025";
 }

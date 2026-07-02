@@ -34,6 +34,7 @@ For the latest full rule content, see:
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
+| [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 
 ---
 
@@ -902,3 +903,54 @@ Manually constructed instances are never reported by the scoped tier — the sin
 **Guardrails:** Scopes created inside the loop (including inner batch loops reusing the outer iteration's scope), startup scopes consumed entirely before the loop, dispose-and-recreate scopes reassigned inside the loop, hoisted scopes whose every resolution is provably singleton, bounded loops (including plain `foreach` batches and `await foreach` over non-channel sources — a repository-style `ReadAllAsync` is a bounded enumeration, so only `System.Threading.Channels.ChannelReader<T>` sources qualify), shutdown paths (`StopAsync` and the stopping/stopped lifecycle callbacks), hoisted services with unprovable lifetimes, fields assigned anywhere outside field initializers/constructors/execution methods (a helper method may reassign per iteration), locals whose closest pre-loop write is a null/default clear, and provider aliases repointed inside the loop all stay silent.
 
 **Code Fix:** No. Moving the scope into the loop body is a statement-level rewrite with disposal implications; apply it manually.
+
+## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
+
+**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a longer-lived publisher and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. A `-=` written with a different lambda instance is recognized as the classic no-op unsubscribe bug: the subscription still reports and the diagnostic points at the ineffective `-=`.
+
+**Why it matters:** the publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots every subscriber instance the container ever creates — the most common managed memory leak in .NET, plus stale handlers executing against released state on every event raise.
+
+> **Explain Like I'm Ten:** If every visitor ties a balloon to the school gate and nobody ever unties one, the gate ends up dragging a thousand balloons.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<IMessageBus, MessageBus>();
+services.AddTransient<OrderHandler>();
+
+public class OrderHandler
+{
+    private readonly IMessageBus _bus;
+
+    public OrderHandler(IMessageBus bus)
+    {
+        _bus = bus;
+        _bus.MessageReceived += OnMessage; // every OrderHandler instance stays rooted
+    }
+
+    private void OnMessage(object sender, EventArgs e) { }
+}
+```
+
+**Better pattern:**
+
+```csharp
+public class OrderHandler : IDisposable
+{
+    private readonly IMessageBus _bus;
+
+    public OrderHandler(IMessageBus bus)
+    {
+        _bus = bus;
+        _bus.MessageReceived += OnMessage;
+    }
+
+    public void Dispose() => _bus.MessageReceived -= OnMessage;
+
+    private void OnMessage(object sender, EventArgs e) { }
+}
+```
+
+**Guardrails:** singleton subscribers stay silent (a population of one cannot grow the delegate list — hosted services subscribing to singleton buses are the canonical safe shape), as do scoped/transient publishers, any matching `-=` anywhere in the type (Dispose, `StopAsync`, teardown methods, the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas, publishers assigned from `new` or ordinary method parameters, chained receivers (`_dep.Inner.Event`), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations with unknown implementation types.
+
+**Code Fix:** Yes. When the handler is a method group, the receiver is a field/property or static event, and the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable`), the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` on a type that lacks it is intentionally not offered — adding disposability to a transient changes container tracking behavior (see DI008).

@@ -696,6 +696,26 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI025",
+      "ruleId": "DI025",
+      "claims": [
+        {
+          "filePathContains": "DI025/EventSubscriptionLeakExamples.cs",
+          "anchor": "_bus.MessageReceived += OnMessage;",
+          "occurrence": 1,
+          "ruleId": "DI025",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI025/EventSubscriptionLeakExamples.cs",
+          "anchor": "bus.MessageReceived += (sender, e) => _count++;",
+          "ruleId": "DI025",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

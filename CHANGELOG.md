@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-07-02
+
+### Added
+
+- **DI025 (new rule): event subscription on longer-lived publisher without unsubscribe** — a transient/scoped service that subscribes an instance-capturing handler to an event on an injected singleton dependency or a static event, with no matching `-=` anywhere in the type, now reports. The publisher's delegate list roots every subscriber instance the container ever creates — the classic .NET event-handler memory leak, caught lifetime-aware. Handler identity is symbol-based, so the no-op unsubscribe bug (`-=` with a distinct but textually identical lambda) still reports and points at the ineffective `-=`; override chains are normalized so a base-class `-=` pairs with a derived-class `+=`. Singleton subscribers, matching unsubscriptions, static/`this`-free handlers, non-injected publishers, and unknown shapes all stay silent.
+- **DI025 code fix**: when the handler is a method group whose receiver resolves inside Dispose and the type already declares a block-bodied `Dispose()`/`Dispose(bool)`/`DisposeAsync()` implementing the matching disposal interface, the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` is intentionally not offered (it would change container disposal tracking and trip DI008 on transients).
+
 ## [2.11.42] - 2026-06-29
 
 ### Fixed

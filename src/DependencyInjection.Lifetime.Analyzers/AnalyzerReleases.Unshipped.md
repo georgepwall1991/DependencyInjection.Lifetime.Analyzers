@@ -5,3 +5,4 @@
 
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
+DI025 | DependencyInjection | Warning | Shorter-lived service subscribes to an event on a longer-lived publisher (singleton dependency or static event) without a matching unsubscription

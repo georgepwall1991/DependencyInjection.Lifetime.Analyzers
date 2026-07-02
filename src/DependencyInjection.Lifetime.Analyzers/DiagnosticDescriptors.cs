@@ -342,4 +342,48 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A hosted service that resolves a scoped service once before its long-running execution loop reuses the same instance (such as an EF Core DbContext) for the entire process lifetime, accumulating state and serving stale data. Create a scope inside the loop body and resolve the service from it so each iteration gets a fresh instance.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI025 (method-group tier): a shorter-lived service subscribes an instance handler to an
+    /// event on a longer-lived publisher (singleton dependency or static event) without a
+    /// matching unsubscription. Reported at compilation end because the lifetime proof needs
+    /// the full registration picture.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeak = new(
+        id: DiagnosticIds.EventSubscriptionLeak,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as {1} but subscribes handler '{2}' to event '{3}' on {4} and never unsubscribes. The publisher's delegate list keeps every '{0}' instance alive. Unsubscribe with -= when the subscriber is released (for example in Dispose).",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A transient or scoped service that subscribes to an event on a singleton dependency or a static event outlives nothing — but its subscription does. The longer-lived publisher's delegate list roots every subscriber instance the container ever creates, leaking memory on every resolution and invoking stale handlers against released state. Store the subscription and remove it with -= when the subscriber is released.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI025 (anonymous-handler tier): the subscribed handler is an anonymous function that is
+    /// never stored, so no equivalent -= can ever remove it.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeakAnonymousHandler = new(
+        id: DiagnosticIds.EventSubscriptionLeak,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as {1} but subscribes an anonymous handler to event '{2}' on {3}. The handler is never stored, so it can never be unsubscribed, and the publisher's delegate list keeps every '{0}' instance alive. Store the handler in a field and remove it with -= when the subscriber is released.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A transient or scoped service subscribes an anonymous handler to an event on a singleton dependency or a static event without storing the delegate. An anonymous handler that is not stored can never be unsubscribed — a -= with a textually identical lambda creates a different delegate instance and removes nothing. Store the handler in a field and use the same reference for += and -=.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI025 (ineffective-unsubscribe tier): a -= exists for the same event but uses a distinct
+    /// anonymous delegate instance, so it never removes the subscribed handler.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeakIneffectiveUnsubscribe = new(
+        id: DiagnosticIds.EventSubscriptionLeak,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as {1} and subscribes an anonymous handler to event '{2}' on {3}, but the corresponding -= creates a new delegate instance and never removes the handler. Store the delegate once and use the same reference for += and -=.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A -= with an anonymous function that is textually identical to the subscribed handler creates a different delegate instance, so the removal is a no-op and the longer-lived publisher keeps rooting every subscriber instance. Store the delegate once (in a field) and use the same reference on both the += and -= sides.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

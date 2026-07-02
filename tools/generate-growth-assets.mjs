@@ -178,6 +178,13 @@ const ruleSampleConfig = {
       { label: "Sample app scope-per-iteration pattern", symbol: "Good_ScopePerIterationPollingService" },
     ],
   },
+  DI025: {
+    samplePath: "samples/SampleApp/Diagnostics/DI025/EventSubscriptionLeakExamples.cs",
+    highlights: [
+      { label: "Sample app event-subscription leak warning", symbol: "Bad_SubscribeWithoutUnsubscribe" },
+      { label: "Sample app unsubscribe-in-dispose pattern", symbol: "Good_UnsubscribeInDispose" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(

@@ -5318,4 +5318,53 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     #endregion
+    #region DI025 boundary
+
+    [Fact]
+    public async Task ThisBoundSubscriptionInRegisteredType_IsDi025Territory_NoDi002Diagnostic()
+    {
+        // A registered service subscribing its own instance handler to an injected
+        // singleton's event is DI025's line; no scope block or scope-resolved service
+        // is involved, so DI002 stays silent.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IBus
+            {
+                event EventHandler MessageReceived;
+            }
+
+            public class Bus : IBus
+            {
+                public event EventHandler MessageReceived;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IBus, Bus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    #endregion
 }
