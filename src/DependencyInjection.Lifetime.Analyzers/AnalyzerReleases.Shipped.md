@@ -79,6 +79,20 @@ Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI024 | DependencyInjection | Warning | Hosted service creates a scope or resolves a scoped service outside its long-running execution loop
 
+## Release 2.12.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI025 | DependencyInjection | Warning | Shorter-lived service subscribes to an event on a longer-lived publisher (singleton dependency or static event) without a matching unsubscription
+
+## Release 2.13.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI026 | DependencyInjection | Info | Transient service subscribes to an event on a scoped publisher without a matching unsubscription (scope-bounded tier of DI025)
+
 ## Release 2.1.2
 
 ### Changed Rules

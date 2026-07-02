@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-07-02
+
+### Added
+
+- **DI025/DI026 chained receivers** — closes the rules' top documented false negative. `_host.Bus.Changed += OnChanged` now reports when the publisher is a *stable projection* of an injected chain root: the lifetime proof anchors on the chain root's registration (singleton root → DI025 Warning, scoped root → DI026 Info), and every intermediate segment must provably return the same instance for the root's whole lifetime — a readonly field, a get-only auto-property, or a getter returning one, with interface segments proven through the root's registered implementation types. Settable, computed, metadata-only, and virtual segments keep the chain silent (a `_factory.Bus` computed getter handing out a fresh bus per access must not warn), as do factory registrations with no visible implementation type and chain roots that are not provably injected. Unsubscription matching is path-aware: a `-=` through the *same* chain suppresses (constructor-parameter roots unify with the field they are stored into), while a `-=` through a different root still reports.
+- **DI025/DI026 code fix for chained receivers**: the mirrored-`-=` Dispose insertion now covers field/property-rooted chains — the cloned chain re-resolves verbatim inside Dispose. Constructor-parameter-rooted chains are refused (the cloned statement would not compile), matching the existing direct-receiver gate.
+
 ## [2.13.0] - 2026-07-02
 
 ### Added

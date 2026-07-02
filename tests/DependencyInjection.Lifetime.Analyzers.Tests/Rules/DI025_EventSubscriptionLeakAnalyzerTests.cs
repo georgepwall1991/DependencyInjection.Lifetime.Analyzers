@@ -40,6 +40,27 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
 
         """;
 
+    private const string ChainedShell = """
+        using System;
+        using Microsoft.Extensions.DependencyInjection;
+
+        public class Inner
+        {
+            public event EventHandler Changed;
+        }
+
+        public interface IOuter
+        {
+            Inner Inner { get; }
+        }
+
+        public class Outer : IOuter
+        {
+            public Inner Inner { get; } = new Inner();
+        }
+
+        """;
+
     // ----------------------------------------------------------------
     // Positives: transient/scoped subscriber, singleton/static publisher
     // ----------------------------------------------------------------
@@ -1023,27 +1044,11 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
     // ----------------------------------------------------------------
 
     [Fact]
-    public async Task ChainedReceiver_NoDiagnostic()
+    public async Task ChainedReceiver_InterfaceSegmentWithStableImplementation_ReportsDiagnostic()
     {
-        var source = """
-            using System;
-            using Microsoft.Extensions.DependencyInjection;
-
-            public class Inner
-            {
-                public event EventHandler Changed;
-            }
-
-            public interface IOuter
-            {
-                Inner Inner { get; }
-            }
-
-            public class Outer : IOuter
-            {
-                public Inner Inner { get; } = new Inner();
-            }
-
+        // The chain root (IOuter) is a registered singleton and its registered implementation
+        // projects the leaf through a get-only auto-property, so the publisher is singleton-rooted.
+        var source = ChainedShell + """
             public static class Registrations
             {
                 public static void Configure(IServiceCollection services)
@@ -1057,14 +1062,14 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
             {
                 public OrderHandler(IOuter outer)
                 {
-                    outer.Inner.Changed += OnChanged;
+                    [|outer.Inner.Changed += OnChanged|];
                 }
 
                 private void OnChanged(object sender, EventArgs e) { }
             }
             """;
 
-        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
     [Fact]
@@ -1820,6 +1825,606 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
                 }
 
                 private void OnFlushed(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    // ----------------------------------------------------------------
+    // Chained receivers: the publisher is reached through intermediate
+    // members of an injected root. The lifetime proof anchors on the
+    // chain root's registration; every intermediate segment must be a
+    // stable projection (readonly field, get-only auto-property, or a
+    // getter returning one) or the subscription stays silent.
+    // ----------------------------------------------------------------
+
+    private const string ChainedSingletonRegistrations = """
+        public static class Registrations
+        {
+            public static void Configure(IServiceCollection services)
+            {
+                services.AddSingleton<Outer>();
+                services.AddTransient<OrderHandler>();
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task ChainedReceiver_ReadonlyFieldRootGetOnlyAutoPropertySegment_ReportsDiagnostic()
+    {
+        var source = ChainedShell + ChainedSingletonRegistrations + """
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer) => _outer = outer;
+
+                public void Initialize()
+                {
+                    [|_outer.Inner.Changed += OnChanged|];
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_ExpressionBodiedGetterReturningReadonlyField_ReportsDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Outer
+            {
+                private readonly Inner _inner = new Inner();
+
+                public Inner Inner => _inner;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    [|_outer.Inner.Changed += OnChanged|];
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_GetterReturningMemberThroughMutableReceiver_NoDiagnostic()
+    {
+        // The getter returns a stable-looking member reached through a reassignable holder
+        // field; the projection is not provably the same instance for the root's lifetime.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Holder
+            {
+                public Inner Inner { get; } = new Inner();
+            }
+
+            public class Outer
+            {
+                private Holder _holder = new Holder();
+
+                public Inner Inner => _holder.Inner;
+
+                public void Reset() => _holder = new Holder();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_GetterReturningVirtualProperty_NoDiagnostic()
+    {
+        // The getter returns a virtual get-only auto-property that a registered derived
+        // implementation overrides with a computed getter; the projection is not stable.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Outer
+            {
+                public virtual Inner Slot { get; } = new Inner();
+
+                public Inner Inner => Slot;
+            }
+
+            public class DerivedOuter : Outer
+            {
+                public override Inner Slot => new Inner();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer, DerivedOuter>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_SettablePropertySegment_NoDiagnostic()
+    {
+        // A settable segment can be repointed at any time; the leaf is not provably
+        // rooted by the singleton, so the subscription stays silent.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Outer
+            {
+                public Inner Inner { get; set; } = new Inner();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_ComputedGetterSegment_NoDiagnostic()
+    {
+        // A computed getter may hand out a fresh instance per access (the factory
+        // shape); subscribing to it roots nothing, so it must stay silent.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Outer
+            {
+                public Inner Inner => new Inner();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_MetadataSegment_NoDiagnostic()
+    {
+        // Lazy<T>.Value is a metadata property whose stability cannot be inspected
+        // from source; unprovable segments stay silent.
+        var source = Usings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Lazy<Bus>>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly Lazy<Bus> _lazyBus;
+
+                public OrderHandler(Lazy<Bus> lazyBus)
+                {
+                    _lazyBus = lazyBus;
+                    _lazyBus.Value.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_RootFieldAssignedFromNew_NoDiagnostic()
+    {
+        // The chain root is not provably injected (initializer-carrying field), so
+        // the root's registration rank proves nothing about this instance.
+        var source = ChainedShell + ChainedSingletonRegistrations + """
+            public class OrderHandler
+            {
+                private readonly Outer _outer = new Outer();
+
+                public OrderHandler()
+                {
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_MatchingChainedUnsubscribeInDispose_NoDiagnostic()
+    {
+        var source = ChainedShell + ChainedSingletonRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    _outer.Inner.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_UnsubscribeThroughDifferentRoot_StillReportsDiagnostic()
+    {
+        var source = ChainedShell + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _first;
+                private readonly Outer _second;
+
+                public OrderHandler(Outer first, Outer second)
+                {
+                    _first = first;
+                    _second = second;
+                    [|_first.Inner.Changed += OnChanged|];
+                }
+
+                public void Dispose()
+                {
+                    _second.Inner.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_CtorParamRootUnifiedWithFieldChainUnsubscribe_NoDiagnostic()
+    {
+        // Subscribing through the constructor parameter and unsubscribing through the
+        // field it is stored into is the same chain; canonicalization must unify them.
+        var source = ChainedShell + ChainedSingletonRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    outer.Inner.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    _outer.Inner.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_ScopedRoot_TransientSubscriber_ReportsInfoTierDiagnostic()
+    {
+        var source = ChainedShell + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IOuter, Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IOuter outer)
+                {
+                    {|DI026:outer.Inner.Changed += OnChanged|};
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BaseQualifiedInjectedReceiver_ReportsDiagnostic()
+    {
+        // base.Bus is the root member itself, not a chain segment; the direct-receiver
+        // classification must survive the chained-receiver walk.
+        var source = Usings + SingletonBusTransientHandlerRegistrations + """
+            public abstract class HandlerBase
+            {
+                protected HandlerBase(IBus bus) => Bus = bus;
+
+                protected IBus Bus { get; }
+            }
+
+            public class OrderHandler : HandlerBase
+            {
+                public OrderHandler(IBus bus) : base(bus)
+                {
+                    [|base.Bus.MessageReceived += OnMessage|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_ConcreteParamSubscribeInterfaceFieldUnsubscribe_NoDiagnostic()
+    {
+        // The += binds Outer.Inner through the concrete ctor parameter while the -= binds
+        // IOuter.Inner through the interface-typed field the parameter is stored into; the
+        // segments are the same projection, so the pair must suppress.
+        var source = ChainedShell + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler : IDisposable
+            {
+                private readonly IOuter _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    outer.Inner.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    _outer.Inner.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_OpenGenericInterfaceRoot_ConstructedInjection_ReportsDiagnostic()
+    {
+        // The root's lifetime already resolves through the open-generic fallback (DI017
+        // precedent); the segment stability proof must follow the same fallback and check
+        // the constructed implementation's member.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public interface IOuter<T>
+            {
+                Inner Inner { get; }
+            }
+
+            public class Outer<T> : IOuter<T>
+            {
+                public Inner Inner { get; } = new Inner();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(IOuter<>), typeof(Outer<>));
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IOuter<int> outer)
+                {
+                    [|outer.Inner.Changed += OnChanged|];
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ChainedReceiver_FactoryRegisteredInterfaceRoot_NoDiagnostic()
+    {
+        // The interface segment can only be proven stable through a registered
+        // implementation type; a factory registration with no syntactically visible
+        // implementation leaves the segment unprovable.
+        var source = ChainedShell + """
+            public static class Registrations
+            {
+                public static IOuter CreateOuter(IServiceProvider provider) => new Outer();
+
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IOuter>(sp => CreateOuter(sp));
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IOuter outer)
+                {
+                    outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
             }
             """;
 
