@@ -73,6 +73,31 @@ public class Startup
     }
 
     [Fact]
+    public async Task UserDefinedImplicitConversionMismatch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public interface IService {}
+public sealed class Adapter : IService {}
+public sealed class Convertible
+{
+    public static implicit operator Adapter(Convertible value) => new Adapter();
+}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(typeof(IService), typeof(Convertible))|};
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("Convertible", "IService"));
+    }
+
+    [Fact]
     public async Task InvalidOpenGenericMismatch_ReportsDiagnostic()
     {
         var source = Usings + @"
