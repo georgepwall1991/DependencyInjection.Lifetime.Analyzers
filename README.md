@@ -20,7 +20,7 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, cir
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
 - Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 22 focused diagnostics, with code fixes where safe and unambiguous.
+- Ships 23 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.11.43
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.12.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.43">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.12.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.11.43" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.12.0" />
 ```
 
 Then reference it from the project file:
@@ -106,6 +106,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Middleware lifetime validation | `DI020` |
 | Concurrency-unsafe captures in message handlers, timers, and parallel loops | `DI021`, `DI022` |
 | Hosted-service scope-per-iteration validation | `DI024` |
+| Cross-lifetime event-subscription leak detection | `DI025` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -139,6 +140,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations)
 - [DI022: Service Instance Reused Across Handler Invocations](#di022-service-instance-reused-across-handler-invocations)
 - [DI024: Hosted Service Creates Scope Outside Execution Loop](#di024-hosted-service-creates-scope-outside-execution-loop)
+- [DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -170,6 +172,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
+| [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 
 ---
 
@@ -1066,9 +1069,58 @@ DI024 stays quiet when the code already does the right thing: a scope created in
 
 ---
 
+## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
+
+**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
+
+**Why it matters:** This is the most common managed memory leak in .NET. The publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots **every subscriber instance the container ever creates** — each resolution leaks a handler plus the full object graph behind it, and every event raise fans out to thousands of stale handlers executing against released state. Catching it precisely requires knowing registration lifetimes, which is exactly what this analyzer knows and lifetime-blind analyzers cannot.
+
+```csharp
+services.AddSingleton<IMessageBus, MessageBus>();
+services.AddTransient<OrderHandler>();
+
+public class OrderHandler
+{
+    private readonly IMessageBus _bus;
+
+    public OrderHandler(IMessageBus bus)
+    {
+        _bus = bus;
+        _bus.MessageReceived += OnMessage; // DI025: every OrderHandler instance stays rooted by the singleton
+    }
+
+    private void OnMessage(object sender, EventArgs e) { }
+}
+```
+
+**Correct pattern:** store the subscription and remove it when the subscriber is released:
+
+```csharp
+public class OrderHandler : IDisposable
+{
+    private readonly IMessageBus _bus;
+
+    public OrderHandler(IMessageBus bus)
+    {
+        _bus = bus;
+        _bus.MessageReceived += OnMessage;
+    }
+
+    public void Dispose() => _bus.MessageReceived -= OnMessage;
+
+    private void OnMessage(object sender, EventArgs e) { }
+}
+```
+
+DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), scoped or transient publishers, any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, chained receivers (`_dep.Inner.Event`), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown.
+
+**Code Fix:** Yes. When the handler is a method group, the receiver is a field/property or static event, and the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable` — a method merely named Dispose is never called by the container), the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` on a type that lacks it is intentionally not offered — adding disposability to a transient changes container tracking behavior (see DI008) and deserves a deliberate decision.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI024`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI025`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

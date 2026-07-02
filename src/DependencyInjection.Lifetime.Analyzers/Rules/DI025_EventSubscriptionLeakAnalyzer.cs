@@ -1,0 +1,955 @@
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace DependencyInjection.Lifetime.Analyzers.Rules;
+
+/// <summary>
+/// DI025: a shorter-lived registered service subscribes an instance-capturing handler to an
+/// event on a longer-lived publisher (an injected singleton dependency or a static event)
+/// without a matching unsubscription. The publisher's delegate list roots every subscriber
+/// instance the container ever creates.
+/// </summary>
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
+{
+    private const int StaticPublisherRank = 3;
+    private const string AnonymousHandlerDisplay = "an anonymous handler";
+
+    /// <inheritdoc />
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
+        ImmutableArray.Create(
+            DiagnosticDescriptors.EventSubscriptionLeak,
+            DiagnosticDescriptors.EventSubscriptionLeakAnonymousHandler,
+            DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe);
+
+    /// <inheritdoc />
+    public override void Initialize(AnalysisContext context)
+    {
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
+        context.EnableConcurrentExecution();
+
+        context.RegisterCompilationStartAction(compilationContext =>
+        {
+            var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
+            if (registrationCollector is null)
+            {
+                return;
+            }
+
+            var lifetimeClassifier = new KnownServiceLifetimeClassifier(
+                WellKnownTypes.Create(compilationContext.Compilation));
+
+            var subscriptions = new ConcurrentBag<EventAccessRecord>();
+            var removals = new ConcurrentBag<EventAccessRecord>();
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext => registrationCollector.AnalyzeInvocation(
+                    (InvocationExpressionSyntax)syntaxContext.Node,
+                    syntaxContext.SemanticModel),
+                SyntaxKind.InvocationExpression);
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext => CollectEventAccess(syntaxContext, subscriptions, isSubscription: true),
+                SyntaxKind.AddAssignmentExpression);
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext => CollectEventAccess(syntaxContext, removals, isSubscription: false),
+                SyntaxKind.SubtractAssignmentExpression);
+
+            compilationContext.RegisterCompilationEndAction(endContext =>
+                ReportLeakedSubscriptions(endContext, registrationCollector, lifetimeClassifier, subscriptions, removals));
+        });
+    }
+
+    private enum ReceiverKind
+    {
+        Unknown,
+        StaticEvent,
+        InjectedMember,
+        ConstructorParameter
+    }
+
+    private enum HandlerKind
+    {
+        Unknown,
+        InstanceMethodGroup,
+        AnonymousCapturingInstance,
+        StoredDelegateMember
+    }
+
+    private sealed class EventAccessRecord
+    {
+        public EventAccessRecord(
+            INamedTypeSymbol containingType,
+            IEventSymbol eventSymbol,
+            ReceiverKind receiverKind,
+            ISymbol? receiverRoot,
+            INamedTypeSymbol? publisherType,
+            HandlerKind handlerKind,
+            ISymbol? handlerIdentity,
+            string handlerDisplay,
+            Location location)
+        {
+            ContainingType = containingType;
+            EventSymbol = eventSymbol;
+            ReceiverKind = receiverKind;
+            ReceiverRoot = receiverRoot;
+            PublisherType = publisherType;
+            HandlerKind = handlerKind;
+            HandlerIdentity = handlerIdentity;
+            HandlerDisplay = handlerDisplay;
+            Location = location;
+        }
+
+        public INamedTypeSymbol ContainingType { get; }
+        public IEventSymbol EventSymbol { get; }
+        public ReceiverKind ReceiverKind { get; }
+        public ISymbol? ReceiverRoot { get; }
+        public INamedTypeSymbol? PublisherType { get; }
+        public HandlerKind HandlerKind { get; }
+        public ISymbol? HandlerIdentity { get; }
+        public string HandlerDisplay { get; }
+        public Location Location { get; }
+    }
+
+    private static void CollectEventAccess(
+        SyntaxNodeAnalysisContext context,
+        ConcurrentBag<EventAccessRecord> records,
+        bool isSubscription)
+    {
+        var assignment = (AssignmentExpressionSyntax)context.Node;
+        var semanticModel = context.SemanticModel;
+
+        if (semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol is not IEventSymbol eventSymbol)
+        {
+            return;
+        }
+
+        var containingType = GetEnclosingNamedType(assignment, semanticModel, context.CancellationToken);
+        if (containingType is null)
+        {
+            return;
+        }
+
+        var (receiverKind, receiverRoot, publisherType) = ClassifyReceiver(
+            assignment.Left, eventSymbol, containingType, semanticModel, context.CancellationToken);
+
+        var (handlerKind, handlerIdentity, handlerDisplay) = ClassifyHandler(
+            assignment.Right, containingType, semanticModel, context.CancellationToken);
+
+        if (isSubscription &&
+            (receiverKind == ReceiverKind.Unknown || handlerKind == HandlerKind.Unknown))
+        {
+            // Silence-on-unknown: an unprovable subscription is never a candidate. Removals of
+            // unknown shape are still recorded so they can suppress or feed the ineffective-
+            // unsubscribe arm when their identity happens to resolve.
+            return;
+        }
+
+        records.Add(new EventAccessRecord(
+            containingType,
+            eventSymbol,
+            receiverKind,
+            receiverRoot,
+            publisherType,
+            handlerKind,
+            handlerIdentity,
+            handlerDisplay,
+            assignment.GetLocation()));
+    }
+
+    private static INamedTypeSymbol? GetEnclosingNamedType(
+        SyntaxNode node,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var typeDeclaration = node.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+        return typeDeclaration is null
+            ? null
+            : semanticModel.GetDeclaredSymbol(typeDeclaration, cancellationToken);
+    }
+
+    private static (ReceiverKind Kind, ISymbol? Root, INamedTypeSymbol? PublisherType) ClassifyReceiver(
+        ExpressionSyntax left,
+        IEventSymbol eventSymbol,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (eventSymbol.IsStatic)
+        {
+            return (ReceiverKind.StaticEvent, null, eventSymbol.ContainingType);
+        }
+
+        if (left is not MemberAccessExpressionSyntax memberAccess)
+        {
+            // Unqualified event access binds to an event on `this`; a subscriber holding
+            // itself is not a cross-lifetime edge.
+            return (ReceiverKind.Unknown, null, null);
+        }
+
+        var receiverExpression = UnwrapReceiver(memberAccess.Expression);
+        var receiverSymbol = semanticModel.GetSymbolInfo(receiverExpression, cancellationToken).Symbol;
+
+        if (receiverSymbol is ILocalSymbol local)
+        {
+            receiverSymbol = ResolveLocalAlias(local, receiverExpression, semanticModel, cancellationToken);
+        }
+
+        switch (receiverSymbol)
+        {
+            case IFieldSymbol field when !field.IsStatic && IsTypeOrBase(containingType, field.ContainingType):
+                return field.Type is INamedTypeSymbol fieldType
+                    ? (ReceiverKind.InjectedMember, field, fieldType)
+                    : (ReceiverKind.Unknown, null, null);
+
+            case IPropertySymbol property when !property.IsStatic && IsTypeOrBase(containingType, property.ContainingType):
+                return property.Type is INamedTypeSymbol propertyType
+                    ? (ReceiverKind.InjectedMember, property, propertyType)
+                    : (ReceiverKind.Unknown, null, null);
+
+            case IParameterSymbol parameter when
+                parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } ctor &&
+                IsTypeOrBase(containingType, ctor.ContainingType):
+                return parameter.Type is INamedTypeSymbol parameterType
+                    ? (ReceiverKind.ConstructorParameter, parameter, parameterType)
+                    : (ReceiverKind.Unknown, null, null);
+
+            default:
+                return (ReceiverKind.Unknown, null, null);
+        }
+    }
+
+    private static ExpressionSyntax UnwrapReceiver(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppressed:
+                    expression = suppressed.Operand;
+                    continue;
+                case MemberAccessExpressionSyntax thisAccess when thisAccess.Expression is ThisExpressionSyntax:
+                    return thisAccess.Name;
+                default:
+                    return expression;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves a simple same-method local alias of an injected member (<c>var bus = _bus;</c>).
+    /// The alias qualifies only when its single declaration initializer is a plain member or
+    /// parameter reference and the local is never reassigned in the enclosing member body.
+    /// </summary>
+    private static ISymbol? ResolveLocalAlias(
+        ILocalSymbol local,
+        ExpressionSyntax use,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (local.DeclaringSyntaxReferences.Length != 1 ||
+            local.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken) is not VariableDeclaratorSyntax declarator ||
+            declarator.Initializer is null)
+        {
+            return null;
+        }
+
+        var enclosingBody = ExecutableBodyOf(declarator);
+        if (enclosingBody is null || ExecutableBodyOf(use) != enclosingBody)
+        {
+            return null;
+        }
+
+        foreach (var candidate in enclosingBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (semanticModel.GetSymbolInfo(candidate.Left, cancellationToken).Symbol is ILocalSymbol assigned &&
+                SymbolEqualityComparer.Default.Equals(assigned, local))
+            {
+                return null;
+            }
+        }
+
+        var initializer = UnwrapReceiver(declarator.Initializer.Value);
+        var initializerSymbol = semanticModel.GetSymbolInfo(initializer, cancellationToken).Symbol;
+        return initializerSymbol is IFieldSymbol or IPropertySymbol or IParameterSymbol
+            ? initializerSymbol
+            : null;
+    }
+
+    private static SyntaxNode? ExecutableBodyOf(SyntaxNode node) =>
+        node.AncestorsAndSelf().FirstOrDefault(ancestor =>
+            ancestor is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or
+                LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax);
+
+    private static (HandlerKind Kind, ISymbol? Identity, string Display) ClassifyHandler(
+        ExpressionSyntax handler,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        handler = UnwrapHandler(handler);
+
+        if (handler is AnonymousFunctionExpressionSyntax anonymousFunction)
+        {
+            return AnonymousFunctionCapturesInstance(anonymousFunction, containingType, semanticModel, cancellationToken)
+                ? (HandlerKind.AnonymousCapturingInstance, null, AnonymousHandlerDisplay)
+                : (HandlerKind.Unknown, null, AnonymousHandlerDisplay);
+        }
+
+        var handlerSymbol = semanticModel.GetSymbolInfo(handler, cancellationToken).Symbol;
+
+        switch (handlerSymbol)
+        {
+            case IMethodSymbol method when !method.IsStatic && IsTypeOrBase(containingType, method.ContainingType):
+                if (handler is MemberAccessExpressionSyntax methodAccess &&
+                    methodAccess.Expression is not ThisExpressionSyntax)
+                {
+                    // `other.OnMessage` roots `other`, not the subscriber instance.
+                    return (HandlerKind.Unknown, null, string.Empty);
+                }
+
+                return (HandlerKind.InstanceMethodGroup, NormalizeMethod(method), method.Name);
+
+            case IFieldSymbol field when !field.IsStatic && IsTypeOrBase(containingType, field.ContainingType):
+                return StoredDelegateCapturesInstance(field, containingType, semanticModel.Compilation, cancellationToken)
+                    ? (HandlerKind.StoredDelegateMember, field, field.Name)
+                    : (HandlerKind.Unknown, null, string.Empty);
+
+            case ILocalSymbol storedLocal:
+                return StoredLocalCapturesInstance(storedLocal, containingType, semanticModel, cancellationToken)
+                    ? (HandlerKind.StoredDelegateMember, storedLocal, storedLocal.Name)
+                    : (HandlerKind.Unknown, null, string.Empty);
+
+            default:
+                return (HandlerKind.Unknown, null, string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Normalizes an override chain to its root declaration so a subscription through a
+    /// derived override matches an unsubscription written against the base declaration.
+    /// </summary>
+    private static IMethodSymbol NormalizeMethod(IMethodSymbol method)
+    {
+        while (method.OverriddenMethod is not null)
+        {
+            method = method.OverriddenMethod;
+        }
+
+        return method;
+    }
+
+    private static ExpressionSyntax UnwrapHandler(ExpressionSyntax handler)
+    {
+        while (true)
+        {
+            switch (handler)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    handler = parenthesized.Expression;
+                    continue;
+                case CastExpressionSyntax cast:
+                    handler = cast.Expression;
+                    continue;
+                case ObjectCreationExpressionSyntax creation when
+                    creation.ArgumentList is { Arguments.Count: 1 }:
+                    handler = creation.ArgumentList.Arguments[0].Expression;
+                    continue;
+                default:
+                    return handler;
+            }
+        }
+    }
+
+    private static bool AnonymousFunctionCapturesInstance(
+        AnonymousFunctionExpressionSyntax anonymousFunction,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        foreach (var node in anonymousFunction.DescendantNodes())
+        {
+            if (node is ThisExpressionSyntax)
+            {
+                return true;
+            }
+
+            if (node is not IdentifierNameSyntax identifier)
+            {
+                continue;
+            }
+
+            // A qualified name (`receiver.Member`) does not bind through the implicit `this`.
+            if (identifier.Parent is MemberAccessExpressionSyntax memberAccess &&
+                memberAccess.Name == identifier &&
+                memberAccess.Expression is not ThisExpressionSyntax)
+            {
+                continue;
+            }
+
+            var symbol = semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol;
+            if (symbol is IFieldSymbol or IPropertySymbol or IMethodSymbol or IEventSymbol &&
+                !symbol.IsStatic &&
+                IsTypeOrBase(containingType, symbol.ContainingType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A delegate field counts as instance-capturing only when it has at least one initializer
+    /// or assignment in source and every one of them provably binds an instance method group of
+    /// the subscriber or an instance-capturing anonymous function.
+    /// </summary>
+    private static bool StoredDelegateCapturesInstance(
+        IFieldSymbol field,
+        INamedTypeSymbol containingType,
+        Compilation compilation,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var sawValue = false;
+
+        foreach (var (expression, model) in EnumerateMemberValueSources(field, compilation, cancellationToken))
+        {
+            sawValue = true;
+            if (!ExpressionCapturesInstance(expression, containingType, model, cancellationToken))
+            {
+                return false;
+            }
+        }
+
+        return sawValue;
+    }
+
+    private static bool StoredLocalCapturesInstance(
+        ILocalSymbol local,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (local.DeclaringSyntaxReferences.Length != 1 ||
+            local.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken) is not VariableDeclaratorSyntax declarator)
+        {
+            return false;
+        }
+
+        var enclosingBody = ExecutableBodyOf(declarator);
+        if (enclosingBody is null)
+        {
+            return false;
+        }
+
+        var sawValue = false;
+
+        if (declarator.Initializer is not null)
+        {
+            sawValue = true;
+            if (!ExpressionCapturesInstance(declarator.Initializer.Value, containingType, semanticModel, cancellationToken))
+            {
+                return false;
+            }
+        }
+
+        foreach (var assignment in enclosingBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            if (semanticModel.GetSymbolInfo(assignment.Left, cancellationToken).Symbol is not ILocalSymbol assigned ||
+                !SymbolEqualityComparer.Default.Equals(assigned, local))
+            {
+                continue;
+            }
+
+            sawValue = true;
+            if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+                !ExpressionCapturesInstance(assignment.Right, containingType, semanticModel, cancellationToken))
+            {
+                return false;
+            }
+        }
+
+        return sawValue;
+    }
+
+    private static bool ExpressionCapturesInstance(
+        ExpressionSyntax expression,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        expression = UnwrapHandler(expression);
+
+        if (expression is AnonymousFunctionExpressionSyntax anonymousFunction)
+        {
+            return AnonymousFunctionCapturesInstance(anonymousFunction, containingType, semanticModel, cancellationToken);
+        }
+
+        return semanticModel.GetSymbolInfo(expression, cancellationToken).Symbol is IMethodSymbol
+        {
+            IsStatic: false
+        } method && IsTypeOrBase(containingType, method.ContainingType);
+    }
+
+    private static SemanticModel GetSemanticModel(
+        SyntaxTree syntaxTree,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+    {
+        #pragma warning disable RS1030 // Compilation-end analysis needs models for foreign trees.
+        return semanticModelsByTree.GetOrAdd(syntaxTree, tree => compilation.GetSemanticModel(tree));
+        #pragma warning restore RS1030
+    }
+
+    private static IEnumerable<(ExpressionSyntax Expression, SemanticModel Model)> EnumerateMemberValueSources(
+        ISymbol member,
+        Compilation compilation,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var modelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+
+        SemanticModel ModelFor(SyntaxTree tree) => GetSemanticModel(tree, compilation, modelsByTree);
+
+        foreach (var reference in member.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax(cancellationToken) is VariableDeclaratorSyntax { Initializer: not null } declarator)
+            {
+                yield return (declarator.Initializer.Value, ModelFor(declarator.SyntaxTree));
+            }
+        }
+
+        foreach (var typeReference in member.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            {
+                continue;
+            }
+
+            var model = ModelFor(typeDeclaration.SyntaxTree);
+            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
+                if (target is null || !SymbolEqualityComparer.Default.Equals(target, member))
+                {
+                    continue;
+                }
+
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                {
+                    // Compound writes make the member's value unprovable.
+                    yield return (assignment, model);
+                    continue;
+                }
+
+                yield return (assignment.Right, model);
+            }
+        }
+    }
+
+    private static bool IsTypeOrBase(INamedTypeSymbol type, INamedTypeSymbol candidateOwner)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, candidateOwner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool AreRelatedTypes(INamedTypeSymbol left, INamedTypeSymbol right) =>
+        IsTypeOrBase(left, right) || IsTypeOrBase(right, left);
+
+    private static void ReportLeakedSubscriptions(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        KnownServiceLifetimeClassifier lifetimeClassifier,
+        ConcurrentBag<EventAccessRecord> subscriptions,
+        ConcurrentBag<EventAccessRecord> removals)
+    {
+        if (subscriptions.IsEmpty)
+        {
+            return;
+        }
+
+        var registrations = registrationCollector.AllRegistrations.ToList();
+        var subscriberRanks = BuildSubscriberRankMap(registrations);
+        var removalList = removals.ToList();
+        var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+
+        foreach (var subscription in subscriptions)
+        {
+            if (!subscriberRanks.TryGetValue(subscription.ContainingType, out var subscriberRank) ||
+                subscriberRank >= RankOf(ServiceLifetime.Singleton))
+            {
+                continue;
+            }
+
+            // v1 reports only provably process-lifetime publishers: singleton registrations and
+            // static events. A scoped publisher's growth is bounded by its scope and is a
+            // documented false-negative edge (future DI026 tier).
+            var publisherRank = ResolvePublisherRank(subscription, registrations, lifetimeClassifier);
+            if (publisherRank is null ||
+                publisherRank < RankOf(ServiceLifetime.Singleton) ||
+                publisherRank <= subscriberRank)
+            {
+                continue;
+            }
+
+            if (IsEventSourcePublisher(subscription.EventSymbol.ContainingType))
+            {
+                continue;
+            }
+
+            var canonicalRoot = CanonicalizeReceiverRoot(subscription, context.Compilation, semanticModelsByTree, context.CancellationToken);
+            if (subscription.ReceiverKind == ReceiverKind.InjectedMember &&
+                !MemberIsProvablyInjected(subscription, context.Compilation, semanticModelsByTree, context.CancellationToken))
+            {
+                continue;
+            }
+
+            EventAccessRecord? ineffectiveAnonymousRemoval = null;
+            var suppressed = false;
+
+            foreach (var removal in removalList)
+            {
+                if (!AreRelatedTypes(subscription.ContainingType, removal.ContainingType) ||
+                    !SymbolEqualityComparer.Default.Equals(subscription.EventSymbol, removal.EventSymbol))
+                {
+                    continue;
+                }
+
+                var removalRoot = CanonicalizeReceiverRoot(removal, context.Compilation, semanticModelsByTree, context.CancellationToken);
+                var rootsMatch = subscription.ReceiverKind == ReceiverKind.StaticEvent
+                    ? removal.ReceiverKind == ReceiverKind.StaticEvent
+                    : removalRoot is not null &&
+                      canonicalRoot is not null &&
+                      SymbolEqualityComparer.Default.Equals(removalRoot, canonicalRoot);
+
+                if (!rootsMatch)
+                {
+                    continue;
+                }
+
+                if (HandlerIdentitiesMatch(subscription, removal))
+                {
+                    suppressed = true;
+                    break;
+                }
+
+                if (subscription.HandlerKind == HandlerKind.AnonymousCapturingInstance &&
+                    removal.HandlerIdentity is null &&
+                    removal.HandlerKind is HandlerKind.AnonymousCapturingInstance or HandlerKind.Unknown &&
+                    IsAnonymousRemoval(removal))
+                {
+                    ineffectiveAnonymousRemoval ??= removal;
+                }
+            }
+
+            if (suppressed)
+            {
+                continue;
+            }
+
+            context.ReportDiagnostic(CreateDiagnostic(subscription, subscriberRank, ineffectiveAnonymousRemoval));
+        }
+    }
+
+    private static bool IsAnonymousRemoval(EventAccessRecord removal) =>
+        removal.HandlerKind == HandlerKind.AnonymousCapturingInstance ||
+        removal.HandlerDisplay == "an anonymous handler";
+
+    private static bool HandlerIdentitiesMatch(EventAccessRecord subscription, EventAccessRecord removal) =>
+        subscription.HandlerIdentity is not null &&
+        removal.HandlerIdentity is not null &&
+        SymbolEqualityComparer.Default.Equals(subscription.HandlerIdentity, removal.HandlerIdentity);
+
+    private static Diagnostic CreateDiagnostic(
+        EventAccessRecord subscription,
+        int subscriberRank,
+        EventAccessRecord? ineffectiveAnonymousRemoval)
+    {
+        var lifetimeText = subscriberRank == RankOf(ServiceLifetime.Transient) ? "transient" : "scoped";
+        var publisherText = subscription.ReceiverKind == ReceiverKind.StaticEvent
+            ? $"the static event publisher '{subscription.EventSymbol.ContainingType.Name}'"
+            : $"the singleton service '{subscription.PublisherType?.Name}'";
+
+        if (subscription.HandlerKind == HandlerKind.AnonymousCapturingInstance)
+        {
+            if (ineffectiveAnonymousRemoval is not null)
+            {
+                return Diagnostic.Create(
+                    DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe,
+                    subscription.Location,
+                    additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                    subscription.ContainingType.Name,
+                    lifetimeText,
+                    subscription.EventSymbol.Name,
+                    publisherText);
+            }
+
+            return Diagnostic.Create(
+                DiagnosticDescriptors.EventSubscriptionLeakAnonymousHandler,
+                subscription.Location,
+                subscription.ContainingType.Name,
+                lifetimeText,
+                subscription.EventSymbol.Name,
+                publisherText);
+        }
+
+        return Diagnostic.Create(
+            DiagnosticDescriptors.EventSubscriptionLeak,
+            subscription.Location,
+            subscription.ContainingType.Name,
+            lifetimeText,
+            subscription.HandlerDisplay,
+            subscription.EventSymbol.Name,
+            publisherText);
+    }
+
+    private static int RankOf(ServiceLifetime lifetime) => lifetime switch
+    {
+        ServiceLifetime.Transient => 0,
+        ServiceLifetime.Scoped => 1,
+        _ => 2
+    };
+
+    private static Dictionary<INamedTypeSymbol, int> BuildSubscriberRankMap(List<ServiceRegistration> registrations)
+    {
+        var ranks = new Dictionary<INamedTypeSymbol, int>(SymbolEqualityComparer.Default);
+
+        foreach (var registration in registrations)
+        {
+            var implementationType = registration.ImplementationType;
+            if (implementationType is null)
+            {
+                continue;
+            }
+
+            var rank = RankOf(registration.Lifetime);
+            for (var current = implementationType;
+                 current is not null && current.SpecialType != SpecialType.System_Object;
+                 current = current.BaseType)
+            {
+                if (!ranks.TryGetValue(current, out var existing) || rank > existing)
+                {
+                    ranks[current] = rank;
+                }
+            }
+        }
+
+        return ranks;
+    }
+
+    /// <summary>
+    /// Resolves the publisher's lifetime rank. Static events rank above every registration.
+    /// Registered publishers use the most conservative (shortest-lived) registration for the
+    /// service type; unregistered publishers fall back to the known framework classifier.
+    /// </summary>
+    private static int? ResolvePublisherRank(
+        EventAccessRecord subscription,
+        List<ServiceRegistration> registrations,
+        KnownServiceLifetimeClassifier lifetimeClassifier)
+    {
+        if (subscription.ReceiverKind == ReceiverKind.StaticEvent)
+        {
+            return StaticPublisherRank;
+        }
+
+        if (subscription.PublisherType is null)
+        {
+            return null;
+        }
+
+        // Exact closed registrations win over open-generic fallbacks (the DI017 precedent);
+        // multiple matches take the most conservative (shortest-lived) lifetime.
+        var rank = MinimumRegisteredRank(registrations, subscription.PublisherType);
+
+        if (rank is null &&
+            subscription.PublisherType.IsGenericType &&
+            !subscription.PublisherType.IsUnboundGenericType)
+        {
+            rank = MinimumRegisteredRank(
+                registrations,
+                subscription.PublisherType.ConstructUnboundGenericType());
+        }
+
+        if (rank is not null)
+        {
+            return rank;
+        }
+
+        return lifetimeClassifier.TryGetLifetime(subscription.PublisherType, isKeyed: false, out var knownLifetime)
+            ? RankOf(knownLifetime)
+            : null;
+    }
+
+    private static int? MinimumRegisteredRank(
+        List<ServiceRegistration> registrations,
+        INamedTypeSymbol serviceType)
+    {
+        int? rank = null;
+        foreach (var registration in registrations)
+        {
+            if (registration.IsKeyed ||
+                !SymbolEqualityComparer.Default.Equals(registration.ServiceType, serviceType))
+            {
+                continue;
+            }
+
+            var registrationRank = RankOf(registration.Lifetime);
+            if (rank is null || registrationRank < rank)
+            {
+                rank = registrationRank;
+            }
+        }
+
+        return rank;
+    }
+
+    private static bool IsEventSourcePublisher(INamedTypeSymbol publisherType)
+    {
+        for (var current = publisherType; current is not null; current = current.BaseType)
+        {
+            if (current.Name == "EventSource" &&
+                current.ContainingNamespace.ToDisplayString() == "System.Diagnostics.Tracing")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Unifies constructor-parameter receivers with the field or property the parameter is
+    /// stored into, so a subscription through the parameter matches an unsubscription through
+    /// the field.
+    /// </summary>
+    private static ISymbol? CanonicalizeReceiverRoot(
+        EventAccessRecord record,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (record.ReceiverKind != ReceiverKind.ConstructorParameter ||
+            record.ReceiverRoot is not IParameterSymbol parameter)
+        {
+            return record.ReceiverRoot;
+        }
+
+        ISymbol? storedInto = null;
+
+        foreach (var typeReference in parameter.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            {
+                continue;
+            }
+
+            var model = GetSemanticModel(typeDeclaration.SyntaxTree, compilation, semanticModelsByTree);
+            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+                    model.GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken).Symbol
+                        is not IParameterSymbol sourceParameter ||
+                    !SymbolEqualityComparer.Default.Equals(sourceParameter, parameter))
+                {
+                    continue;
+                }
+
+                var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
+                if (target is IFieldSymbol or IPropertySymbol)
+                {
+                    if (storedInto is not null &&
+                        !SymbolEqualityComparer.Default.Equals(storedInto, target))
+                    {
+                        return record.ReceiverRoot;
+                    }
+
+                    storedInto = target;
+                }
+            }
+        }
+
+        return storedInto ?? record.ReceiverRoot;
+    }
+
+    /// <summary>
+    /// An injected-member publisher qualifies only when every source-visible write to the
+    /// member is a simple assignment from an instance-constructor parameter of the member's
+    /// containing type, and at least one such write exists. Any initializer, compound write,
+    /// or non-parameter source makes the publisher's origin unprovable.
+    /// </summary>
+    private static bool MemberIsProvablyInjected(
+        EventAccessRecord subscription,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (subscription.ReceiverRoot is not ISymbol member)
+        {
+            return false;
+        }
+
+        var sawInjectedWrite = false;
+
+        foreach (var reference in member.DeclaringSyntaxReferences)
+        {
+            var syntax = reference.GetSyntax(cancellationToken);
+            if (syntax is VariableDeclaratorSyntax { Initializer: not null } ||
+                syntax is PropertyDeclarationSyntax { Initializer: not null })
+            {
+                return false;
+            }
+        }
+
+        foreach (var typeReference in member.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            {
+                continue;
+            }
+
+            var model = GetSemanticModel(typeDeclaration.SyntaxTree, compilation, semanticModelsByTree);
+            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
+                if (target is null || !SymbolEqualityComparer.Default.Equals(target, member))
+                {
+                    continue;
+                }
+
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                {
+                    return false;
+                }
+
+                if (model.GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken).Symbol
+                        is not IParameterSymbol parameter ||
+                    parameter.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } ctor ||
+                    !SymbolEqualityComparer.Default.Equals(ctor.ContainingType, member.ContainingType))
+                {
+                    return false;
+                }
+
+                sawInjectedWrite = true;
+            }
+        }
+
+        return sawInjectedWrite;
+    }
+}
