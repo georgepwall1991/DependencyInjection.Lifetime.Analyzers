@@ -1556,6 +1556,30 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        foreach (var member in containingType.Members)
+        {
+            if (member is not BaseMethodDeclarationSyntax method)
+            {
+                continue;
+            }
+
+            var disposeBoolMethod = GetDisposeBoolMethod(method, semanticModel);
+            if (disposeBoolMethod is null)
+            {
+                continue;
+            }
+
+            if (HasDisposeCallForTargetWhenDisposeBoolTrue(
+                    method,
+                    targetSymbol,
+                    disposeBoolMethod.Parameters[0],
+                    semanticModel) &&
+                IsCalledWithTrueFromDispose(containingType, disposeBoolMethod, semanticModel))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -1581,6 +1605,28 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    private static bool HasDisposeCallForTargetWhenDisposeBoolTrue(
+        BaseMethodDeclarationSyntax method,
+        ISymbol targetSymbol,
+        IParameterSymbol disposingParameter,
+        SemanticModel semanticModel)
+    {
+        foreach (var descendant in method.DescendantNodes())
+        {
+            if (descendant is not InvocationExpressionSyntax invocationSyntax ||
+                !TryGetDisposedTargetSymbol(invocationSyntax, semanticModel, out var disposedSymbol) ||
+                !SymbolEqualityComparer.Default.Equals(disposedSymbol, targetSymbol) ||
+                !CanRunWhenParameterIsTrue(invocationSyntax, method, disposingParameter, targetSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool IsDisposeMethod(BaseMethodDeclarationSyntax method, SemanticModel semanticModel)
     {
         if (method is DestructorDeclarationSyntax)
@@ -1599,6 +1645,208 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         }
 
         return methodSymbol.Name is "Dispose" or "DisposeAsync";
+    }
+
+    private static IMethodSymbol? GetDisposeBoolMethod(
+        BaseMethodDeclarationSyntax method,
+        SemanticModel semanticModel)
+    {
+        if (method is DestructorDeclarationSyntax ||
+            method.ParameterList.Parameters.Count != 1 ||
+            semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol declaredMethod ||
+            declaredMethod.Name != "Dispose" ||
+            declaredMethod.Parameters.Length != 1 ||
+            declaredMethod.Parameters[0].Type.SpecialType != SpecialType.System_Boolean)
+        {
+            return null;
+        }
+
+        return declaredMethod;
+    }
+
+    private static bool CanRunWhenParameterIsTrue(
+        SyntaxNode syntax,
+        BaseMethodDeclarationSyntax method,
+        IParameterSymbol parameterSymbol,
+        ISymbol targetSymbol,
+        SemanticModel semanticModel)
+    {
+        for (var current = syntax.Parent; current is not null && current != method; current = current.Parent)
+        {
+            if (current is not IfStatementSyntax ifStatement)
+            {
+                continue;
+            }
+
+            var conditionWhenTrue = GetConditionValueWhenParameterIsTrue(
+                ifStatement.Condition,
+                parameterSymbol,
+                semanticModel);
+
+            if (ifStatement.Statement.Span.Contains(syntax.Span))
+            {
+                if (!CanEnterStatementWhenParameterIsTrue(
+                        ifStatement.Condition,
+                        parameterSymbol,
+                        targetSymbol,
+                        semanticModel))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (ifStatement.Else?.Statement.Span.Contains(syntax.Span) == true)
+            {
+                if (conditionWhenTrue != false &&
+                    !IsNullGuardForTarget(ifStatement.Condition, targetSymbol, semanticModel))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool CanEnterStatementWhenParameterIsTrue(
+        ExpressionSyntax condition,
+        IParameterSymbol parameterSymbol,
+        ISymbol targetSymbol,
+        SemanticModel semanticModel)
+    {
+        condition = UnwrapParentheses(condition);
+
+        if (GetConditionValueWhenParameterIsTrue(condition, parameterSymbol, semanticModel) == true ||
+            IsNonNullGuardForTarget(condition, targetSymbol, semanticModel))
+        {
+            return true;
+        }
+
+        if (condition is BinaryExpressionSyntax binary &&
+            binary.IsKind(SyntaxKind.LogicalAndExpression))
+        {
+            return CanEnterStatementWhenParameterIsTrue(binary.Left, parameterSymbol, targetSymbol, semanticModel) &&
+                   CanEnterStatementWhenParameterIsTrue(binary.Right, parameterSymbol, targetSymbol, semanticModel);
+        }
+
+        return false;
+    }
+
+    private static bool? GetConditionValueWhenParameterIsTrue(
+        ExpressionSyntax condition,
+        IParameterSymbol parameterSymbol,
+        SemanticModel semanticModel)
+    {
+        condition = UnwrapParentheses(condition);
+
+        if (ExpressionTargetsSymbol(condition, parameterSymbol, semanticModel))
+        {
+            return true;
+        }
+
+        if (condition is PrefixUnaryExpressionSyntax prefixUnary &&
+            prefixUnary.IsKind(SyntaxKind.LogicalNotExpression))
+        {
+            return Negate(GetConditionValueWhenParameterIsTrue(
+                prefixUnary.Operand,
+                parameterSymbol,
+                semanticModel));
+        }
+
+        if (condition is BinaryExpressionSyntax binary &&
+            (binary.IsKind(SyntaxKind.EqualsExpression) ||
+             binary.IsKind(SyntaxKind.NotEqualsExpression)))
+        {
+            if (TryGetParameterBoolComparisonValue(binary.Left, binary.Right, parameterSymbol, semanticModel, out var equalsValue) ||
+                TryGetParameterBoolComparisonValue(binary.Right, binary.Left, parameterSymbol, semanticModel, out equalsValue))
+            {
+                return binary.IsKind(SyntaxKind.EqualsExpression)
+                    ? equalsValue
+                    : Negate(equalsValue);
+            }
+        }
+
+        if (condition is IsPatternExpressionSyntax isPattern &&
+            ExpressionTargetsSymbol(isPattern.Expression, parameterSymbol, semanticModel) &&
+            isPattern.Pattern is ConstantPatternSyntax constantPattern &&
+            TryGetBoolLiteralValue(constantPattern.Expression, out var patternValue))
+        {
+            return patternValue;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetParameterBoolComparisonValue(
+        ExpressionSyntax parameterCandidate,
+        ExpressionSyntax valueCandidate,
+        IParameterSymbol parameterSymbol,
+        SemanticModel semanticModel,
+        out bool value)
+    {
+        value = false;
+        return ExpressionTargetsSymbol(parameterCandidate, parameterSymbol, semanticModel) &&
+               TryGetBoolLiteralValue(valueCandidate, out value);
+    }
+
+    private static bool TryGetBoolLiteralValue(ExpressionSyntax expression, out bool value)
+    {
+        expression = UnwrapParentheses(expression);
+
+        if (expression.IsKind(SyntaxKind.TrueLiteralExpression))
+        {
+            value = true;
+            return true;
+        }
+
+        if (expression.IsKind(SyntaxKind.FalseLiteralExpression))
+        {
+            value = false;
+            return true;
+        }
+
+        value = false;
+        return false;
+    }
+
+    private static bool? Negate(bool? value) =>
+        value.HasValue ? !value.Value : null;
+
+    private static bool IsCalledWithTrueFromDispose(
+        TypeDeclarationSyntax containingType,
+        IMethodSymbol disposeBoolMethod,
+        SemanticModel semanticModel)
+    {
+        foreach (var member in containingType.Members)
+        {
+            if (member is not BaseMethodDeclarationSyntax method ||
+                !IsDisposeMethod(method, semanticModel))
+            {
+                continue;
+            }
+
+            foreach (var invocationSyntax in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (semanticModel.GetSymbolInfo(invocationSyntax).Symbol is not IMethodSymbol invokedMethod ||
+                    !SymbolEqualityComparer.Default.Equals(invokedMethod.OriginalDefinition, disposeBoolMethod.OriginalDefinition) ||
+                    invocationSyntax.ArgumentList.Arguments.Count != 1)
+                {
+                    continue;
+                }
+
+                var argumentValue = semanticModel.GetConstantValue(invocationSyntax.ArgumentList.Arguments[0].Expression);
+                if (argumentValue is { HasValue: true, Value: true })
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static (ISymbol targetSymbol, TypeDeclarationSyntax? containingType)? GetAssignmentTarget(
