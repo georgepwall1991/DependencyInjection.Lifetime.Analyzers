@@ -713,6 +713,13 @@
           "anchor": "bus.MessageReceived += (sender, e) => _count++;",
           "ruleId": "DI025",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI025/EventSubscriptionLeakExamples.cs",
+          "anchor": "_host.Bus.MessageReceived += OnMessage;",
+          "occurrence": 1,
+          "ruleId": "DI025",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": []

@@ -133,10 +133,21 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             return false;
         }
 
-        var receiver = memberAccess.Expression;
-        if (receiver is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } thisQualified)
+        // Chained receivers re-resolve verbatim in Dispose as long as the chain root is an
+        // instance field or property; a constructor-parameter or local root would not compile
+        // there. Parentheses and null-forgiving operators are peeled at every hop so a
+        // parenthesized chain cannot hide its root.
+        var receiver = UnwrapReceiver(memberAccess.Expression);
+        while (receiver is MemberAccessExpressionSyntax chain)
         {
-            receiver = thisQualified.Name;
+            var inner = UnwrapReceiver(chain.Expression);
+            if (inner is ThisExpressionSyntax or BaseExpressionSyntax)
+            {
+                receiver = chain.Name;
+                break;
+            }
+
+            receiver = inner;
         }
 
         return semanticModel.GetSymbolInfo(receiver, cancellationToken).Symbol
@@ -149,6 +160,24 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         return handler is IdentifierNameSyntax ||
                (handler is MemberAccessExpressionSyntax memberAccess &&
                 memberAccess.Expression is ThisExpressionSyntax);
+    }
+
+    private static ExpressionSyntax UnwrapReceiver(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppressed:
+                    expression = suppressed.Operand;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
     }
 
     private static ExpressionSyntax Unwrap(ExpressionSyntax expression)

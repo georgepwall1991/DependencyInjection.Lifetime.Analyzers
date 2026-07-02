@@ -390,4 +390,130 @@ public class DI025_EventSubscriptionLeakCodeFixTests
         await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI026", "DI025_AddUnsubscribeInDispose");
     }
+
+    // ----------------------------------------------------------------
+    // Chained receivers: the mirrored -= re-resolves the same chain in
+    // Dispose when the chain root is an instance field or property.
+    // ----------------------------------------------------------------
+
+    private const string ChainedUsings = """
+        using System;
+        using Microsoft.Extensions.DependencyInjection;
+
+        public class Inner
+        {
+            public event EventHandler Changed;
+        }
+
+        public class Outer
+        {
+            public Inner Inner { get; } = new Inner();
+        }
+
+        public static class Registrations
+        {
+            public static void Configure(IServiceCollection services)
+            {
+                services.AddSingleton<Outer>();
+                services.AddTransient<OrderHandler>();
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task CodeFix_InsertsChainedUnsubscribe_ForFieldRootedChain()
+    {
+        var source = ChainedUsings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    [|_outer.Inner.Changed += OnChanged|];
+                }
+
+                public void Dispose()
+                {
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = ChainedUsings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    _outer.Inner.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, "DI025_AddUnsubscribeInDispose");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForParenthesizedCtorParameterRootedChain()
+    {
+        // Parentheses must not hide the constructor-parameter root; the cloned chain would
+        // reference the parameter inside Dispose and fail to compile.
+        var source = ChainedUsings + """
+            public class OrderHandler : IDisposable
+            {
+                public OrderHandler(Outer outer)
+                {
+                    (outer.Inner).Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", "DI025_AddUnsubscribeInDispose");
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ForCtorParameterRootedChain()
+    {
+        // The constructor parameter does not resolve inside Dispose; cloning the
+        // chain verbatim would not compile.
+        var source = ChainedUsings + """
+            public class OrderHandler : IDisposable
+            {
+                public OrderHandler(Outer outer)
+                {
+                    outer.Inner.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", "DI025_AddUnsubscribeInDispose");
+    }
 }

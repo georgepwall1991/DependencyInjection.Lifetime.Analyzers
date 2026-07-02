@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.13.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.14.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.13.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.14.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.13.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.14.0" />
 ```
 
 Then reference it from the project file:
@@ -1073,7 +1073,7 @@ DI024 stays quiet when the code already does the right thing: a scope created in
 
 ## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
 
-**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
+**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. Chained receivers (`_host.Bus.Changed += H`) report too when the publisher is a **stable projection** of an injected root: the lifetime proof anchors on the chain root's registration, and every intermediate segment must be a readonly field, a get-only auto-property, or a getter returning one — interface segments proven through the root's registered implementation types. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
 
 **Why it matters:** This is the most common managed memory leak in .NET. The publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots **every subscriber instance the container ever creates** — each resolution leaks a handler plus the full object graph behind it, and every event raise fans out to thousands of stale handlers executing against released state. Catching it precisely requires knowing registration lifetimes, which is exactly what this analyzer knows and lifetime-blind analyzers cannot.
 
@@ -1114,9 +1114,9 @@ public class OrderHandler : IDisposable
 }
 ```
 
-DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), transient publishers (scoped publishers report the [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) Info tier instead), any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, chained receivers (`_dep.Inner.Event`), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown.
+DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), transient publishers (scoped publishers report the [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) Info tier instead), any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, chained receivers whose projection is not provably stable (a settable or computed segment may hand out a different instance per access, and metadata-only or virtual segments cannot be inspected), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown.
 
-**Code Fix:** Yes. When the handler is a method group, the receiver is a field/property or static event, and the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable` — a method merely named Dispose is never called by the container), the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` on a type that lacks it is intentionally not offered — adding disposability to a transient changes container tracking behavior (see DI008) and deserves a deliberate decision.
+**Code Fix:** Yes. When the handler is a method group, the receiver is a field/property, a field/property-rooted chain, or a static event, and the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable` — a method merely named Dispose is never called by the container), the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` on a type that lacks it is intentionally not offered — adding disposability to a transient changes container tracking behavior (see DI008) and deserves a deliberate decision.
 
 ---
 
@@ -1148,7 +1148,7 @@ public class OrderHandler
 
 **Correct pattern:** identical to DI025 — store the subscription and remove it with `-=` when the subscriber is released (for example in `Dispose`).
 
-DI026 shares every DI025 guardrail: scoped subscribers on scoped publishers stay silent (equal lifetimes are torn down together), any matching `-=` anywhere in the type suppresses, and all silence-on-unknown legs (chained receivers, `new`-assigned members, keyed-only publishers, `EventSource` publishers, factory registrations) apply unchanged.
+DI026 shares every DI025 guardrail: scoped subscribers on scoped publishers stay silent (equal lifetimes are torn down together), any matching `-=` anywhere in the type suppresses, and all silence-on-unknown legs (unstable chained projections, `new`-assigned members, keyed-only publishers, `EventSource` publishers, factory registrations) apply unchanged — stable chained receivers report the tier exactly like direct receivers.
 
 **Code Fix:** Yes — the same mirrored-`-=` insertion as DI025, with the same gates.
 
