@@ -185,6 +185,13 @@ const ruleSampleConfig = {
       { label: "Sample app unsubscribe-in-dispose pattern", symbol: "Good_UnsubscribeInDispose" },
     ],
   },
+  DI026: {
+    samplePath: "samples/SampleApp/Diagnostics/DI026/EventSubscriptionLeakScopedPublisherExamples.cs",
+    highlights: [
+      { label: "Sample app scoped-publisher subscription info", symbol: "Bad_TransientSubscribesToScopedPublisher" },
+      { label: "Sample app unsubscribe-in-dispose pattern", symbol: "Good_UnsubscribeInDispose" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(

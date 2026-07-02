@@ -386,4 +386,49 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A -= with an anonymous function that is textually identical to the subscribed handler creates a different delegate instance, so the removal is a no-op and the longer-lived publisher keeps rooting every subscriber instance. Store the delegate once (in a field) and use the same reference on both the += and -= sides.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI026 (method-group tier): a transient service subscribes an instance handler to an
+    /// event on a scoped publisher without a matching unsubscription. Info rather than
+    /// Warning because the publisher's delegate list dies with its scope — the accumulation
+    /// is bounded, but stale handlers still fire on released instances while the scope lives.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeakScopedPublisher = new(
+        id: DiagnosticIds.EventSubscriptionLeakScopedPublisher,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as transient but subscribes handler '{1}' to event '{2}' on {3} and never unsubscribes. For as long as that scope lives, the publisher's delegate list grows and roots every '{0}' the scope creates, and the event keeps invoking handlers on released instances. Unsubscribe with -= when the subscriber is released (for example in Dispose).",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "A transient service that subscribes to an event on a scoped publisher leaks for the lifetime of the scope: every transient instance the scope resolves stays rooted in the publisher's delegate list until the scope is disposed, and the event keeps invoking handlers on instances the container has already released. In a short per-request scope the accumulation is usually harmless; in long-lived scopes (SignalR connections, Blazor circuits, hosted-service loop scopes) it is a real leak. Reported at Info because the impact depends on scope longevity — raise it per team policy with dotnet_diagnostic.DI026.severity = warning.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI026 (anonymous-handler tier): the handler subscribed to the scoped publisher is an
+    /// anonymous function that is never stored, so no equivalent -= can ever remove it.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeakScopedPublisherAnonymousHandler = new(
+        id: DiagnosticIds.EventSubscriptionLeakScopedPublisher,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as transient but subscribes an anonymous handler to event '{1}' on {2}. The handler is never stored, so it can never be unsubscribed, and for as long as that scope lives the publisher's delegate list keeps every '{0}' instance alive. Store the handler in a field and remove it with -= when the subscriber is released.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "A transient service subscribes an anonymous handler to an event on a scoped publisher without storing the delegate. An anonymous handler that is not stored can never be unsubscribed — a -= with a textually identical lambda creates a different delegate instance and removes nothing — so every transient instance stays rooted until the scope is disposed. Store the handler in a field and use the same reference for += and -=.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI026 (ineffective-unsubscribe tier): a -= exists for the same event on the scoped
+    /// publisher but uses a distinct anonymous delegate instance, so it never removes the
+    /// subscribed handler.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EventSubscriptionLeakScopedPublisherIneffectiveUnsubscribe = new(
+        id: DiagnosticIds.EventSubscriptionLeakScopedPublisher,
+        title: "Unsubscribe from longer-lived publishers before the subscriber is released",
+        messageFormat: "'{0}' is registered as transient and subscribes an anonymous handler to event '{1}' on {2}, but the corresponding -= creates a new delegate instance and never removes the handler. Store the delegate once and use the same reference for += and -=.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "A -= with an anonymous function that is textually identical to the subscribed handler creates a different delegate instance, so the removal is a no-op and the scoped publisher keeps rooting every transient subscriber instance until its scope is disposed. Store the delegate once (in a field) and use the same reference on both the += and -= sides.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.12.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.13.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.12.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.13.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.12.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.13.0" />
 ```
 
 Then reference it from the project file:
@@ -106,7 +106,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | Middleware lifetime validation | `DI020` |
 | Concurrency-unsafe captures in message handlers, timers, and parallel loops | `DI021`, `DI022` |
 | Hosted-service scope-per-iteration validation | `DI024` |
-| Cross-lifetime event-subscription leak detection | `DI025` |
+| Cross-lifetime event-subscription leak detection | `DI025`, `DI026` |
 | Constructor and composition smell detection | `DI010` |
 
 ## Table of Contents
@@ -141,6 +141,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI022: Service Instance Reused Across Handler Invocations](#di022-service-instance-reused-across-handler-invocations)
 - [DI024: Hosted Service Creates Scope Outside Execution Loop](#di024-hosted-service-creates-scope-outside-execution-loop)
 - [DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe)
+- [DI026: Event Subscription On Scoped Publisher Without Unsubscribe](#di026-event-subscription-on-scoped-publisher-without-unsubscribe)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -173,6 +174,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 | [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
+| [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) | Event subscription on scoped publisher without unsubscribe | Info | Yes |
 
 ---
 
@@ -1112,15 +1114,49 @@ public class OrderHandler : IDisposable
 }
 ```
 
-DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), scoped or transient publishers, any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, chained receivers (`_dep.Inner.Event`), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown.
+DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), transient publishers (scoped publishers report the [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) Info tier instead), any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, chained receivers (`_dep.Inner.Event`), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown.
 
 **Code Fix:** Yes. When the handler is a method group, the receiver is a field/property or static event, and the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable` — a method merely named Dispose is never called by the container), the fix inserts the mirrored `-=` at the top of that method. Introducing `IDisposable` on a type that lacks it is intentionally not offered — adding disposability to a transient changes container tracking behavior (see DI008) and deserves a deliberate decision.
 
 ---
 
+## DI026: Event Subscription On Scoped Publisher Without Unsubscribe
+
+**What it catches:** The scope-bounded tier of DI025: a **transient**-registered service subscribes an instance-capturing handler to an event on a **scoped** registered publisher — same receiver, handler, and unsubscription proofs as DI025 — and never unsubscribes. The publisher's registration lifetime is resolved with the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded), so a publisher registered both scoped and singleton reports DI026, because only the scope-bounded claim is provable.
+
+**Why it matters:** A transient injected with a scoped publisher is resolved from that same scope, so every transient instance the scope creates stays rooted in the publisher's delegate list **until the scope is disposed**, and the event keeps invoking handlers on instances the container has already released. In a short per-request scope the accumulation usually dies quickly; in long-lived scopes — SignalR connections, Blazor circuits, hosted-service loop scopes — it is a real leak. DI026 reports at Info because the impact depends on scope longevity; raise it per team policy:
+
+```ini
+[*.cs]
+dotnet_diagnostic.DI026.severity = warning
+```
+
+```csharp
+services.AddScoped<IMessageBus, MessageBus>();
+services.AddTransient<OrderHandler>();
+
+public class OrderHandler
+{
+    public OrderHandler(IMessageBus bus)
+    {
+        bus.MessageReceived += OnMessage; // DI026: rooted by the scoped bus until the scope is disposed
+    }
+
+    private void OnMessage(object sender, EventArgs e) { }
+}
+```
+
+**Correct pattern:** identical to DI025 — store the subscription and remove it with `-=` when the subscriber is released (for example in `Dispose`).
+
+DI026 shares every DI025 guardrail: scoped subscribers on scoped publishers stay silent (equal lifetimes are torn down together), any matching `-=` anywhere in the type suppresses, and all silence-on-unknown legs (chained receivers, `new`-assigned members, keyed-only publishers, `EventSource` publishers, factory registrations) apply unchanged.
+
+**Code Fix:** Yes — the same mirrored-`-=` insertion as DI025, with the same gates.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI025`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI026`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

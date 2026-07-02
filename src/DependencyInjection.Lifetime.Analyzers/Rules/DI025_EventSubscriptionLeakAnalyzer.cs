@@ -27,7 +27,10 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         ImmutableArray.Create(
             DiagnosticDescriptors.EventSubscriptionLeak,
             DiagnosticDescriptors.EventSubscriptionLeakAnonymousHandler,
-            DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe);
+            DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe,
+            DiagnosticDescriptors.EventSubscriptionLeakScopedPublisher,
+            DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherAnonymousHandler,
+            DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherIneffectiveUnsubscribe);
 
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
@@ -598,16 +601,19 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            // v1 reports only provably process-lifetime publishers: singleton registrations and
-            // static events. A scoped publisher's growth is bounded by its scope and is a
-            // documented false-negative edge (future DI026 tier).
+            // Provably process-lifetime publishers (singleton registrations and static events)
+            // report DI025 at Warning; a scoped publisher whose growth is bounded by its scope
+            // reports the DI026 Info tier. Equal-rank pairs (scoped/scoped) resolve from the
+            // same scope and are torn down together, so they stay silent.
             var publisherRank = ResolvePublisherRank(subscription, registrations, lifetimeClassifier);
             if (publisherRank is null ||
-                publisherRank < RankOf(ServiceLifetime.Singleton) ||
+                publisherRank < RankOf(ServiceLifetime.Scoped) ||
                 publisherRank <= subscriberRank)
             {
                 continue;
             }
+
+            var isScopedPublisherTier = publisherRank == RankOf(ServiceLifetime.Scoped);
 
             if (IsEventSourcePublisher(subscription.EventSymbol.ContainingType))
             {
@@ -664,7 +670,8 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            context.ReportDiagnostic(CreateDiagnostic(subscription, subscriberRank, ineffectiveAnonymousRemoval));
+            context.ReportDiagnostic(
+                CreateDiagnostic(subscription, subscriberRank, isScopedPublisherTier, ineffectiveAnonymousRemoval));
         }
     }
 
@@ -680,8 +687,45 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
     private static Diagnostic CreateDiagnostic(
         EventAccessRecord subscription,
         int subscriberRank,
+        bool isScopedPublisherTier,
         EventAccessRecord? ineffectiveAnonymousRemoval)
     {
+        if (isScopedPublisherTier)
+        {
+            // The scoped tier only ever fires for transient subscribers (equal ranks stay
+            // silent), so its message formats omit the subscriber-lifetime placeholder.
+            var scopedPublisherText = $"the scoped service '{subscription.PublisherType?.Name}'";
+
+            if (subscription.HandlerKind == HandlerKind.AnonymousCapturingInstance)
+            {
+                if (ineffectiveAnonymousRemoval is not null)
+                {
+                    return Diagnostic.Create(
+                        DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherIneffectiveUnsubscribe,
+                        subscription.Location,
+                        additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                        subscription.ContainingType.Name,
+                        subscription.EventSymbol.Name,
+                        scopedPublisherText);
+                }
+
+                return Diagnostic.Create(
+                    DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherAnonymousHandler,
+                    subscription.Location,
+                    subscription.ContainingType.Name,
+                    subscription.EventSymbol.Name,
+                    scopedPublisherText);
+            }
+
+            return Diagnostic.Create(
+                DiagnosticDescriptors.EventSubscriptionLeakScopedPublisher,
+                subscription.Location,
+                subscription.ContainingType.Name,
+                subscription.HandlerDisplay,
+                subscription.EventSymbol.Name,
+                scopedPublisherText);
+        }
+
         var lifetimeText = subscriberRank == RankOf(ServiceLifetime.Transient) ? "transient" : "scoped";
         var publisherText = subscription.ReceiverKind == ReceiverKind.StaticEvent
             ? $"the static event publisher '{subscription.EventSymbol.ContainingType.Name}'"
