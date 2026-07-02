@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-07-03
+
+### Changed
+
+- **DI025/DI026 internals: receiver/handler classification extracted into shared infrastructure** — no behavior change (the full 1964-test suite is byte-identical). The analyzer had grown to 2.6x the 500-line structural budget with `ReportLeakedSubscriptions` at cyclomatic complexity 28; receiver classification (chain walking, stable-projection proofs, canonicalization, injection provenance) now lives in `Infrastructure/EventReceiverClassification.cs` and handler classification (capture analysis, identity matching) in `Infrastructure/EventHandlerClassification.cs`, with the reporting pass decomposed into single-purpose gates. The extraction also positions the planned Rx subscription-leak rule (DI027) to reuse receiver classification instead of duplicating it.
+
 ## [2.14.0] - 2026-07-02
 
 ### Added
