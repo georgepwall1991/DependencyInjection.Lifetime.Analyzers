@@ -196,6 +196,168 @@ public class Program : IDisposable
     }
 
     [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedInDisposeBoolPattern_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _provider?.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedInDisposeBoolPatternWithNullGuard_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            if (_provider != null)
+            {
+                _provider.Dispose();
+            }
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedInDisposeBoolPatternWithCombinedNullGuard_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (disposing && _provider != null)
+        {
+            _provider.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedOnlyWhenDisposeBoolFalse_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            _provider?.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(12, 21));
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_AssignedToField_DisposedBehindUnrelatedDisposeBoolCondition_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program : IDisposable
+{
+    private readonly bool _initialized;
+    private ServiceProvider? _provider;
+
+    public Program()
+    {
+        var services = new ServiceCollection();
+        _provider = services.BuildServiceProvider();
+        _initialized = true;
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_initialized)
+        {
+            _provider?.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootProviderNotDisposed)
+                .WithLocation(13, 21));
+    }
+
+    [Fact]
     public async Task BuildServiceProvider_AssignedToField_NullForgivingDisposedInDispose_NoDiagnostic()
     {
         var source = Usings + @"

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.43] - 2026-06-29
+
+### Fixed
+
+- **DI014 Dispose(bool) pattern**: root providers stored on fields or properties are now recognized as disposed when the standard `Dispose()` method calls `Dispose(true)` and the `Dispose(bool)` overload disposes the provider.
+- **DI013 implicit conversion audit**: pinned a regression test proving user-defined implicit conversion registrations already report as implementation mismatches instead of being treated as DI-compatible.
+
 ## [2.11.42] - 2026-06-29
 
 ### Fixed
