@@ -716,6 +716,20 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI026",
+      "ruleId": "DI026",
+      "claims": [
+        {
+          "filePathContains": "DI026/EventSubscriptionLeakScopedPublisherExamples.cs",
+          "anchor": "_bus.MessageReceived += OnMessage;",
+          "occurrence": 1,
+          "ruleId": "DI026",
+          "severity": "note"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

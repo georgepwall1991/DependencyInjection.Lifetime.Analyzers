@@ -470,7 +470,7 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
-    public async Task ScopedPublisher_TransientSubscriber_NoDiagnostic()
+    public async Task ScopedPublisher_TransientSubscriber_ReportsInfoTierDiagnostic()
     {
         var source = Usings + """
             public static class Registrations
@@ -486,14 +486,14 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
             {
                 public OrderHandler(IBus bus)
                 {
-                    bus.MessageReceived += OnMessage;
+                    {|DI026:bus.MessageReceived += OnMessage|};
                 }
 
                 private void OnMessage(object sender, EventArgs e) { }
             }
             """;
 
-        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
     [Fact]
@@ -1356,7 +1356,7 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
-    public async Task OpenGenericScopedPublisher_ConstructedInjection_NoDiagnostic()
+    public async Task OpenGenericScopedPublisher_ConstructedInjection_ReportsInfoTierDiagnostic()
     {
         var source = """
             using System;
@@ -1387,18 +1387,18 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
             {
                 public OrderHandler(IEventBus<Order> bus)
                 {
-                    bus.MessageReceived += OnMessage;
+                    {|DI026:bus.MessageReceived += OnMessage|};
                 }
 
                 private void OnMessage(object sender, EventArgs e) { }
             }
             """;
 
-        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
     [Fact]
-    public async Task ClosedRegistrationOverridesOpenGeneric_ForSameConstructedPublisher_NoDiagnostic()
+    public async Task ClosedRegistrationOverridesOpenGeneric_ForSameConstructedPublisher_ReportsInfoTierDiagnostic()
     {
         var source = """
             using System;
@@ -1430,14 +1430,14 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
             {
                 public OrderHandler(IEventBus<Order> bus)
                 {
-                    bus.MessageReceived += OnMessage;
+                    {|DI026:bus.MessageReceived += OnMessage|};
                 }
 
                 private void OnMessage(object sender, EventArgs e) { }
             }
             """;
 
-        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
     // ----------------------------------------------------------------
@@ -1519,5 +1519,310 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
         await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
             source,
             AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.ReferenceAssembliesWithKeyedDi);
+    }
+
+    // ----------------------------------------------------------------
+    // DI026: scoped-publisher Info tier — a transient subscriber on a
+    // scoped publisher leaks for the lifetime of the scope, not the
+    // process, so the cell reports under DI026 at Info severity.
+    // ----------------------------------------------------------------
+
+    private const string ScopedBusTransientHandlerRegistrations = """
+        public static class Registrations
+        {
+            public static void Configure(IServiceCollection services)
+            {
+                services.AddScoped<IBus, Bus>();
+                services.AddTransient<OrderHandler>();
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task ScopedPublisher_InjectedFieldReceiver_ReportsInfoTierDiagnostic()
+    {
+        var source = Usings + ScopedBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    {|DI026:_bus.MessageReceived += OnMessage|};
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedPublisher_AnonymousHandlerCapturingThis_ReportsInfoTierDiagnostic()
+    {
+        var source = Usings + ScopedBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    {|DI026:bus.MessageReceived += (sender, e) => Handle()|};
+                }
+
+                private void Handle() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedPublisher_IneffectiveLambdaUnsubscribe_StillReportsInfoTierDiagnostic()
+    {
+        var source = Usings + ScopedBusTransientHandlerRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    {|DI026:_bus.MessageReceived += (sender, e) => Handle()|};
+                }
+
+                public void Dispose()
+                {
+                    _bus.MessageReceived -= (sender, e) => Handle();
+                }
+
+                private void Handle() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MixedScopedAndSingletonPublisherRegistrations_ReportsInfoTierNotWarningTier()
+    {
+        var source = Usings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IBus, Bus>();
+                    services.AddSingleton<IBus, Bus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    {|DI026:bus.MessageReceived += OnMessage|};
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TryAddScopedPublisher_ReportsInfoTierDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IBus
+            {
+                event EventHandler MessageReceived;
+            }
+
+            public class Bus : IBus
+            {
+                public event EventHandler MessageReceived;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.TryAddScoped<IBus, Bus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    {|DI026:bus.MessageReceived += OnMessage|};
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonPublisher_StillReportsWarningTier_NotInfoTier()
+    {
+        var source = Usings + SingletonBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    {|DI025:bus.MessageReceived += OnMessage|};
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedPublisher_MatchingUnsubscribeInDispose_NoDiagnostic()
+    {
+        var source = Usings + ScopedBusTransientHandlerRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                public void Dispose()
+                {
+                    _bus.MessageReceived -= OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task KeyedScopedPublisherOnly_UnkeyedInjection_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IBus, Bus>("primary");
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.ReferenceAssembliesWithKeyedDi);
+    }
+
+    [Fact]
+    public async Task HostedServiceSubscriber_ScopedPublisher_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                using System.Threading;
+                using System.Threading.Tasks;
+
+                public interface IHostedService
+                {
+                    Task StartAsync(CancellationToken cancellationToken);
+                    Task StopAsync(CancellationToken cancellationToken);
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IBus, Bus>();
+                    services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService, Worker>();
+                }
+            }
+
+            public class Worker : Microsoft.Extensions.Hosting.IHostedService
+            {
+                public Worker(IBus bus)
+                {
+                    bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+
+                public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+
+                public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken) =>
+                    System.Threading.Tasks.Task.CompletedTask;
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task EventSourceDerivedPublisher_RegisteredScoped_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class TelemetrySource : System.Diagnostics.Tracing.EventSource
+            {
+                public event EventHandler Flushed;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<TelemetrySource>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(TelemetrySource source)
+                {
+                    source.Flushed += OnFlushed;
+                }
+
+                private void OnFlushed(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 }

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-07-02
+
+### Added
+
+- **DI026 (new rule): event subscription on scoped publisher without unsubscribe** — the scope-bounded Info tier of DI025, sharing its analyzer (the DI021/DI022 precedent). A transient service that subscribes an instance-capturing handler to an event on a scoped registered publisher, with no matching `-=` anywhere in the type, now reports at Info: every transient the scope resolves stays rooted in the publisher's delegate list until the scope is disposed, and the event keeps invoking handlers on released instances — mostly benign in per-request scopes, a real accumulation in long-lived ones (SignalR connections, Blazor circuits, hosted-service loop scopes). Raise per team policy with `dotnet_diagnostic.DI026.severity = warning`. All DI025 receiver/handler/unsubscription proofs, guardrails, and the three message arms carry over unchanged; scoped subscribers on scoped publishers stay silent (equal lifetimes are torn down together). Three previously-silent cells now report DI026: the plain scoped-publisher/transient-subscriber pairing, open-generic scoped publishers injected as constructed closures, and — because the most conservative registration wins — publishers registered both scoped and singleton, including a closed scoped registration overriding an open-generic singleton.
+- **DI026 code fix**: the DI025 mirrored-`-=` Dispose insertion now also fixes DI026 diagnostics, with the same method-group, disposal-contract, and receiver-availability gates.
+
 ## [2.12.0] - 2026-07-02
 
 ### Added

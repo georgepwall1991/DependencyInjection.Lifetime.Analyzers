@@ -13,7 +13,8 @@ using Microsoft.CodeAnalysis.Formatting;
 namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
 /// <summary>
-/// Code fix provider for DI025: event subscription on a longer-lived publisher without a
+/// Code fix provider for DI025 and its DI026 scoped-publisher Info tier: event subscription
+/// on a longer-lived publisher without a
 /// matching unsubscription. Offers the narrow safe repair only — when the handler is a
 /// method group and the subscriber already declares a Dispose method in source, insert the
 /// mirrored -= statement at the top of that method. Introducing IDisposable on a type that
@@ -28,7 +29,9 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
 
     /// <inheritdoc />
     public sealed override ImmutableArray<string> FixableDiagnosticIds =>
-        ImmutableArray.Create(DiagnosticIds.EventSubscriptionLeak);
+        ImmutableArray.Create(
+            DiagnosticIds.EventSubscriptionLeak,
+            DiagnosticIds.EventSubscriptionLeakScopedPublisher);
 
     /// <inheritdoc />
     public sealed override FixAllProvider GetFixAllProvider() =>

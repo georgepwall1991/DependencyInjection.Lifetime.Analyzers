@@ -126,4 +126,11 @@ public static class DiagnosticIds
     /// publisher's delegate list.
     /// </summary>
     public const string EventSubscriptionLeak = "DI025";
+
+    /// <summary>
+    /// DI026: Transient service subscribes to an event on a scoped publisher without a
+    /// matching unsubscription. The Info tier of DI025 — the publisher's delegate list
+    /// grows only for the lifetime of its scope, not the process.
+    /// </summary>
+    public const string EventSubscriptionLeakScopedPublisher = "DI026";
 }
