@@ -159,8 +159,13 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
 
             case AddDisposeEquivalenceKey:
             {
-                if (FindOverridableBaseDisposeBool(typeSymbol) is null ||
-                    !BaseDisposeDispatchesToBoolHook(typeSymbol, cancellationToken))
+                // The container disposes the service through IDisposable.Dispose(); a base with
+                // the Dispose()/Dispose(bool) shape but no IDisposable contract is never disposed,
+                // so overriding the hook would be a fake repair. The dispatch proof also has to
+                // bind to THIS hook, not some other Dispose(bool) the pattern never reaches.
+                if (!ImplementsInterface(typeSymbol, "System.IDisposable") ||
+                    FindOverridableBaseDisposeBool(typeSymbol) is not { } hook ||
+                    !BaseDisposeDispatchesToBoolHook(typeSymbol, hook, semanticModel.Compilation, cancellationToken))
                 {
                     return (FixStrategy.None, null);
                 }
@@ -453,14 +458,17 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
     /// <summary>
     /// Confirms the standard dispose pattern is actually wired: the nearest accessible
     /// parameterless <c>Dispose()</c> in the base chain must, in source, call its own
-    /// <c>Dispose(true)</c> (a bare <c>Dispose(true)</c> or <c>this.Dispose(true)</c>). A
-    /// metadata-only base (no syntax to inspect), a <c>Dispose()</c> that dispatches to another
-    /// object (<c>_inner.Dispose(true)</c>), or one that passes <c>false</c> means a
-    /// <c>protected override void Dispose(bool)</c> we add would never run its unsubscribe on the
-    /// container path.
+    /// <c>Dispose(true)</c> (a bare <c>Dispose(true)</c> or <c>this.Dispose(true)</c>) AND that
+    /// call must bind to <paramref name="hook"/> — the very method we are about to override.
+    /// A metadata-only base (no syntax to inspect), a <c>Dispose()</c> that dispatches to another
+    /// object (<c>_inner.Dispose(true)</c>), passes <c>false</c>, or binds to a DIFFERENT
+    /// <c>Dispose(bool)</c> (for example a grandparent's private hook the pattern actually
+    /// reaches) means a <c>protected override void Dispose(bool)</c> we add would never run.
     /// </summary>
     private static bool BaseDisposeDispatchesToBoolHook(
         INamedTypeSymbol typeSymbol,
+        IMethodSymbol hook,
+        Compilation compilation,
         CancellationToken cancellationToken)
     {
         for (var baseType = typeSymbol.BaseType;
@@ -488,7 +496,7 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
                 }
 
                 var body = (SyntaxNode?)declaration.Body ?? declaration.ExpressionBody;
-                if (body is not null && DispatchesToDisposeBool(body))
+                if (body is not null && DispatchesToHook(body, hook, compilation, cancellationToken))
                 {
                     return true;
                 }
@@ -500,17 +508,66 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         return false;
     }
 
-    private static bool DispatchesToDisposeBool(SyntaxNode body) =>
+    private static bool DispatchesToHook(
+        SyntaxNode body,
+        IMethodSymbol hook,
+        Compilation compilation,
+        CancellationToken cancellationToken)
+    {
+        SemanticModel? model = null;
+
         // A Dispose(true) nested inside a lambda or local function only runs if that
         // delegate is invoked, which this proof cannot see — stay out of nested bodies.
-        body.DescendantNodesAndSelf(descendIntoChildren: node =>
-                node == body ||
-                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
-            .OfType<InvocationExpressionSyntax>()
-            .Any(invocation =>
-                invocation.ArgumentList.Arguments.Count == 1 &&
-                invocation.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.TrueLiteralExpression) &&
-                IsSelfDisposeCall(invocation.Expression));
+        foreach (var invocation in body.DescendantNodesAndSelf(descendIntoChildren: node =>
+                     node == body ||
+                     node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                 .OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.ArgumentList.Arguments.Count != 1 ||
+                !invocation.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.TrueLiteralExpression) ||
+                !IsSelfDisposeCall(invocation.Expression))
+            {
+                continue;
+            }
+
+            // Bind the call and require it to reach the very hook we would override — the
+            // dispatching Dispose() might call a different (for example private grandparent)
+            // Dispose(bool) that our override never participates in.
+            model ??= compilation.GetSemanticModel(invocation.SyntaxTree);
+            if (model.GetSymbolInfo(invocation, cancellationToken).Symbol is IMethodSymbol bound &&
+                OverrideChainReaches(bound, hook))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True when <paramref name="bound"/> is <paramref name="hook"/> or is connected to
+    /// it through the virtual override chain in either direction.</summary>
+    private static bool OverrideChainReaches(IMethodSymbol bound, IMethodSymbol hook)
+    {
+        var target = hook.OriginalDefinition;
+
+        for (IMethodSymbol? current = bound.OriginalDefinition; current is not null; current = current.OverriddenMethod?.OriginalDefinition)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, target))
+            {
+                return true;
+            }
+        }
+
+        for (IMethodSymbol? current = target; current is not null; current = current.OverriddenMethod?.OriginalDefinition)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, bound.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Recognizes a call to the current instance's own <c>Dispose</c> — a bare <c>Dispose(...)</c>

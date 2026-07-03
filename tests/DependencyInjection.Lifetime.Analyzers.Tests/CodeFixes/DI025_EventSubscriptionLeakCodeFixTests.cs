@@ -938,6 +938,72 @@ public class DI025_EventSubscriptionLeakCodeFixTests
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
     }
 
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDeclaresPatternButNotIDisposable()
+    {
+        // The base has the Dispose()/Dispose(bool) shape but does NOT implement IDisposable, so
+        // the container never disposes the service — overriding the hook is a fake repair.
+        var source = Usings + """
+            public class DisposableBase
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeDispatchesToADifferentHook()
+    {
+        // The dispatching Dispose() binds Dispose(true) to the grandparent's own private
+        // Dispose(bool); the overridable hook found on the intermediate base is a SEPARATE
+        // method the container's dispose path never reaches — so the override would never run.
+        var source = Usings + """
+            public class GrandBase : IDisposable
+            {
+                public void Dispose() { Dispose(true); }
+                private void Dispose(bool disposing) { }
+            }
+
+            public class MidBase : GrandBase
+            {
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : MidBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
     // ----------------------------------------------------------------
     // Tier 3 — implement IDisposable outright, but only for
     // scoped-registered subscribers (a scope deterministically disposes
