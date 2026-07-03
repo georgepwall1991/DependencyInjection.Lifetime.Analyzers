@@ -485,12 +485,28 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         removal.HandlerKind is EventHandlerKind.AnonymousCapturingInstance or EventHandlerKind.Unknown &&
         EventHandlerClassification.IsAnonymousRemoval(removal.HandlerKind, removal.HandlerDisplay);
 
+    /// <summary>
+    /// Diagnostic-property key carrying the subscriber's registered lifetime ("Transient" or
+    /// "Scoped") so the code fix can decide whether introducing IDisposable is safe without
+    /// re-running registration collection.
+    /// </summary>
+    internal const string SubscriberLifetimePropertyKey = "SubscriberLifetime";
+
     private static Diagnostic CreateDiagnostic(
         EventAccessRecord subscription,
         int subscriberRank,
         bool isScopedPublisherTier,
         EventAccessRecord? ineffectiveAnonymousRemoval)
     {
+        // The scoped-publisher tier only ever fires for transient subscribers, so its lifetime
+        // is always transient; otherwise map the rank. This is purely additive metadata — the
+        // message args below are unchanged.
+        var properties = ImmutableDictionary<string, string?>.Empty.Add(
+            SubscriberLifetimePropertyKey,
+            !isScopedPublisherTier && subscriberRank == RankOf(ServiceLifetime.Scoped)
+                ? "Scoped"
+                : "Transient");
+
         if (isScopedPublisherTier)
         {
             // The scoped tier only ever fires for transient subscribers (equal ranks stay
@@ -507,6 +523,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                         DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherIneffectiveUnsubscribe,
                         subscription.Location,
                         additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                        properties,
                         subscription.ContainingType.Name,
                         subscription.Member.Name,
                         scopedPublisherText);
@@ -515,6 +532,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 return Diagnostic.Create(
                     DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherAnonymousHandler,
                     subscription.Location,
+                    properties,
                     subscription.ContainingType.Name,
                     subscription.Member.Name,
                     scopedPublisherText);
@@ -523,6 +541,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return Diagnostic.Create(
                 DiagnosticDescriptors.EventSubscriptionLeakScopedPublisher,
                 subscription.Location,
+                properties,
                 subscription.ContainingType.Name,
                 subscription.HandlerDisplay,
                 subscription.Member.Name,
@@ -544,6 +563,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                     DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe,
                     subscription.Location,
                     additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                    properties,
                     subscription.ContainingType.Name,
                     lifetimeText,
                     subscription.Member.Name,
@@ -553,6 +573,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return Diagnostic.Create(
                 DiagnosticDescriptors.EventSubscriptionLeakAnonymousHandler,
                 subscription.Location,
+                properties,
                 subscription.ContainingType.Name,
                 lifetimeText,
                 subscription.Member.Name,
@@ -562,6 +583,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         return Diagnostic.Create(
             DiagnosticDescriptors.EventSubscriptionLeak,
             subscription.Location,
+            properties,
             subscription.ContainingType.Name,
             lifetimeText,
             subscription.HandlerDisplay,

@@ -516,4 +516,367 @@ public class DI025_EventSubscriptionLeakCodeFixTests
         await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", "DI025_AddUnsubscribeInDispose");
     }
+
+    // ----------------------------------------------------------------
+    // Tier 2 — add a Dispose method when the disposal contract already
+    // exists (inherited from a base) but no dispose-shaped method is
+    // declared in the analyzed type. Only the standard virtual
+    // Dispose(bool) pattern is safe: overriding it means our unsubscribe
+    // actually runs through the base's Dispose() -> Dispose(true)
+    // dispatch. Any inherited shape where an added public Dispose() would
+    // never be the method the container calls is refused as a fake repair.
+    // ----------------------------------------------------------------
+
+    private const string AddDisposeKey = "DI025_AddDisposeWithUnsubscribe";
+    private const string ImplementInterfaceKey = "DI025_ImplementIDisposableWithUnsubscribe";
+
+    [Fact]
+    public async Task CodeFix_AddsDisposeBoolOverride_WhenBaseHasVirtualDisposePattern()
+    {
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.MessageReceived += OnMessage|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+
+                protected override void Dispose(bool disposing)
+                {
+                    _bus.MessageReceived -= OnMessage;
+                    base.Dispose(disposing);
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_WhenBaseHasNonVirtualDispose()
+    {
+        // Adding our own Dispose() would hide the base's accessible non-virtual one; refuse.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_AddDispose_WhenBaseExplicitlyImplementsIDisposable()
+    {
+        // The base already satisfies IDisposable via an explicit implementation, so the
+        // container calls that base method. A new public Dispose() here would never run — a
+        // fake repair — so the add-dispose action is refused (no virtual Dispose(bool) hook).
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                void IDisposable.Dispose() { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBlockBodiedDisposeAlreadyExists()
+    {
+        // When the analyzed type already has a usable Dispose, the tier-1 insert is the right
+        // repair; the add-dispose action must not also fire (it would duplicate the member).
+        var source = Usings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                public void Dispose()
+                {
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    // ----------------------------------------------------------------
+    // Tier 3 — implement IDisposable outright, but only for
+    // scoped-registered subscribers (a scope deterministically disposes
+    // them). Transients would walk into DI008 territory, so stay refused.
+    // ----------------------------------------------------------------
+
+    private const string ScopedSubscriberUsings = """
+        using System;
+        using Microsoft.Extensions.DependencyInjection;
+
+        public interface IBus
+        {
+            event EventHandler MessageReceived;
+        }
+
+        public class Bus : IBus
+        {
+            public event EventHandler MessageReceived;
+        }
+
+        public static class Registrations
+        {
+            public static void Configure(IServiceCollection services)
+            {
+                services.AddSingleton<IBus, Bus>();
+                services.AddScoped<OrderHandler>();
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task CodeFix_ImplementsIDisposable_ForScopedRegisteredSubscriber()
+    {
+        var source = ScopedSubscriberUsings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.MessageReceived += OnMessage|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = ScopedSubscriberUsings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+
+                public void Dispose()
+                {
+                    _bus.MessageReceived -= OnMessage;
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ImplementInterface_ForTransientSubscriber()
+    {
+        // A transient that becomes IDisposable is exactly the DI008 disposable-transient-capture
+        // shape; the fix must never trade a DI025 for a DI008.
+        var source = Usings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ImplementInterface_ForAnonymousHandler()
+    {
+        var source = ScopedSubscriberUsings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+                private int _count;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += (sender, e) => _count++;
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ImplementInterface_ForDI026TransientSubscriber()
+    {
+        // DI026 only ever fires for transient subscribers, so the implement-interface tier is
+        // never appropriate there.
+        var source = ScopedUsings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI026", ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_ImplementsIDisposable_ForScopedSubscriber_WithChainedReceiver()
+    {
+        var chainedScopedUsings = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Inner
+            {
+                public event EventHandler Changed;
+            }
+
+            public class Outer
+            {
+                public Inner Inner { get; } = new Inner();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Outer>();
+                    services.AddScoped<OrderHandler>();
+                }
+            }
+
+            """;
+
+        var source = chainedScopedUsings + """
+            public class OrderHandler
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    [|_outer.Inner.Changed += OnChanged|];
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = chainedScopedUsings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly Outer _outer;
+
+                public OrderHandler(Outer outer)
+                {
+                    _outer = outer;
+                    _outer.Inner.Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+
+                public void Dispose()
+                {
+                    _outer.Inner.Changed -= OnChanged;
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, ImplementInterfaceKey);
+    }
 }

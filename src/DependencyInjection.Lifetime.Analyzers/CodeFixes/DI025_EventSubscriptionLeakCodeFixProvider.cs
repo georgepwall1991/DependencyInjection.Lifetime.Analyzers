@@ -14,18 +14,32 @@ namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
 /// <summary>
 /// Code fix provider for DI025 and its DI026 scoped-publisher Info tier: event subscription
-/// on a longer-lived publisher without a
-/// matching unsubscription. Offers the narrow safe repair only — when the handler is a
-/// method group and the subscriber already declares a Dispose method in source, insert the
-/// mirrored -= statement at the top of that method. Introducing IDisposable on a type that
-/// does not have it, or hoisting a lambda into a field, changes container disposal behavior
-/// and is intentionally not offered.
+/// on a longer-lived publisher without a matching unsubscription. The handler must be a
+/// method group whose receiver still resolves inside Dispose; three tiers of repair are then
+/// offered, in decreasing order of confidence:
+/// <list type="number">
+/// <item>Insert the mirrored -= at the top of an existing block-bodied Dispose method
+/// (when the type already implements the matching disposal interface).</item>
+/// <item>When the disposal contract is inherited from a base that follows the standard
+/// virtual Dispose(bool) pattern, add a <c>protected override void Dispose(bool)</c> that
+/// unsubscribes and chains to <c>base.Dispose(disposing)</c> — overriding the pattern means
+/// our unsubscribe actually runs through the base's Dispose() -&gt; Dispose(true) dispatch.</item>
+/// <item>For a SCOPED-registered subscriber that implements neither disposal interface,
+/// implement IDisposable outright (add the interface plus a Dispose that unsubscribes). The
+/// owning scope disposes it deterministically, so this introduces no leak.</item>
+/// </list>
+/// Introducing IDisposable on a <em>transient</em> subscriber is refused: it is exactly the
+/// DI008 disposable-transient-capture shape, so the fix would trade a DI025 for a DI008.
+/// Hoisting a lambda into a field is refused because it changes capture semantics.
 /// </summary>
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(DI025_EventSubscriptionLeakCodeFixProvider))]
 [Shared]
 public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
 {
     private const string AddUnsubscribeEquivalenceKey = "DI025_AddUnsubscribeInDispose";
+    private const string AddDisposeEquivalenceKey = "DI025_AddDisposeWithUnsubscribe";
+    private const string ImplementIDisposableEquivalenceKey = "DI025_ImplementIDisposableWithUnsubscribe";
+    private const string SubscriberLifetimePropertyKey = "SubscriberLifetime";
 
     /// <inheritdoc />
     public sealed override ImmutableArray<string> FixableDiagnosticIds =>
@@ -67,24 +81,77 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         }
 
         var containingType = subscription.FirstAncestorOrSelf<TypeDeclarationSyntax>();
-        if (containingType is null)
+        if (containingType is null ||
+            semanticModel.GetDeclaredSymbol(containingType, context.CancellationToken) is not INamedTypeSymbol typeSymbol)
         {
             return;
         }
 
+        // Tier 1: an existing block-bodied Dispose on a type that already implements the
+        // matching disposal interface — insert the mirrored -= at the top.
         var disposeMethod = FindDisposeMethod(containingType);
-        if (disposeMethod?.Body is null ||
-            !TypeImplementsDisposalContract(containingType, disposeMethod, semanticModel, context.CancellationToken))
+        if (disposeMethod?.Body is not null &&
+            TypeImplementsDisposalContract(containingType, disposeMethod, semanticModel, context.CancellationToken))
+        {
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: $"Unsubscribe in '{disposeMethod.Identifier.ValueText}'",
+                    createChangedDocument: cancellationToken => AddUnsubscribeAsync(
+                        context.Document, root, subscription, disposeMethod, cancellationToken),
+                    equivalenceKey: AddUnsubscribeEquivalenceKey),
+                diagnostic);
+            return;
+        }
+
+        // Beyond tier 1 the fix synthesizes a dispose path. If the type already declares its
+        // own dispose-shaped method that we could not use here (a different partial, an
+        // expression body), refuse rather than risk a duplicate member or a fake repair.
+        if (DeclaresOwnDisposeMember(typeSymbol))
+        {
+            return;
+        }
+
+        var unsubscribe = BuildUnsubscribeStatement(subscription);
+
+        var implementsIDisposable = ImplementsInterface(typeSymbol, "System.IDisposable");
+        var implementsIAsyncDisposable = ImplementsInterface(typeSymbol, "System.IAsyncDisposable");
+
+        if (implementsIDisposable || implementsIAsyncDisposable)
+        {
+            // Tier 2: the contract is inherited. Only the standard virtual Dispose(bool)
+            // pattern is safe to extend — overriding it guarantees our unsubscribe runs. Any
+            // other inherited shape (non-virtual or explicit Dispose) would leave the added
+            // method uncalled by the container, a fake repair, so refuse.
+            if (FindOverridableBaseDisposeBool(typeSymbol) is null)
+            {
+                return;
+            }
+
+            context.RegisterCodeFix(
+                CodeAction.Create(
+                    title: "Override Dispose(bool) to unsubscribe",
+                    createChangedDocument: cancellationToken => AddDisposeBoolOverrideAsync(
+                        context.Document, root, containingType, unsubscribe, cancellationToken),
+                    equivalenceKey: AddDisposeEquivalenceKey),
+                diagnostic);
+            return;
+        }
+
+        // Tier 3: the type implements neither disposal interface. Implementing IDisposable is
+        // only safe for scoped-registered subscribers; a transient that becomes IDisposable is
+        // the DI008 disposable-transient-capture shape.
+        if (!diagnostic.Properties.TryGetValue(SubscriberLifetimePropertyKey, out var lifetime) ||
+            lifetime != "Scoped")
         {
             return;
         }
 
         context.RegisterCodeFix(
             CodeAction.Create(
-                title: $"Unsubscribe in '{disposeMethod.Identifier.ValueText}'",
-                createChangedDocument: cancellationToken => AddUnsubscribeAsync(
-                    context.Document, root, subscription, disposeMethod, cancellationToken),
-                equivalenceKey: AddUnsubscribeEquivalenceKey),
+                title: "Implement IDisposable to unsubscribe",
+                createChangedDocument: cancellationToken => ImplementIDisposableAsync(
+                    context.Document, root, containingType, unsubscribe, cancellationToken),
+                equivalenceKey: ImplementIDisposableEquivalenceKey),
             diagnostic);
     }
 
@@ -219,6 +286,62 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
                    method.Identifier.ValueText == "DisposeAsync" && method.ParameterList.Parameters.Count == 0);
     }
 
+    /// <summary>
+    /// True when the type itself (across every partial) declares a dispose-shaped method.
+    /// Inherited members do not count — those are handled by the tier-2 base-pattern path.
+    /// </summary>
+    private static bool DeclaresOwnDisposeMember(INamedTypeSymbol typeSymbol) =>
+        typeSymbol.GetMembers().OfType<IMethodSymbol>().Any(method =>
+            (method.Name == "Dispose" &&
+             (method.Parameters.Length == 0 ||
+              (method.Parameters.Length == 1 && method.Parameters[0].Type.SpecialType == SpecialType.System_Boolean))) ||
+            (method.Name == "DisposeAsync" && method.Parameters.Length == 0));
+
+    private static bool ImplementsInterface(INamedTypeSymbol typeSymbol, string metadataDisplayName) =>
+        typeSymbol.AllInterfaces.Any(i => i.ToDisplayString() == metadataDisplayName);
+
+    /// <summary>
+    /// Finds an accessible, overridable <c>Dispose(bool)</c> declared on a base type — the hook
+    /// the standard dispose pattern exposes for derived cleanup.
+    /// </summary>
+    private static IMethodSymbol? FindOverridableBaseDisposeBool(INamedTypeSymbol typeSymbol)
+    {
+        for (var baseType = typeSymbol.BaseType;
+             baseType is not null && baseType.SpecialType != SpecialType.System_Object;
+             baseType = baseType.BaseType)
+        {
+            foreach (var method in baseType.GetMembers("Dispose").OfType<IMethodSymbol>())
+            {
+                if (method.Parameters.Length != 1 ||
+                    method.Parameters[0].Type.SpecialType != SpecialType.System_Boolean)
+                {
+                    continue;
+                }
+
+                var accessible = method.DeclaredAccessibility
+                    is Accessibility.Public
+                    or Accessibility.Protected
+                    or Accessibility.ProtectedOrInternal;
+
+                if (accessible && !method.IsSealed &&
+                    (method.IsVirtual || method.IsAbstract || method.IsOverride))
+                {
+                    return method;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static ExpressionStatementSyntax BuildUnsubscribeStatement(AssignmentExpressionSyntax subscription) =>
+        SyntaxFactory.ExpressionStatement(
+                SyntaxFactory.AssignmentExpression(
+                    SyntaxKind.SubtractAssignmentExpression,
+                    subscription.Left.WithoutTrivia(),
+                    Unwrap(subscription.Right).WithoutTrivia()))
+            .WithAdditionalAnnotations(Formatter.Annotation);
+
     private static Task<Document> AddUnsubscribeAsync(
         Document document,
         SyntaxNode root,
@@ -226,18 +349,105 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         MethodDeclarationSyntax disposeMethod,
         CancellationToken cancellationToken)
     {
-        var unsubscribe = SyntaxFactory.ExpressionStatement(
-                SyntaxFactory.AssignmentExpression(
-                    SyntaxKind.SubtractAssignmentExpression,
-                    subscription.Left.WithoutTrivia(),
-                    Unwrap(subscription.Right).WithoutTrivia()))
-            .WithAdditionalAnnotations(Formatter.Annotation);
+        var unsubscribe = BuildUnsubscribeStatement(subscription);
 
         var updatedBody = disposeMethod.Body!.WithStatements(
             disposeMethod.Body.Statements.Insert(0, unsubscribe));
 
         var updatedRoot = root.ReplaceNode(disposeMethod.Body!, updatedBody);
 
+        return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
+    }
+
+    /// <summary>
+    /// Adds <c>protected override void Dispose(bool disposing) { &lt;unsubscribe&gt;; base.Dispose(disposing); }</c>
+    /// to the analyzed declaration.
+    /// </summary>
+    private static Task<Document> AddDisposeBoolOverrideAsync(
+        Document document,
+        SyntaxNode root,
+        TypeDeclarationSyntax containingType,
+        ExpressionStatementSyntax unsubscribe,
+        CancellationToken cancellationToken)
+    {
+        var baseCall = SyntaxFactory.ExpressionStatement(
+            SyntaxFactory.InvocationExpression(
+                SyntaxFactory.MemberAccessExpression(
+                    SyntaxKind.SimpleMemberAccessExpression,
+                    SyntaxFactory.BaseExpression(),
+                    SyntaxFactory.IdentifierName("Dispose")),
+                SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(
+                    SyntaxFactory.Argument(SyntaxFactory.IdentifierName("disposing"))))));
+
+        var method = SyntaxFactory.MethodDeclaration(
+                SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword)),
+                SyntaxFactory.Identifier("Dispose"))
+            .WithModifiers(SyntaxFactory.TokenList(
+                SyntaxFactory.Token(SyntaxKind.ProtectedKeyword),
+                SyntaxFactory.Token(SyntaxKind.OverrideKeyword)))
+            .WithParameterList(SyntaxFactory.ParameterList(SyntaxFactory.SingletonSeparatedList(
+                SyntaxFactory.Parameter(SyntaxFactory.Identifier("disposing"))
+                    .WithType(SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.BoolKeyword))))))
+            .WithBody(SyntaxFactory.Block(unsubscribe, baseCall));
+
+        return AppendMemberAsync(document, root, containingType, method, cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds <c>IDisposable</c> to the base list and a <c>public void Dispose() { &lt;unsubscribe&gt;; }</c>.
+    /// </summary>
+    private static Task<Document> ImplementIDisposableAsync(
+        Document document,
+        SyntaxNode root,
+        TypeDeclarationSyntax containingType,
+        ExpressionStatementSyntax unsubscribe,
+        CancellationToken cancellationToken)
+    {
+        var method = SyntaxFactory.MethodDeclaration(
+                SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword)),
+                SyntaxFactory.Identifier("Dispose"))
+            .WithModifiers(SyntaxFactory.TokenList(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
+            .WithBody(SyntaxFactory.Block(unsubscribe));
+
+        var disposableBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName("IDisposable"));
+
+        TypeDeclarationSyntax typeWithBase;
+        if (containingType.BaseList is null)
+        {
+            // No base list yet: move the identifier's trailing trivia (the newline before the
+            // opening brace) to after the new base list so we get `Name : IDisposable\n{`
+            // rather than the base list landing on its own line.
+            var identifier = containingType.Identifier;
+            var trailing = identifier.TrailingTrivia;
+            var baseList = SyntaxFactory
+                .BaseList(SyntaxFactory.SingletonSeparatedList<BaseTypeSyntax>(disposableBaseType))
+                .WithTrailingTrivia(trailing);
+
+            typeWithBase = containingType
+                .WithIdentifier(identifier.WithTrailingTrivia(SyntaxFactory.Space))
+                .WithBaseList(baseList);
+        }
+        else
+        {
+            typeWithBase = containingType.WithBaseList(containingType.BaseList.AddTypes(disposableBaseType));
+        }
+
+        var newType = typeWithBase.AddMembers(method.WithAdditionalAnnotations(Formatter.Annotation));
+
+        var updatedRoot = root.ReplaceNode(containingType, newType.WithAdditionalAnnotations(Formatter.Annotation));
+
+        return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
+    }
+
+    private static Task<Document> AppendMemberAsync(
+        Document document,
+        SyntaxNode root,
+        TypeDeclarationSyntax containingType,
+        MemberDeclarationSyntax member,
+        CancellationToken cancellationToken)
+    {
+        var newType = containingType.AddMembers(member.WithAdditionalAnnotations(Formatter.Annotation));
+        var updatedRoot = root.ReplaceNode(containingType, newType.WithAdditionalAnnotations(Formatter.Annotation));
         return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
     }
 }

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.16.0] - 2026-07-03
+## [2.17.0] - 2026-07-03
+
+### Added
+
+- **DI025/DI026 code fix now creates the disposal path, not just fills it** — the fixer previously only inserted the mirrored `-=` into a Dispose method that already existed; it refused whenever the type had no dispose-shaped method. Two new tiers extend it, both still gated on a method-group handler whose receiver resolves inside `Dispose`. **Tier 2 (inherited contract):** when disposability comes from a base type that follows the standard virtual `Dispose(bool)` pattern, the fix adds a `protected override void Dispose(bool disposing)` that unsubscribes and chains to `base.Dispose(disposing)` — overriding the pattern is what guarantees the unsubscribe actually runs, through the base's `Dispose()` → `Dispose(true)` dispatch. Inherited shapes with no such hook (a non-virtual or explicitly-implemented base `Dispose`) are refused, because a method the container never calls would be a fake repair. **Tier 3 (implement the interface):** a subscriber registered **scoped** that implements neither disposal interface gets `IDisposable` added to its base list plus a `public void Dispose()` that unsubscribes; the owning scope disposes it deterministically, so no leak is introduced. To make tier 3 possible without re-running registration collection, the analyzer now stamps the subscriber's registered lifetime into the diagnostic's `Properties` bag (`SubscriberLifetime` = `Transient`/`Scoped`) — a purely additive change; all diagnostic messages are unchanged. Introducing `IDisposable` on a **transient** subscriber is deliberately refused: a disposable transient is exactly the DI008 disposable-transient-capture shape, so the fix must never trade a DI025 for a DI008. DI026 only ever fires for transient subscribers, so its code fix offers tiers 1 and 2 but never tier 3. Lambda hoisting stays refused because it changes capture semantics.
 
 ### Added
 
