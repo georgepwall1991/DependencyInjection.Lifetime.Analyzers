@@ -575,7 +575,11 @@ public class DI025_EventSubscriptionLeakCodeFixTests
 
                 protected override void Dispose(bool disposing)
                 {
-                    _bus.MessageReceived -= OnMessage;
+                    if (disposing)
+                    {
+                        _bus.MessageReceived -= OnMessage;
+                    }
+
                     base.Dispose(disposing);
                 }
             }
@@ -773,6 +777,36 @@ public class DI025_EventSubscriptionLeakCodeFixTests
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
     }
 
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeDoesNotDispatchToHook()
+    {
+        // The base's `Dispose()` never calls `Dispose(bool)`, so an added override would never
+        // run — a fake repair. Refuse unless the pattern actually dispatches to the hook.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() { }
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
     // ----------------------------------------------------------------
     // Tier 3 — implement IDisposable outright, but only for
     // scoped-registered subscribers (a scope deterministically disposes
@@ -950,6 +984,57 @@ public class DI025_EventSubscriptionLeakCodeFixTests
         // A transient that becomes IDisposable is exactly the DI008 disposable-transient-capture
         // shape; the fix must never trade a DI025 for a DI008.
         var source = Usings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_NotOffered_ImplementInterface_ForMixedTransientAndScopedSubscriber()
+    {
+        // Registered BOTH transient and scoped: the still-live transient registration makes an
+        // added IDisposable the DI008 shape, so implement-interface must not be offered even
+        // though the max-rank lifetime is scoped.
+        var mixedUsings = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IBus
+            {
+                event EventHandler MessageReceived;
+            }
+
+            public class Bus : IBus
+            {
+                public event EventHandler MessageReceived;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IBus, Bus>();
+                    services.AddTransient<OrderHandler>();
+                    services.AddScoped<OrderHandler>();
+                }
+            }
+
+            """;
+
+        var source = mixedUsings + """
             public class OrderHandler
             {
                 private readonly IBus _bus;

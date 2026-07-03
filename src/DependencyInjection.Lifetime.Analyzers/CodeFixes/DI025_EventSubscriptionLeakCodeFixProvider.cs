@@ -122,8 +122,11 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             // Tier 2: the contract is inherited. Only the standard virtual Dispose(bool)
             // pattern is safe to extend — overriding it guarantees our unsubscribe runs. Any
             // other inherited shape (non-virtual or explicit Dispose) would leave the added
-            // method uncalled by the container, a fake repair, so refuse.
-            if (FindOverridableBaseDisposeBool(typeSymbol) is null)
+            // method uncalled by the container, a fake repair, so refuse. We also confirm the
+            // base's parameterless Dispose() actually dispatches to the bool hook; if it does
+            // not (or is metadata-only), the override would never run either.
+            if (FindOverridableBaseDisposeBool(typeSymbol) is null ||
+                !BaseDisposeDispatchesToBoolHook(typeSymbol, context.CancellationToken))
             {
                 return;
             }
@@ -339,6 +342,72 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         return null;
     }
 
+    /// <summary>
+    /// Confirms the standard dispose pattern is actually wired: the nearest accessible
+    /// parameterless <c>Dispose()</c> in the base chain must, in source, invoke <c>Dispose(...)</c>
+    /// with a single bool-shaped argument (a <c>true</c>/<c>false</c> literal or an identifier such
+    /// as <c>disposing</c>). A metadata-only base (no syntax to inspect) or a <c>Dispose()</c> that
+    /// never dispatches means a <c>protected override void Dispose(bool)</c> we add would never run.
+    /// </summary>
+    private static bool BaseDisposeDispatchesToBoolHook(
+        INamedTypeSymbol typeSymbol,
+        CancellationToken cancellationToken)
+    {
+        for (var baseType = typeSymbol.BaseType;
+             baseType is not null && baseType.SpecialType != SpecialType.System_Object;
+             baseType = baseType.BaseType)
+        {
+            var parameterlessDispose = baseType.GetMembers("Dispose").OfType<IMethodSymbol>().FirstOrDefault(method =>
+                method.Parameters.Length == 0 &&
+                method.DeclaredAccessibility is Accessibility.Public
+                    or Accessibility.Protected
+                    or Accessibility.ProtectedOrInternal);
+
+            if (parameterlessDispose is null)
+            {
+                continue;
+            }
+
+            // Found the nearest dispatching candidate; it alone decides. If it has no source
+            // (metadata-only) we cannot prove dispatch, so refuse.
+            foreach (var reference in parameterlessDispose.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax(cancellationToken) is not MethodDeclarationSyntax declaration)
+                {
+                    continue;
+                }
+
+                var body = (SyntaxNode?)declaration.Body ?? declaration.ExpressionBody;
+                if (body is not null && DispatchesToDisposeBool(body))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool DispatchesToDisposeBool(SyntaxNode body) =>
+        body.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Any(invocation =>
+                invocation.ArgumentList.Arguments.Count == 1 &&
+                IsBoolShapedArgument(invocation.ArgumentList.Arguments[0].Expression) &&
+                invocation.Expression switch
+                {
+                    IdentifierNameSyntax { Identifier.ValueText: "Dispose" } => true,
+                    MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Dispose" } => true,
+                    _ => false
+                });
+
+    private static bool IsBoolShapedArgument(ExpressionSyntax expression) =>
+        expression.IsKind(SyntaxKind.TrueLiteralExpression) ||
+        expression.IsKind(SyntaxKind.FalseLiteralExpression) ||
+        expression is IdentifierNameSyntax;
+
     private static ExpressionStatementSyntax BuildUnsubscribeStatement(AssignmentExpressionSyntax subscription) =>
         SyntaxFactory.ExpressionStatement(
                 SyntaxFactory.AssignmentExpression(
@@ -365,8 +434,10 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
     }
 
     /// <summary>
-    /// Adds <c>protected override void Dispose(bool disposing) { &lt;unsubscribe&gt;; base.Dispose(disposing); }</c>
-    /// to the analyzed declaration.
+    /// Adds <c>protected override void Dispose(bool disposing) { if (disposing) { &lt;unsubscribe&gt;; } base.Dispose(disposing); }</c>
+    /// to the analyzed declaration. The unsubscribe is guarded by <c>if (disposing)</c> because
+    /// <c>Dispose(bool)</c> also runs on the finalizer path (<c>Dispose(false)</c>), where
+    /// touching the managed publisher would violate the dispose pattern.
     /// </summary>
     private static Task<Document> AddDisposeBoolOverrideAsync(
         Document document,
@@ -375,6 +446,10 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         ExpressionStatementSyntax unsubscribe,
         CancellationToken cancellationToken)
     {
+        var guardedUnsubscribe = SyntaxFactory.IfStatement(
+            SyntaxFactory.IdentifierName("disposing"),
+            SyntaxFactory.Block(unsubscribe));
+
         var baseCall = SyntaxFactory.ExpressionStatement(
             SyntaxFactory.InvocationExpression(
                 SyntaxFactory.MemberAccessExpression(
@@ -393,7 +468,7 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             .WithParameterList(SyntaxFactory.ParameterList(SyntaxFactory.SingletonSeparatedList(
                 SyntaxFactory.Parameter(SyntaxFactory.Identifier("disposing"))
                     .WithType(SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.BoolKeyword))))))
-            .WithBody(SyntaxFactory.Block(unsubscribe, baseCall));
+            .WithBody(SyntaxFactory.Block(guardedUnsubscribe, baseCall));
 
         return AppendMemberAsync(document, root, containingType, method, cancellationToken);
     }
