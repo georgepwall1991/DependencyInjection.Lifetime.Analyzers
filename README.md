@@ -20,7 +20,7 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, cir
 
 - Works in Rider, Visual Studio, and `dotnet build` / CI.
 - Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 23 focused diagnostics, with code fixes where safe and unambiguous.
+- Ships 26 focused diagnostics, with code fixes where safe and unambiguous.
 
 ## Why This DI Lifetime Analyser
 
@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.17.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.17.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.17.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.0" />
 ```
 
 Then reference it from the project file:
@@ -142,6 +142,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 - [DI024: Hosted Service Creates Scope Outside Execution Loop](#di024-hosted-service-creates-scope-outside-execution-loop)
 - [DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe)
 - [DI026: Event Subscription On Scoped Publisher Without Unsubscribe](#di026-event-subscription-on-scoped-publisher-without-unsubscribe)
+- [DI027: Rx Subscription On Longer-Lived Observable Without Dispose](#di027-rx-subscription-on-longer-lived-observable-without-dispose)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -175,6 +176,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 | [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 | [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) | Event subscription on scoped publisher without unsubscribe | Info | Yes |
+| [DI027](#di027-rx-subscription-on-longer-lived-observable-without-dispose) | Rx subscription on longer-lived observable without dispose | Warning | No |
 
 ---
 
@@ -1154,9 +1156,51 @@ DI026 shares every DI025 guardrail: scoped subscribers on scoped publishers stay
 
 ---
 
+## DI027: Rx Subscription On Longer-Lived Observable Without Dispose
+
+**What it catches:** The Rx twin of DI025. `IObservable<T>.Subscribe(...)` returns an `IDisposable` token that unsubscribes the observer when disposed — there is no `-=` to prove missing, so the leak proof inverts to a **discarded token**. A **transient** or **scoped** registered service subscribes an instance-capturing handler (method group, `this`-capturing lambda, or stored delegate) to an observable exposed by a longer-lived publisher — an injected **singleton** dependency, or a **scoped** publisher shared by a transient subscriber — and throws the returned token away. The observable is reached through the same classified receivers as DI025 (an injected member proven ctor-assigned, a constructor parameter, or a stable chained projection such as `_source.Ticks`), and the publisher's registration lifetime is resolved with the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded).
+
+**Why it matters:** A discarded subscription is a live one. The observable holds the observer, the observer captures the subscriber, and nothing ever releases it, so the longer-lived publisher roots every subscriber instance the container creates — leaking memory on each resolution and invoking stale observers against released state. DI027 is a single **Warning** tier: whether the publisher is singleton or a scope-shared scoped, a discarded token that outlives the subscriber is a definite leak.
+
+```csharp
+services.AddSingleton<ITicker, Ticker>();   // Ticker : IObservable<int>
+services.AddTransient<TickHandler>();
+
+public class TickHandler
+{
+    public TickHandler(ITicker ticker)
+    {
+        ticker.Subscribe(OnTick); // DI027: the IDisposable is discarded; every TickHandler stays rooted
+    }
+
+    private void OnTick(int value) { }
+}
+```
+
+**Correct pattern:** store the token and dispose it when the subscriber is released (for example in `Dispose`, or via a `CompositeDisposable`).
+
+```csharp
+public class TickHandler : IDisposable
+{
+    private readonly IDisposable _subscription;
+
+    public TickHandler(ITicker ticker) => _subscription = ticker.Subscribe(OnTick);
+
+    public void Dispose() => _subscription.Dispose();
+
+    private void OnTick(int value) { }
+}
+```
+
+**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), or a local initialized with the token that is never referenced again (and is not a `using` declaration). Everything else stays silent and is a documented false negative: tokens stored in a **field** (dispose-path analysis is deferred), `using`/`using var` subscriptions, tokens that are later `.Dispose()`d, returned, or passed as arguments, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable` patterns, and the BCL `Subscribe(IObserver<T>)` overload (only the `Action<T>`-based overloads carry an instance-capturing handler). As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, unregistered subscriber/publisher types, keyed-only publishers, and unstable chained projections all stay silent, and the static `ObservableExtensions.Subscribe(source, handler)` call shape is not matched (only the `source.Subscribe(handler)` form).
+
+**Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI026`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI027`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

@@ -431,4 +431,22 @@ public static class DiagnosticDescriptors
         isEnabledByDefault: true,
         description: "A -= with an anonymous function that is textually identical to the subscribed handler creates a different delegate instance, so the removal is a no-op and the scoped publisher keeps rooting every transient subscriber instance until its scope is disposed. Store the delegate once (in a field) and use the same reference on both the += and -= sides.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
+
+    /// <summary>
+    /// DI027: a shorter-lived service subscribes an instance-capturing handler to an observable
+    /// on a longer-lived publisher (a singleton dependency, or a scoped publisher with a
+    /// transient subscriber) and discards the IDisposable subscription token. The Rx twin of
+    /// DI025 — where DI025 proves a missing <c>-=</c>, DI027 proves the returned token is thrown
+    /// away, which leaves the observer (and the subscriber it captures) rooted just the same.
+    /// Reported at compilation end because the lifetime proof needs the full registration picture.
+    /// </summary>
+    public static readonly DiagnosticDescriptor RxSubscriptionLeak = new(
+        id: DiagnosticIds.RxSubscriptionLeak,
+        title: "Dispose the subscription returned by Subscribe on a longer-lived observable",
+        messageFormat: "'{0}' is registered as {1} but discards the IDisposable returned by subscribing {2} to observable '{3}' on {4}. The subscription roots every '{0}' instance the container creates; store the token and dispose it when the subscriber is released.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "IObservable<T>.Subscribe returns an IDisposable that unsubscribes the observer when disposed. A transient or scoped service that subscribes to an observable exposed by a longer-lived publisher (a singleton dependency, or a scoped publisher shared by a transient) and discards that token — as an ignored expression statement or a discard assignment — leaves the observer registered for the publisher's whole lifetime. The publisher roots every subscriber instance the container ever creates, leaking memory on each resolution and invoking stale observers against released state. Store the token and dispose it when the subscriber is released (for example in Dispose, or via a CompositeDisposable).",
+        customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

@@ -744,6 +744,20 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI027",
+      "ruleId": "DI027",
+      "claims": [
+        {
+          "filePathContains": "DI027/RxSubscriptionLeakExamples.cs",
+          "anchor": "_ticker.Subscribe(OnTick);",
+          "occurrence": 1,
+          "ruleId": "DI027",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],
