@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-07-03
+
+### Added
+
+- **DI025/DI026 delegate-field subscriptions** — closes a false negative the docs previously half-attributed to events. C# forbids assigning another type's field-like event, so the cross-type delegate leak actually lives on a **public delegate-typed field or property** of the publisher: `_bus.Handlers += OnMessage` and the equivalent self-assignment `_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)` now report identically to an event `+=` (singleton publisher → DI025 Warning, scoped publisher → DI026 Info), with a mirrored `Delegate.Remove` self-assignment recognized as the matching unsubscription. Only the trivially-provable self-assignment form is reported — the first `Delegate.Combine` argument must be the same member the result is assigned back to, reached through the same receiver — so indirect shapes (result stored in a local or a different member) stay silent. This required generalizing the subscription record's member from `IEventSymbol` to `ISymbol` and teaching the handler classifier to resolve the single unambiguous method-group candidate that a bare `Delegate.Combine` argument leaves with a null symbol (no single target delegate type). It matters because event-style delegate accumulation on a long-lived publisher roots every subscriber the container creates, exactly like an event `+=`, and was invisible before.
+
+### Changed
+
+- **DI025 guardrail pins** — five behaviors are now regression-pinned: a weak-event helper method call (`WeakEventManager.AddHandler(...)`) stays silent (not a `+=`/`Combine`), a static-event `-=` in Dispose suppresses, a scoped subscriber on a static (process-lifetime) event reports DI025 at Warning and never the DI026 Info tier, a branch-conditional `-=` (`if (_attached) { _bus.E -= H; }`) suppresses unconditionally, and a self-unsubscribing handler (`_bus.E -= OnMessage` inside the handler body) stays silent. The branch-conditional suppression is a deliberate, documented false negative that favours FP-safety over proving the guard always runs.
+
 ## [2.15.0] - 2026-07-03
 
 ### Changed

@@ -20,17 +20,27 @@ namespace SampleApp.Diagnostics.DI025
         public MessageBus Bus { get; } = new MessageBus();
     }
 
+    // C# forbids assigning another type's field-like event, so the cross-type Combine leak
+    // lives on a public delegate-typed member instead of an event.
+    public class DelegateEventBus
+    {
+        public EventHandler Handlers;
+    }
+
     public static class Registrations
     {
         public static void Configure(IServiceCollection services)
         {
             services.AddSingleton<IMessageBus, MessageBus>();
             services.AddSingleton<BusHost>();
+            services.AddSingleton<DelegateEventBus>();
             services.AddTransient<Bad_SubscribeWithoutUnsubscribe>();
             services.AddTransient<Bad_AnonymousHandlerSubscription>();
             services.AddTransient<Bad_ChainedReceiverSubscription>();
+            services.AddTransient<Bad_DelegateCombineSubscription>();
             services.AddScoped<Good_UnsubscribeInDispose>();
             services.AddScoped<Good_ChainedUnsubscribeInDispose>();
+            services.AddScoped<Good_DelegateRemoveInDispose>();
         }
     }
 
@@ -73,6 +83,40 @@ namespace SampleApp.Diagnostics.DI025
             // [DI025] The publisher is reached through a stable projection of the singleton
             // BusHost, so the chained subscription roots this transient just the same.
             _host.Bus.MessageReceived += OnMessage;
+        }
+
+        private void OnMessage(object sender, EventArgs e) { }
+    }
+
+    public class Bad_DelegateCombineSubscription
+    {
+        private readonly DelegateEventBus _bus;
+
+        public Bad_DelegateCombineSubscription(DelegateEventBus bus)
+        {
+            _bus = bus;
+            // [DI025] A Delegate.Combine self-assignment onto the singleton's public delegate
+            // field roots this transient exactly like a += on an event, and it never removes.
+            _bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage);
+        }
+
+        private void OnMessage(object sender, EventArgs e) { }
+    }
+
+    public class Good_DelegateRemoveInDispose : IDisposable
+    {
+        private readonly DelegateEventBus _bus;
+
+        public Good_DelegateRemoveInDispose(DelegateEventBus bus)
+        {
+            _bus = bus;
+            _bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage);
+        }
+
+        public void Dispose()
+        {
+            // The mirrored Delegate.Remove self-assignment releases this instance.
+            _bus.Handlers = (EventHandler)Delegate.Remove(_bus.Handlers, OnMessage);
         }
 
         private void OnMessage(object sender, EventArgs e) { }

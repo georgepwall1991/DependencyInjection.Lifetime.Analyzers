@@ -720,6 +720,13 @@
           "occurrence": 1,
           "ruleId": "DI025",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI025/EventSubscriptionLeakExamples.cs",
+          "anchor": "_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage);",
+          "occurrence": 1,
+          "ruleId": "DI025",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": []

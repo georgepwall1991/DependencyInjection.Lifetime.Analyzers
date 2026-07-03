@@ -43,7 +43,7 @@ internal static class EventHandlerClassification
                 : (EventHandlerKind.Unknown, null, AnonymousHandlerDisplay);
         }
 
-        var handlerSymbol = semanticModel.GetSymbolInfo(handler, cancellationToken).Symbol;
+        var handlerSymbol = ResolveHandlerSymbol(handler, semanticModel, cancellationToken);
 
         switch (handlerSymbol)
         {
@@ -70,6 +70,28 @@ internal static class EventHandlerClassification
             default:
                 return (EventHandlerKind.Unknown, null, string.Empty);
         }
+    }
+
+    /// <summary>
+    /// Resolves the handler expression's symbol. A method group passed where the target is
+    /// <c>System.Delegate</c> — the <c>Delegate.Combine</c> argument shape — has no single target
+    /// delegate type, so <see cref="SymbolInfo.Symbol"/> is null; the one unambiguous candidate
+    /// method is the handler. Ambiguous groups (more than one candidate) stay unresolved.
+    /// </summary>
+    private static ISymbol? ResolveHandlerSymbol(
+        ExpressionSyntax handler,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var symbolInfo = semanticModel.GetSymbolInfo(handler, cancellationToken);
+        if (symbolInfo.Symbol is not null)
+        {
+            return symbolInfo.Symbol;
+        }
+
+        return symbolInfo.CandidateSymbols.Length == 1 && symbolInfo.CandidateSymbols[0] is IMethodSymbol singleCandidate
+            ? singleCandidate
+            : null;
     }
 
     /// <summary>

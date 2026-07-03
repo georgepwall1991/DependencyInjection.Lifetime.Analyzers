@@ -65,6 +65,10 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 syntaxContext => CollectEventAccess(syntaxContext, removals, isSubscription: false),
                 SyntaxKind.SubtractAssignmentExpression);
 
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext => CollectDelegateCombineAccess(syntaxContext, subscriptions, removals),
+                SyntaxKind.SimpleAssignmentExpression);
+
             compilationContext.RegisterCompilationEndAction(endContext =>
                 ReportLeakedSubscriptions(endContext, registrationCollector, lifetimeClassifier, subscriptions, removals));
         });
@@ -74,7 +78,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
     {
         public EventAccessRecord(
             INamedTypeSymbol containingType,
-            IEventSymbol eventSymbol,
+            ISymbol member,
             EventReceiverKind receiverKind,
             ISymbol? receiverRoot,
             ImmutableArray<ISymbol> receiverSegments,
@@ -85,7 +89,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             Location location)
         {
             ContainingType = containingType;
-            EventSymbol = eventSymbol;
+            Member = member;
             ReceiverKind = receiverKind;
             ReceiverRoot = receiverRoot;
             ReceiverSegments = receiverSegments;
@@ -97,7 +101,14 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         }
 
         public INamedTypeSymbol ContainingType { get; }
-        public IEventSymbol EventSymbol { get; }
+
+        /// <summary>
+        /// The subscribed-to member: a field-like event, or a delegate-typed field/property
+        /// that carries the subscription through <c>+=</c> or a <c>Delegate.Combine</c>
+        /// self-assignment. Only <c>.Name</c>, <c>.ContainingType</c>, <c>.IsStatic</c>, and
+        /// symbol-equality matching are used, all valid on <see cref="ISymbol"/>.
+        /// </summary>
+        public ISymbol Member { get; }
         public EventReceiverKind ReceiverKind { get; }
         public ISymbol? ReceiverRoot { get; }
 
@@ -122,11 +133,75 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         var assignment = (AssignmentExpressionSyntax)context.Node;
         var semanticModel = context.SemanticModel;
 
-        if (semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol is not IEventSymbol eventSymbol)
+        // A field-like event binds to an IEventSymbol; C# forbids assigning another type's
+        // event, so the cross-type += leak on a public delegate member binds the field or
+        // property itself — accept both.
+        if (semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol is not { } leftSymbol ||
+            !IsSubscribableMember(leftSymbol))
         {
             return;
         }
 
+        AddRecord(
+            context, records, isSubscription, assignment,
+            leftSymbol, assignment.Left, assignment.Right, semanticModel);
+    }
+
+    /// <summary>
+    /// Collects the delegate-typed twin of the <c>+=</c> shape: a self-assignment of the form
+    /// <c>_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)</c>. Only the
+    /// trivially-provable form — the first Combine argument is the same member the result is
+    /// assigned back to — is recorded; <c>Delegate.Remove</c> mirrors it as an unsubscription.
+    /// Anything indirect (result stored elsewhere, a different first argument) stays silent.
+    /// </summary>
+    private static void CollectDelegateCombineAccess(
+        SyntaxNodeAnalysisContext context,
+        ConcurrentBag<EventAccessRecord> subscriptions,
+        ConcurrentBag<EventAccessRecord> removals)
+    {
+        var assignment = (AssignmentExpressionSyntax)context.Node;
+        var semanticModel = context.SemanticModel;
+        var cancellationToken = context.CancellationToken;
+
+        if (semanticModel.GetSymbolInfo(assignment.Left, cancellationToken).Symbol is not { } leftSymbol ||
+            !IsDelegateTypedMember(leftSymbol))
+        {
+            return;
+        }
+
+        if (PeelCastsAndParens(assignment.Right) is not InvocationExpressionSyntax invocation ||
+            invocation.ArgumentList.Arguments.Count != 2 ||
+            semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol is not IMethodSymbol combineMethod ||
+            !IsDelegateCombineOrRemove(combineMethod, out var isSubscription))
+        {
+            return;
+        }
+
+        // The first argument must be the same member the result is assigned back to, reached
+        // through the same receiver — otherwise the assignment does not accumulate onto the LHS.
+        var firstArgument = PeelCastsAndParens(invocation.ArgumentList.Arguments[0].Expression);
+        if (semanticModel.GetSymbolInfo(firstArgument, cancellationToken).Symbol is not { } firstArgumentSymbol ||
+            !SymbolEqualityComparer.Default.Equals(firstArgumentSymbol, leftSymbol) ||
+            !ReceiversAreSameRoot(assignment.Left, firstArgument, leftSymbol, semanticModel, cancellationToken))
+        {
+            return;
+        }
+
+        AddRecord(
+            context, isSubscription ? subscriptions : removals, isSubscription, assignment,
+            leftSymbol, assignment.Left, invocation.ArgumentList.Arguments[1].Expression, semanticModel);
+    }
+
+    private static void AddRecord(
+        SyntaxNodeAnalysisContext context,
+        ConcurrentBag<EventAccessRecord> records,
+        bool isSubscription,
+        AssignmentExpressionSyntax assignment,
+        ISymbol member,
+        ExpressionSyntax receiverExpression,
+        ExpressionSyntax handlerExpression,
+        SemanticModel semanticModel)
+    {
         var containingType = GetEnclosingNamedType(assignment, semanticModel, context.CancellationToken);
         if (containingType is null)
         {
@@ -134,10 +209,10 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         }
 
         var (receiverKind, receiverRoot, receiverSegments, publisherType) = EventReceiverClassification.ClassifyReceiver(
-            assignment.Left, eventSymbol, containingType, semanticModel, context.CancellationToken);
+            receiverExpression, member, containingType, semanticModel, context.CancellationToken);
 
         var (handlerKind, handlerIdentity, handlerDisplay) = EventHandlerClassification.ClassifyHandler(
-            assignment.Right, containingType, semanticModel, context.CancellationToken);
+            handlerExpression, containingType, semanticModel, context.CancellationToken);
 
         if (isSubscription &&
             (receiverKind == EventReceiverKind.Unknown || handlerKind == EventHandlerKind.Unknown))
@@ -150,7 +225,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
 
         records.Add(new EventAccessRecord(
             containingType,
-            eventSymbol,
+            member,
             receiverKind,
             receiverRoot,
             receiverSegments,
@@ -159,6 +234,74 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             handlerIdentity,
             handlerDisplay,
             assignment.GetLocation()));
+    }
+
+    private static bool IsSubscribableMember(ISymbol symbol) =>
+        symbol is IEventSymbol || IsDelegateTypedMember(symbol);
+
+    private static bool IsDelegateTypedMember(ISymbol symbol) => symbol switch
+    {
+        IFieldSymbol field => field.Type.TypeKind == TypeKind.Delegate,
+        IPropertySymbol property => property.Type.TypeKind == TypeKind.Delegate,
+        _ => false
+    };
+
+    private static bool IsDelegateCombineOrRemove(IMethodSymbol method, out bool isSubscription)
+    {
+        isSubscription = method.Name == "Combine";
+        return (isSubscription || method.Name == "Remove") &&
+               method.ContainingType is { Name: "Delegate", ContainingNamespace.Name: "System" };
+    }
+
+    /// <summary>
+    /// Confirms the LHS member access and the first Combine argument reach the member through
+    /// the same receiver root (both <c>_bus.Handlers</c>), so the assignment accumulates onto
+    /// the very member it reads. Direct <c>this</c>-qualified access on both sides also matches.
+    /// </summary>
+    private static bool ReceiversAreSameRoot(
+        ExpressionSyntax left,
+        ExpressionSyntax firstArgument,
+        ISymbol member,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (member.IsStatic)
+        {
+            return true;
+        }
+
+        var leftReceiver = (left as MemberAccessExpressionSyntax)?.Expression;
+        var firstReceiver = (firstArgument as MemberAccessExpressionSyntax)?.Expression;
+
+        if (leftReceiver is null || firstReceiver is null)
+        {
+            // Both sides unqualified (`Handlers = Combine(Handlers, ...)` on `this`) is a match;
+            // a mismatch of qualification shapes is not provably the same receiver.
+            return leftReceiver is null && firstReceiver is null;
+        }
+
+        var leftRoot = semanticModel.GetSymbolInfo(leftReceiver, cancellationToken).Symbol;
+        var firstRoot = semanticModel.GetSymbolInfo(firstReceiver, cancellationToken).Symbol;
+        return leftRoot is not null &&
+               SymbolEqualityComparer.Default.Equals(leftRoot, firstRoot);
+    }
+
+    private static ExpressionSyntax PeelCastsAndParens(ExpressionSyntax expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    expression = parenthesized.Expression;
+                    continue;
+                case CastExpressionSyntax cast:
+                    expression = cast.Expression;
+                    continue;
+                default:
+                    return expression;
+            }
+        }
     }
 
     private static INamedTypeSymbol? GetEnclosingNamedType(
@@ -249,7 +392,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
 
         isScopedPublisherTier = publisherRank == RankOf(ServiceLifetime.Scoped);
 
-        if (IsEventSourcePublisher(subscription.EventSymbol.ContainingType))
+        if (IsEventSourcePublisher(subscription.Member.ContainingType))
         {
             return false;
         }
@@ -293,7 +436,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         foreach (var removal in removalList)
         {
             if (!AreRelatedTypes(subscription.ContainingType, removal.ContainingType) ||
-                !SymbolEqualityComparer.Default.Equals(subscription.EventSymbol, removal.EventSymbol))
+                !SymbolEqualityComparer.Default.Equals(subscription.Member, removal.Member))
             {
                 continue;
             }
@@ -354,7 +497,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             // silent), so its message formats omit the subscriber-lifetime placeholder.
             var scopedPublisherText = subscription.ReceiverSegments.IsEmpty
                 ? $"the scoped service '{subscription.PublisherType?.Name}'"
-                : $"'{subscription.EventSymbol.ContainingType.Name}' held by the scoped service '{subscription.PublisherType?.Name}'";
+                : $"'{subscription.Member.ContainingType.Name}' held by the scoped service '{subscription.PublisherType?.Name}'";
 
             if (subscription.HandlerKind == EventHandlerKind.AnonymousCapturingInstance)
             {
@@ -365,7 +508,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                         subscription.Location,
                         additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
                         subscription.ContainingType.Name,
-                        subscription.EventSymbol.Name,
+                        subscription.Member.Name,
                         scopedPublisherText);
                 }
 
@@ -373,7 +516,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                     DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherAnonymousHandler,
                     subscription.Location,
                     subscription.ContainingType.Name,
-                    subscription.EventSymbol.Name,
+                    subscription.Member.Name,
                     scopedPublisherText);
             }
 
@@ -382,16 +525,16 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 subscription.Location,
                 subscription.ContainingType.Name,
                 subscription.HandlerDisplay,
-                subscription.EventSymbol.Name,
+                subscription.Member.Name,
                 scopedPublisherText);
         }
 
         var lifetimeText = subscriberRank == RankOf(ServiceLifetime.Transient) ? "transient" : "scoped";
         var publisherText = subscription.ReceiverKind == EventReceiverKind.StaticEvent
-            ? $"the static event publisher '{subscription.EventSymbol.ContainingType.Name}'"
+            ? $"the static event publisher '{subscription.Member.ContainingType.Name}'"
             : subscription.ReceiverSegments.IsEmpty
                 ? $"the singleton service '{subscription.PublisherType?.Name}'"
-                : $"'{subscription.EventSymbol.ContainingType.Name}' held by the singleton service '{subscription.PublisherType?.Name}'";
+                : $"'{subscription.Member.ContainingType.Name}' held by the singleton service '{subscription.PublisherType?.Name}'";
 
         if (subscription.HandlerKind == EventHandlerKind.AnonymousCapturingInstance)
         {
@@ -403,7 +546,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                     additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
                     subscription.ContainingType.Name,
                     lifetimeText,
-                    subscription.EventSymbol.Name,
+                    subscription.Member.Name,
                     publisherText);
             }
 
@@ -412,7 +555,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 subscription.Location,
                 subscription.ContainingType.Name,
                 lifetimeText,
-                subscription.EventSymbol.Name,
+                subscription.Member.Name,
                 publisherText);
         }
 
@@ -422,7 +565,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             subscription.ContainingType.Name,
             lifetimeText,
             subscription.HandlerDisplay,
-            subscription.EventSymbol.Name,
+            subscription.Member.Name,
             publisherText);
     }
 
