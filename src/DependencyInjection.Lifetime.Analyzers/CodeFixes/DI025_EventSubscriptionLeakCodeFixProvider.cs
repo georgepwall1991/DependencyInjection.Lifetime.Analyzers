@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
@@ -49,8 +50,23 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             DiagnosticIds.EventSubscriptionLeakScopedPublisher);
 
     /// <inheritdoc />
-    public sealed override FixAllProvider GetFixAllProvider() =>
-        WellKnownFixAllProviders.BatchFixer;
+    public sealed override FixAllProvider GetFixAllProvider() => SequentialFixAllProvider.Instance;
+
+    /// <summary>
+    /// The disposal-member strategy a given equivalence key resolves to for a subscription in
+    /// the CURRENT document. Recomputed per diagnostic so that, once an earlier fix-all
+    /// iteration has synthesized the member, later diagnostics merge into it (one member holding
+    /// every <c>-=</c>) instead of each synthesizing tier emitting a duplicate member.
+    /// </summary>
+    private enum FixStrategy
+    {
+        None,
+        InsertIntoExisting,
+        CreateDisposeBoolOverride,
+        InsertIntoDisposeBoolOverride,
+        ImplementInterface,
+        InsertIntoImplementedDispose
+    }
 
     /// <inheritdoc />
     public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
@@ -88,75 +104,165 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             return;
         }
 
-        // Tier 1: an existing block-bodied Dispose on a type that already implements the
-        // matching disposal interface — insert the mirrored -= at the top.
-        var disposeMethod = FindDisposeMethod(containingType);
-        if (disposeMethod?.Body is not null &&
-            TypeImplementsDisposalContract(containingType, disposeMethod, semanticModel, context.CancellationToken))
+        diagnostic.Properties.TryGetValue(SubscriberLifetimePropertyKey, out var lifetime);
+
+        // Offer every equivalence key that applies to this subscription's current shape. Each
+        // key's create-or-merge behavior is decided by the same SelectStrategy used by fix-all,
+        // so single-fix and fix-all can never drift. Registering all applicable keys (rather
+        // than one "best" tier) is what lets fix-all's second diagnostic still be fixable under
+        // the originally-invoked key after the first diagnostic synthesized the member.
+        foreach (var (equivalenceKey, title) in new[]
+                 {
+                     (AddUnsubscribeEquivalenceKey, "Unsubscribe in existing Dispose"),
+                     (AddDisposeEquivalenceKey, "Unsubscribe by overriding Dispose(bool)"),
+                     (ImplementIDisposableEquivalenceKey, "Implement IDisposable to unsubscribe")
+                 })
         {
+            if (SelectStrategy(equivalenceKey, containingType, typeSymbol, lifetime, semanticModel, context.CancellationToken).Strategy
+                == FixStrategy.None)
+            {
+                continue;
+            }
+
+            var key = equivalenceKey;
             context.RegisterCodeFix(
                 CodeAction.Create(
-                    title: $"Unsubscribe in '{disposeMethod.Identifier.ValueText}'",
-                    createChangedDocument: cancellationToken => AddUnsubscribeAsync(
-                        context.Document, root, subscription, disposeMethod, cancellationToken),
-                    equivalenceKey: AddUnsubscribeEquivalenceKey),
+                    title: title,
+                    createChangedDocument: cancellationToken => ComputeFixedDocumentAsync(
+                        context.Document, subscription, key, lifetime, cancellationToken),
+                    equivalenceKey: key),
                 diagnostic);
-            return;
+        }
+    }
+
+    /// <summary>
+    /// Resolves which disposal-member strategy the given equivalence key maps to for this
+    /// subscription's containing type in its current shape (and the target method for the merge
+    /// strategies). This is the single decision point shared by <see cref="RegisterCodeFixesAsync"/>
+    /// and the sequential fix-all provider.
+    /// </summary>
+    private static (FixStrategy Strategy, MethodDeclarationSyntax? Target) SelectStrategy(
+        string equivalenceKey,
+        TypeDeclarationSyntax containingType,
+        INamedTypeSymbol typeSymbol,
+        string? subscriberLifetime,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        switch (equivalenceKey)
+        {
+            case AddUnsubscribeEquivalenceKey:
+            {
+                var usable = FindUsableExistingDispose(containingType, semanticModel, cancellationToken);
+                return usable is not null ? (FixStrategy.InsertIntoExisting, usable) : (FixStrategy.None, null);
+            }
+
+            case AddDisposeEquivalenceKey:
+            {
+                if (FindOverridableBaseDisposeBool(typeSymbol) is null ||
+                    !BaseDisposeDispatchesToBoolHook(typeSymbol, cancellationToken))
+                {
+                    return (FixStrategy.None, null);
+                }
+
+                var ownOverride = FindOwnDisposeBoolOverride(containingType);
+                if (ownOverride is not null)
+                {
+                    return (FixStrategy.InsertIntoDisposeBoolOverride, ownOverride);
+                }
+
+                // Do not add a second dispose-shaped member if the type already declares one we
+                // could not use here (a different partial, an expression body).
+                return DeclaresOwnDisposeMember(typeSymbol)
+                    ? (FixStrategy.None, null)
+                    : (FixStrategy.CreateDisposeBoolOverride, null);
+            }
+
+            case ImplementIDisposableEquivalenceKey:
+            {
+                // Introducing IDisposable is safe only for a scoped subscriber; a transient that
+                // becomes IDisposable is the DI008 disposable-transient-capture shape.
+                if (subscriberLifetime != "Scoped")
+                {
+                    return (FixStrategy.None, null);
+                }
+
+                var implementsIDisposable = ImplementsInterface(typeSymbol, "System.IDisposable");
+                var implementsIAsyncDisposable = ImplementsInterface(typeSymbol, "System.IAsyncDisposable");
+
+                if (!implementsIDisposable && !implementsIAsyncDisposable)
+                {
+                    return DeclaresOwnDisposeMember(typeSymbol)
+                        ? (FixStrategy.None, null)
+                        : (FixStrategy.ImplementInterface, null);
+                }
+
+                // Continuation: a prior fix-all iteration already added IDisposable to THIS
+                // declaration (not inherited from a base) plus a parameterless Dispose — merge
+                // into it rather than trying to add the interface again.
+                if (implementsIDisposable && !InheritsDisposalContract(typeSymbol) &&
+                    FindOwnParameterlessDispose(containingType) is { } ownDispose)
+                {
+                    return (FixStrategy.InsertIntoImplementedDispose, ownDispose);
+                }
+
+                return (FixStrategy.None, null);
+            }
+
+            default:
+                return (FixStrategy.None, null);
+        }
+    }
+
+    /// <summary>
+    /// Applies the strategy the <paramref name="equivalenceKey"/> resolves to for
+    /// <paramref name="subscription"/> against the current state of <paramref name="document"/>.
+    /// Returns the original document unchanged when nothing applies (so callers can treat it as a
+    /// no-op) — the gate revalidation mirrors <see cref="RegisterCodeFixesAsync"/> exactly.
+    /// </summary>
+    private static async Task<Document> ComputeFixedDocumentAsync(
+        Document document,
+        AssignmentExpressionSyntax subscription,
+        string equivalenceKey,
+        string? subscriberLifetime,
+        CancellationToken cancellationToken)
+    {
+        var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        if (root is null || semanticModel is null ||
+            !subscription.IsKind(SyntaxKind.AddAssignmentExpression) ||
+            !IsMethodGroupHandler(subscription.Right) ||
+            !ReceiverIsAvailableInDispose(subscription.Left, semanticModel, cancellationToken))
+        {
+            return document;
         }
 
-        // Beyond tier 1 the fix synthesizes a dispose path. If the type already declares its
-        // own dispose-shaped method that we could not use here (a different partial, an
-        // expression body), refuse rather than risk a duplicate member or a fake repair.
-        if (DeclaresOwnDisposeMember(typeSymbol))
+        var containingType = subscription.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+        if (containingType is null ||
+            semanticModel.GetDeclaredSymbol(containingType, cancellationToken) is not INamedTypeSymbol typeSymbol)
         {
-            return;
+            return document;
         }
+
+        var (strategy, target) = SelectStrategy(
+            equivalenceKey, containingType, typeSymbol, subscriberLifetime, semanticModel, cancellationToken);
 
         var unsubscribe = BuildUnsubscribeStatement(subscription);
 
-        var implementsIDisposable = ImplementsInterface(typeSymbol, "System.IDisposable");
-        var implementsIAsyncDisposable = ImplementsInterface(typeSymbol, "System.IAsyncDisposable");
-
-        if (implementsIDisposable || implementsIAsyncDisposable)
+        return strategy switch
         {
-            // Tier 2: the contract is inherited. Only the standard virtual Dispose(bool)
-            // pattern is safe to extend — overriding it guarantees our unsubscribe runs. Any
-            // other inherited shape (non-virtual or explicit Dispose) would leave the added
-            // method uncalled by the container, a fake repair, so refuse. We also confirm the
-            // base's parameterless Dispose() actually dispatches to the bool hook; if it does
-            // not (or is metadata-only), the override would never run either.
-            if (FindOverridableBaseDisposeBool(typeSymbol) is null ||
-                !BaseDisposeDispatchesToBoolHook(typeSymbol, context.CancellationToken))
-            {
-                return;
-            }
-
-            context.RegisterCodeFix(
-                CodeAction.Create(
-                    title: "Override Dispose(bool) to unsubscribe",
-                    createChangedDocument: cancellationToken => AddDisposeBoolOverrideAsync(
-                        context.Document, root, containingType, unsubscribe, cancellationToken),
-                    equivalenceKey: AddDisposeEquivalenceKey),
-                diagnostic);
-            return;
-        }
-
-        // Tier 3: the type implements neither disposal interface. Implementing IDisposable is
-        // only safe for scoped-registered subscribers; a transient that becomes IDisposable is
-        // the DI008 disposable-transient-capture shape.
-        if (!diagnostic.Properties.TryGetValue(SubscriberLifetimePropertyKey, out var lifetime) ||
-            lifetime != "Scoped")
-        {
-            return;
-        }
-
-        context.RegisterCodeFix(
-            CodeAction.Create(
-                title: "Implement IDisposable to unsubscribe",
-                createChangedDocument: cancellationToken => ImplementIDisposableAsync(
-                    context.Document, root, containingType, unsubscribe, cancellationToken),
-                equivalenceKey: ImplementIDisposableEquivalenceKey),
-            diagnostic);
+            FixStrategy.InsertIntoExisting =>
+                InsertUnsubscribeIntoMethod(document, root, unsubscribe, target!, atTop: true),
+            FixStrategy.InsertIntoDisposeBoolOverride =>
+                InsertUnsubscribeIntoMethod(document, root, unsubscribe, target!, atTop: false),
+            FixStrategy.InsertIntoImplementedDispose =>
+                InsertUnsubscribeIntoMethod(document, root, unsubscribe, target!, atTop: false),
+            FixStrategy.CreateDisposeBoolOverride =>
+                AddDisposeBoolOverride(document, root, containingType, unsubscribe),
+            FixStrategy.ImplementInterface =>
+                ImplementIDisposable(document, root, containingType, unsubscribe),
+            _ => document
+        };
     }
 
     /// <summary>
@@ -427,21 +533,91 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
                     Unwrap(subscription.Right).WithoutTrivia()))
             .WithAdditionalAnnotations(Formatter.Annotation);
 
-    private static Task<Document> AddUnsubscribeAsync(
-        Document document,
-        SyntaxNode root,
-        AssignmentExpressionSyntax subscription,
-        MethodDeclarationSyntax disposeMethod,
+    /// <summary>The usable existing Dispose (block-bodied, and the type implements the matching
+    /// contract) that a mirrored -= can be inserted into, or null.</summary>
+    private static MethodDeclarationSyntax? FindUsableExistingDispose(
+        TypeDeclarationSyntax containingType,
+        SemanticModel semanticModel,
         CancellationToken cancellationToken)
     {
-        var unsubscribe = BuildUnsubscribeStatement(subscription);
+        var method = FindDisposeMethod(containingType);
+        return method?.Body is not null &&
+               TypeImplementsDisposalContract(containingType, method, semanticModel, cancellationToken)
+            ? method
+            : null;
+    }
 
-        var updatedBody = disposeMethod.Body!.WithStatements(
-            disposeMethod.Body.Statements.Insert(0, unsubscribe));
+    /// <summary>A block-bodied <c>Dispose(bool)</c> override declared on this type (the shape a
+    /// prior fix-all iteration would have synthesized).</summary>
+    private static MethodDeclarationSyntax? FindOwnDisposeBoolOverride(TypeDeclarationSyntax containingType) =>
+        containingType.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(method =>
+            method.Body is not null &&
+            method.Modifiers.Any(SyntaxKind.OverrideKeyword) &&
+            IsDisposeBoolMethod(method, out _));
 
-        var updatedRoot = root.ReplaceNode(disposeMethod.Body!, updatedBody);
+    private static MethodDeclarationSyntax? FindOwnParameterlessDispose(TypeDeclarationSyntax containingType) =>
+        containingType.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(method =>
+            method.Body is not null &&
+            method.Identifier.ValueText == "Dispose" &&
+            method.ParameterList.Parameters.Count == 0);
 
-        return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
+    private static bool IsDisposeBoolMethod(MethodDeclarationSyntax method, out string parameterName)
+    {
+        parameterName = string.Empty;
+        if (method.Identifier.ValueText != "Dispose" || method.ParameterList.Parameters.Count != 1)
+        {
+            return false;
+        }
+
+        var parameter = method.ParameterList.Parameters[0];
+        if (parameter.Type is not PredefinedTypeSyntax { Keyword.RawKind: (int)SyntaxKind.BoolKeyword })
+        {
+            return false;
+        }
+
+        parameterName = parameter.Identifier.ValueText;
+        return true;
+    }
+
+    /// <summary>True when a base type (not this type's own declaration) supplies the disposal
+    /// contract — distinguishing an inherited contract from an <c>IDisposable</c> we added here.</summary>
+    private static bool InheritsDisposalContract(INamedTypeSymbol typeSymbol) =>
+        typeSymbol.BaseType is { } baseType &&
+        baseType.AllInterfaces.Any(i =>
+            i.ToDisplayString() is "System.IDisposable" or "System.IAsyncDisposable");
+
+    /// <summary>
+    /// Inserts the mirrored -= into <paramref name="method"/>. For the standard guarded
+    /// <c>Dispose(bool)</c> shape (a leading <c>if (disposing) { ... }</c>) it lands inside the
+    /// guard so it never runs on the finalizer path; otherwise it lands in the method body.
+    /// <paramref name="atTop"/> keeps the existing tier-1 "unsubscribe first" behavior; merge
+    /// insertions append so several unsubscribes accumulate in source order.
+    /// </summary>
+    private static Document InsertUnsubscribeIntoMethod(
+        Document document,
+        SyntaxNode root,
+        ExpressionStatementSyntax unsubscribe,
+        MethodDeclarationSyntax method,
+        bool atTop)
+    {
+        var body = method.Body!;
+
+        if (IsDisposeBoolMethod(method, out var parameterName) &&
+            body.Statements.FirstOrDefault() is IfStatementSyntax
+            {
+                Condition: IdentifierNameSyntax condition,
+                Statement: BlockSyntax guardBlock
+            } &&
+            condition.Identifier.ValueText == parameterName)
+        {
+            var newGuard = guardBlock.WithStatements(
+                atTop ? guardBlock.Statements.Insert(0, unsubscribe) : guardBlock.Statements.Add(unsubscribe));
+            return document.WithSyntaxRoot(root.ReplaceNode(guardBlock, newGuard));
+        }
+
+        var newBody = body.WithStatements(
+            atTop ? body.Statements.Insert(0, unsubscribe) : body.Statements.Add(unsubscribe));
+        return document.WithSyntaxRoot(root.ReplaceNode(body, newBody));
     }
 
     /// <summary>
@@ -450,12 +626,11 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
     /// <c>Dispose(bool)</c> also runs on the finalizer path (<c>Dispose(false)</c>), where
     /// touching the managed publisher would violate the dispose pattern.
     /// </summary>
-    private static Task<Document> AddDisposeBoolOverrideAsync(
+    private static Document AddDisposeBoolOverride(
         Document document,
         SyntaxNode root,
         TypeDeclarationSyntax containingType,
-        ExpressionStatementSyntax unsubscribe,
-        CancellationToken cancellationToken)
+        ExpressionStatementSyntax unsubscribe)
     {
         var guardedUnsubscribe = SyntaxFactory.IfStatement(
             SyntaxFactory.IdentifierName("disposing"),
@@ -481,18 +656,17 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
                     .WithType(SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.BoolKeyword))))))
             .WithBody(SyntaxFactory.Block(guardedUnsubscribe, baseCall));
 
-        return AppendMemberAsync(document, root, containingType, method, cancellationToken);
+        return AppendMember(document, root, containingType, method);
     }
 
     /// <summary>
     /// Adds <c>IDisposable</c> to the base list and a <c>public void Dispose() { &lt;unsubscribe&gt;; }</c>.
     /// </summary>
-    private static Task<Document> ImplementIDisposableAsync(
+    private static Document ImplementIDisposable(
         Document document,
         SyntaxNode root,
         TypeDeclarationSyntax containingType,
-        ExpressionStatementSyntax unsubscribe,
-        CancellationToken cancellationToken)
+        ExpressionStatementSyntax unsubscribe)
     {
         var method = SyntaxFactory.MethodDeclaration(
                 SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.VoidKeyword)),
@@ -534,18 +708,83 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
 
         var updatedRoot = root.ReplaceNode(containingType, newType.WithAdditionalAnnotations(Formatter.Annotation));
 
-        return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
+        return document.WithSyntaxRoot(updatedRoot);
     }
 
-    private static Task<Document> AppendMemberAsync(
+    private static Document AppendMember(
         Document document,
         SyntaxNode root,
         TypeDeclarationSyntax containingType,
-        MemberDeclarationSyntax member,
-        CancellationToken cancellationToken)
+        MemberDeclarationSyntax member)
     {
         var newType = containingType.AddMembers(member.WithAdditionalAnnotations(Formatter.Annotation));
         var updatedRoot = root.ReplaceNode(containingType, newType.WithAdditionalAnnotations(Formatter.Annotation));
-        return Task.FromResult(document.WithSyntaxRoot(updatedRoot));
+        return document.WithSyntaxRoot(updatedRoot);
+    }
+
+    /// <summary>
+    /// Applies the fix to every DI025/DI026 diagnostic in a document sequentially rather than by
+    /// batch-merging independent edits. The batch fixer would run a synthesizing tier once per
+    /// diagnostic and emit a duplicate dispose member (or lose unsubscribes) when one type
+    /// carried several leaks; here each subscription is re-evaluated against the evolving
+    /// document, so the second leak onward merges into the member the first one created.
+    /// </summary>
+    private sealed class SequentialFixAllProvider : DocumentBasedFixAllProvider
+    {
+        public static readonly SequentialFixAllProvider Instance = new();
+
+        protected override async Task<Document?> FixAllAsync(
+            FixAllContext fixAllContext,
+            Document document,
+            ImmutableArray<Diagnostic> diagnostics)
+        {
+            var cancellationToken = fixAllContext.CancellationToken;
+            var equivalenceKey = fixAllContext.CodeActionEquivalenceKey;
+            if (diagnostics.IsEmpty || equivalenceKey is null)
+            {
+                return document;
+            }
+
+            var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+            if (root is null)
+            {
+                return document;
+            }
+
+            // Tag each subscription with a unique annotation in one rewrite up front, so later
+            // edits can never invalidate the spans we still have to fix.
+            var pending = new List<(SyntaxAnnotation Annotation, string? Lifetime)>();
+            var rewrites = new Dictionary<SyntaxNode, SyntaxNode>();
+            foreach (var diagnostic in diagnostics.OrderBy(d => d.Location.SourceSpan.Start))
+            {
+                if (root.FindNode(diagnostic.Location.SourceSpan).FirstAncestorOrSelf<AssignmentExpressionSyntax>()
+                    is not { } subscription || rewrites.ContainsKey(subscription))
+                {
+                    continue;
+                }
+
+                var annotation = new SyntaxAnnotation();
+                rewrites[subscription] = subscription.WithAdditionalAnnotations(annotation);
+                diagnostic.Properties.TryGetValue(SubscriberLifetimePropertyKey, out var lifetime);
+                pending.Add((annotation, lifetime));
+            }
+
+            document = document.WithSyntaxRoot(root.ReplaceNodes(rewrites.Keys, (original, _) => rewrites[original]));
+
+            // Apply in source order so the merged member lists every -= in order.
+            foreach (var (annotation, lifetime) in pending)
+            {
+                var currentRoot = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+                if (currentRoot?.GetAnnotatedNodes(annotation).FirstOrDefault() is not AssignmentExpressionSyntax subscription)
+                {
+                    continue;
+                }
+
+                document = await ComputeFixedDocumentAsync(
+                    document, subscription, equivalenceKey, lifetime, cancellationToken).ConfigureAwait(false);
+            }
+
+            return document;
+        }
     }
 }

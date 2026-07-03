@@ -1295,4 +1295,120 @@ public class DI025_EventSubscriptionLeakCodeFixTests
         await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
             .VerifyCodeFixAsync(source, [], fixedSource, ImplementInterfaceKey);
     }
+
+    // ----------------------------------------------------------------
+    // Fix-all — a type carrying several leaks must yield ONE disposal
+    // member holding every -=, not one synthesized member per diagnostic.
+    // ----------------------------------------------------------------
+
+    [Fact]
+    public async Task CodeFix_FixAll_TwoSubscriptions_SynthesizesSingleDisposeWithBothUnsubscribes()
+    {
+        var source = ScopedSubscriberUsings + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.MessageReceived += OnA|];
+                    [|_bus.MessageReceived += OnB|];
+                }
+
+                private void OnA(object sender, EventArgs e) { }
+                private void OnB(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = ScopedSubscriberUsings + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnA;
+                    _bus.MessageReceived += OnB;
+                }
+
+                private void OnA(object sender, EventArgs e) { }
+                private void OnB(object sender, EventArgs e) { }
+
+                public void Dispose()
+                {
+                    _bus.MessageReceived -= OnA;
+                    _bus.MessageReceived -= OnB;
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_FixAll_TwoSubscriptions_SynthesizesSingleDisposeBoolOverride()
+    {
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.MessageReceived += OnA|];
+                    [|_bus.MessageReceived += OnB|];
+                }
+
+                private void OnA(object sender, EventArgs e) { }
+                private void OnB(object sender, EventArgs e) { }
+            }
+            """;
+
+        var fixedSource = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnA;
+                    _bus.MessageReceived += OnB;
+                }
+
+                private void OnA(object sender, EventArgs e) { }
+                private void OnB(object sender, EventArgs e) { }
+
+                protected override void Dispose(bool disposing)
+                {
+                    if (disposing)
+                    {
+                        _bus.MessageReceived -= OnA;
+                        _bus.MessageReceived -= OnB;
+                    }
+
+                    base.Dispose(disposing);
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, AddDisposeKey);
+    }
 }
