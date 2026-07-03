@@ -845,6 +845,36 @@ public class DI025_EventSubscriptionLeakCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenHookReturnsNonVoid()
+    {
+        // `protected virtual int Dispose(bool)` is not the standard pattern; emitting a void
+        // override against it would not compile.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() { Dispose(true); }
+                protected virtual int Dispose(bool disposing) => 0;
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
     public async Task CodeFix_AddDispose_NotOffered_WhenDispatchOnlyInsideNestedFunction()
     {
         // The only Dispose(true) call sits inside a local function the base's Dispose()

@@ -321,8 +321,10 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
              baseType = baseType.BaseType)
         {
             var nearest = baseType.GetMembers("Dispose").OfType<IMethodSymbol>().FirstOrDefault(method =>
+                method.ReturnsVoid &&
                 method.Parameters.Length == 1 &&
-                method.Parameters[0].Type.SpecialType == SpecialType.System_Boolean);
+                method.Parameters[0].Type.SpecialType == SpecialType.System_Boolean &&
+                method.Parameters[0].RefKind == RefKind.None);
 
             if (nearest is null)
             {
