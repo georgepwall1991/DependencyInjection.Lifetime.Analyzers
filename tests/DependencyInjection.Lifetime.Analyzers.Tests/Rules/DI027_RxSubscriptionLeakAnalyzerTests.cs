@@ -223,9 +223,48 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
         await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task MultiCallback_StaticOnNextCapturingOnError_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+                private int _errors;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    [|_ticker.Subscribe(value => { }, ex => _errors++)|];
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Negatives
     // ----------------------------------------------------------------
+
+    [Fact]
+    public async Task MultiCallback_AllStatic_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    _ticker.Subscribe(value => { }, ex => System.Console.WriteLine(ex));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 
     [Fact]
     public async Task TokenStoredInField_Silent()

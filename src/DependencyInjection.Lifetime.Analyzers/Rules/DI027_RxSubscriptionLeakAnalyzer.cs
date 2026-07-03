@@ -142,9 +142,22 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var (handlerKind, _, handlerDisplay) = EventHandlerClassification.ClassifyHandler(
-            invocation.ArgumentList.Arguments[0].Expression, containingType, semanticModel, cancellationToken);
-        if (handlerKind == EventHandlerKind.Unknown)
+        // Any callback that captures the subscriber roots it through the discarded token, so the
+        // whole subscribe overload is scanned (`Subscribe(onNext, onError, onCompleted)`): a static
+        // onNext with a capturing onError still leaks. Report on the first capturing argument.
+        string? handlerDisplay = null;
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            var (handlerKind, _, candidateDisplay) = EventHandlerClassification.ClassifyHandler(
+                argument.Expression, containingType, semanticModel, cancellationToken);
+            if (handlerKind != EventHandlerKind.Unknown)
+            {
+                handlerDisplay = candidateDisplay;
+                break;
+            }
+        }
+
+        if (handlerDisplay is null)
         {
             return;
         }
