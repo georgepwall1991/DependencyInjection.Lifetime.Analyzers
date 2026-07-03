@@ -393,7 +393,11 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
     }
 
     private static bool DispatchesToDisposeBool(SyntaxNode body) =>
-        body.DescendantNodesAndSelf()
+        // A Dispose(true) nested inside a lambda or local function only runs if that
+        // delegate is invoked, which this proof cannot see — stay out of nested bodies.
+        body.DescendantNodesAndSelf(descendIntoChildren: node =>
+                node == body ||
+                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
             .OfType<InvocationExpressionSyntax>()
             .Any(invocation =>
                 invocation.ArgumentList.Arguments.Count == 1 &&

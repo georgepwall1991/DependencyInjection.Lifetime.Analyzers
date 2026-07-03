@@ -845,6 +845,40 @@ public class DI025_EventSubscriptionLeakCodeFixTests
     }
 
     [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenDispatchOnlyInsideNestedFunction()
+    {
+        // The only Dispose(true) call sits inside a local function the base's Dispose()
+        // never invokes; the dispatch proof must not descend into nested bodies.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose()
+                {
+                    void Cleanup() => Dispose(true);
+                }
+
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
     public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeDispatchesFalse()
     {
         // `Dispose(false)` runs the managed-cleanup branch as if finalizing, so the generated
