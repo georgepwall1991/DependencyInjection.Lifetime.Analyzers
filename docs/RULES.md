@@ -993,3 +993,47 @@ public class OrderHandler
 **Guardrails:** every DI025 guardrail applies unchanged. Additionally, scoped subscribers on scoped publishers stay silent — equal lifetimes resolve from the same scope and are torn down together.
 
 **Code Fix:** Yes — the same tier-1 (insert into existing `Dispose`) and tier-2 (override an inherited virtual `Dispose(bool)`) repairs as DI025, with the same gates. The tier-3 implement-`IDisposable` assist is never offered here: DI026 only fires for **transient** subscribers, and making a transient `IDisposable` is precisely the DI008 shape the fixer refuses.
+
+## DI027: Rx Subscription On Longer-Lived Observable Without Dispose
+
+**What it catches:** The Rx twin of DI025. `IObservable<T>.Subscribe(...)` returns an `IDisposable` token that unsubscribes the observer when disposed, so there is no `-=` to prove missing — the leak proof inverts to a **discarded token**. A **transient** or **scoped** registered service subscribes an instance-capturing handler (method group, `this`-capturing lambda, or stored delegate) to an observable exposed by a longer-lived publisher — an injected **singleton** dependency, or a **scoped** publisher shared by a transient subscriber — and discards the returned token. The observable is reached through DI025's classified receivers (an injected member proven ctor-assigned, a constructor parameter, or a stable chained projection such as `_source.Ticks`), and publisher lifetime resolution follows the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded). Matching is FQN-light: any method named `Subscribe` returning `System.IDisposable`, invoked on a `System.IObservable<T>` receiver, so `System.Reactive`, community Rx, and hand-rolled extensions all bind.
+
+**Why it matters:** A discarded subscription is a live one. The observable holds the observer, the observer captures the subscriber, and nothing releases it, so the longer-lived publisher roots every subscriber instance the container creates — leaking memory on each resolution and firing stale observers against released state. Unlike the DI025/DI026 Info split, DI027 is a single **Warning** tier: a token that outlives its subscriber is a definite leak whether the publisher is singleton or a scope-shared scoped.
+
+> **Explain Like I'm Ten:** Subscribing hands you a "cancel" ticket. If you drop the ticket in the bin instead of keeping it, you can never cancel — and the newsletter keeps piling up in your mailbox forever.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<ITicker, Ticker>();   // Ticker : IObservable<int>
+services.AddTransient<TickHandler>();
+
+public class TickHandler
+{
+    public TickHandler(ITicker ticker)
+    {
+        ticker.Subscribe(OnTick); // the IDisposable is discarded; every TickHandler stays rooted
+    }
+
+    private void OnTick(int value) { }
+}
+```
+
+**Better pattern:** store the token and dispose it when the subscriber is released (for example in `Dispose`, or via a `CompositeDisposable`).
+
+```csharp
+public class TickHandler : IDisposable
+{
+    private readonly IDisposable _subscription;
+
+    public TickHandler(ITicker ticker) => _subscription = ticker.Subscribe(OnTick);
+
+    public void Dispose() => _subscription.Dispose();
+
+    private void OnTick(int value) { }
+}
+```
+
+**Guardrails:** DI027 fires only on the highest-confidence discard shapes — an ignored expression statement, a discard assignment (`_ = obs.Subscribe(H)`), or a local initialized with the token that is never referenced again (and is not a `using` declaration). Everything else is a documented false negative and stays silent: tokens stored in a **field** (dispose-path analysis deferred), `using`/`using var` subscriptions, tokens later `.Dispose()`d, returned, or passed as arguments, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable` patterns, and the BCL `Subscribe(IObserver<T>)` overload (only the `Action<T>`-based overloads carry an instance-capturing handler). DI025's silence-on-unknown legs all apply: singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, unregistered subscriber/publisher types, keyed-only publishers, and unstable chained projections. The static `ObservableExtensions.Subscribe(source, handler)` call shape is not matched — only `source.Subscribe(handler)`.
+
+**Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.

@@ -59,6 +59,31 @@ internal static class EventReceiverClassification
     }
 
     /// <summary>
+    /// Classifies a bare receiver expression (the thing to the left of <c>.Subscribe</c>) for
+    /// DI027, with no event-member coupling. It is the same injected-member / constructor-parameter
+    /// / stable-chain proof the non-static path of <see cref="ClassifyReceiver"/> runs, minus the
+    /// event access above it: DI027's leak is the Subscribe token, not a <c>+=</c>, so the receiver
+    /// it must prove is the observable expression itself rather than a publisher qualifying an event.
+    /// </summary>
+    public static (EventReceiverKind Kind, ISymbol? Root, ImmutableArray<ISymbol> Segments, INamedTypeSymbol? PublisherType) ClassifyReceiverExpression(
+        ExpressionSyntax receiver,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var receiverExpression = UnwrapReceiver(receiver);
+
+        if (receiverExpression is MemberAccessExpressionSyntax chain)
+        {
+            return ClassifyChainedReceiver(chain, containingType, semanticModel, cancellationToken);
+        }
+
+        var (kind, root, publisherType) = ClassifyReceiverRoot(
+            receiverExpression, containingType, semanticModel, cancellationToken);
+        return (kind, root, ImmutableArray<ISymbol>.Empty, publisherType);
+    }
+
+    /// <summary>
     /// Classifies a multi-segment receiver (<c>_outer.Inner.Changed += H</c>). The chain
     /// anchors on the root member's declared type — the publisher rank comes from the root's
     /// registration — and records every intermediate segment so the compilation-end pass can

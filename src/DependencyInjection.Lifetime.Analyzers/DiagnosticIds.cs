@@ -133,4 +133,12 @@ public static class DiagnosticIds
     /// grows only for the lifetime of its scope, not the process.
     /// </summary>
     public const string EventSubscriptionLeakScopedPublisher = "DI026";
+
+    /// <summary>
+    /// DI027: Shorter-lived service subscribes to an observable on a longer-lived publisher
+    /// and discards the IDisposable subscription token, so the observer (and the subscriber
+    /// it captures) stays rooted for the publisher's lifetime. The Rx twin of DI025 —
+    /// the leak proof inverts from "missing -=" to "discarded token".
+    /// </summary>
+    public const string RxSubscriptionLeak = "DI027";
 }

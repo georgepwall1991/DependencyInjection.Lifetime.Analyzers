@@ -192,6 +192,13 @@ const ruleSampleConfig = {
       { label: "Sample app unsubscribe-in-dispose pattern", symbol: "Good_UnsubscribeInDispose" },
     ],
   },
+  DI027: {
+    samplePath: "samples/SampleApp/Diagnostics/DI027/RxSubscriptionLeakExamples.cs",
+    highlights: [
+      { label: "Sample app Rx subscription-leak warning", symbol: "Bad_SubscribeWithoutDispose" },
+      { label: "Sample app store-and-dispose pattern", symbol: "Good_StoreAndDispose" },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(
