@@ -671,6 +671,108 @@ public class DI025_EventSubscriptionLeakCodeFixTests
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
     }
 
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeBoolIsPublic()
+    {
+        // A `public virtual void Dispose(bool)` cannot be overridden as `protected` (CS0507),
+        // and mirroring `public` would broaden the surface; refuse rather than emit either.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                public virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenNearestBaseDisposeBoolIsSealed()
+    {
+        // The nearest `Dispose(bool)` declaration is a sealed override, so a further-up virtual
+        // hook is unreachable; the fix must evaluate the nearest declaration and refuse.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class MidBase : DisposableBase
+            {
+                protected sealed override void Dispose(bool disposing) => base.Dispose(disposing);
+            }
+
+            public class OrderHandler : MidBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeBoolIsAbstract()
+    {
+        // An abstract `Dispose(bool)` hook cannot be chained to with `base.Dispose(disposing)`;
+        // refuse so the fix never emits a call to an abstract base member.
+        var source = Usings + """
+            public abstract class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(true);
+                protected abstract void Dispose(bool disposing);
+            }
+
+            public abstract class HandlerBase : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                protected HandlerBase(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+
+            public class OrderHandler : HandlerBase
+            {
+                public OrderHandler(IBus bus) : base(bus) { }
+
+                protected override void Dispose(bool disposing) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
     // ----------------------------------------------------------------
     // Tier 3 — implement IDisposable outright, but only for
     // scoped-registered subscribers (a scope deterministically disposes
@@ -736,6 +838,104 @@ public class DI025_EventSubscriptionLeakCodeFixTests
                 public void Dispose()
                 {
                     _bus.MessageReceived -= OnMessage;
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixAsync(source, [], fixedSource, ImplementInterfaceKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_ImplementsIDisposable_QualifiesInterface_WhenLocalIDisposableCollides()
+    {
+        // A namespace-local `IDisposable` shadows `System.IDisposable`, so an unqualified base
+        // entry would bind to the wrong type. The fix must emit the fully-qualified name.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace MyApp
+            {
+                public interface IDisposable { }
+
+                public interface IBus
+                {
+                    event EventHandler MessageReceived;
+                }
+
+                public class Bus : IBus
+                {
+                    public event EventHandler MessageReceived;
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IBus, Bus>();
+                        services.AddScoped<OrderHandler>();
+                    }
+                }
+
+                public class OrderHandler
+                {
+                    private readonly IBus _bus;
+
+                    public OrderHandler(IBus bus)
+                    {
+                        _bus = bus;
+                        [|_bus.MessageReceived += OnMessage|];
+                    }
+
+                    private void OnMessage(object sender, EventArgs e) { }
+                }
+            }
+            """;
+
+        var fixedSource = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace MyApp
+            {
+                public interface IDisposable { }
+
+                public interface IBus
+                {
+                    event EventHandler MessageReceived;
+                }
+
+                public class Bus : IBus
+                {
+                    public event EventHandler MessageReceived;
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IBus, Bus>();
+                        services.AddScoped<OrderHandler>();
+                    }
+                }
+
+                public class OrderHandler : System.IDisposable
+                {
+                    private readonly IBus _bus;
+
+                    public OrderHandler(IBus bus)
+                    {
+                        _bus = bus;
+                        _bus.MessageReceived += OnMessage;
+                    }
+
+                    private void OnMessage(object sender, EventArgs e) { }
+
+                    public void Dispose()
+                    {
+                        _bus.MessageReceived -= OnMessage;
+                    }
                 }
             }
             """;

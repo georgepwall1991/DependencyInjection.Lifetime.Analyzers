@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Simplification;
 
 namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
 
@@ -301,8 +302,14 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         typeSymbol.AllInterfaces.Any(i => i.ToDisplayString() == metadataDisplayName);
 
     /// <summary>
-    /// Finds an accessible, overridable <c>Dispose(bool)</c> declared on a base type — the hook
-    /// the standard dispose pattern exposes for derived cleanup.
+    /// Finds the <c>Dispose(bool)</c> hook that <c>AddDisposeBoolOverrideAsync</c> can correctly
+    /// override: exactly a <c>protected</c>, non-abstract, non-sealed, <c>virtual</c>/<c>override</c>
+    /// method — the standard dispose pattern. Only the NEAREST base declaration is considered, so a
+    /// sealed override on an intermediate base hides a virtual grandparent hook and is refused.
+    /// Anything else (public or protected-internal accessibility that a <c>protected override</c>
+    /// would mis-match, an abstract hook the emitted <c>base.Dispose(disposing)</c> could not call,
+    /// or a sealed override) returns null so the fix declines rather than emit code that does not
+    /// compile or silently widens accessibility.
     /// </summary>
     private static IMethodSymbol? FindOverridableBaseDisposeBool(INamedTypeSymbol typeSymbol)
     {
@@ -310,25 +317,23 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
              baseType is not null && baseType.SpecialType != SpecialType.System_Object;
              baseType = baseType.BaseType)
         {
-            foreach (var method in baseType.GetMembers("Dispose").OfType<IMethodSymbol>())
+            var nearest = baseType.GetMembers("Dispose").OfType<IMethodSymbol>().FirstOrDefault(method =>
+                method.Parameters.Length == 1 &&
+                method.Parameters[0].Type.SpecialType == SpecialType.System_Boolean);
+
+            if (nearest is null)
             {
-                if (method.Parameters.Length != 1 ||
-                    method.Parameters[0].Type.SpecialType != SpecialType.System_Boolean)
-                {
-                    continue;
-                }
-
-                var accessible = method.DeclaredAccessibility
-                    is Accessibility.Public
-                    or Accessibility.Protected
-                    or Accessibility.ProtectedOrInternal;
-
-                if (accessible && !method.IsSealed &&
-                    (method.IsVirtual || method.IsAbstract || method.IsOverride))
-                {
-                    return method;
-                }
+                // This base does not declare Dispose(bool); keep walking toward the declaration.
+                continue;
             }
+
+            var overridable =
+                nearest.DeclaredAccessibility == Accessibility.Protected &&
+                !nearest.IsAbstract &&
+                !nearest.IsSealed &&
+                (nearest.IsVirtual || nearest.IsOverride);
+
+            return overridable ? nearest : null;
         }
 
         return null;
@@ -409,7 +414,14 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             .WithModifiers(SyntaxFactory.TokenList(SyntaxFactory.Token(SyntaxKind.PublicKeyword)))
             .WithBody(SyntaxFactory.Block(unsubscribe));
 
-        var disposableBaseType = SyntaxFactory.SimpleBaseType(SyntaxFactory.IdentifierName("IDisposable"));
+        // Emit the fully-qualified name so the base entry always binds to System.IDisposable —
+        // an unqualified `IDisposable` would mis-bind in files without `using System` or with a
+        // namespace-local IDisposable. Simplifier.Annotation lets Roslyn reduce it back to the
+        // shortest unambiguous form (bare `IDisposable` when `using System` is present and no
+        // type collides).
+        var disposableBaseType = SyntaxFactory.SimpleBaseType(
+            SyntaxFactory.ParseTypeName("global::System.IDisposable")
+                .WithAdditionalAnnotations(Simplifier.Annotation));
 
         TypeDeclarationSyntax typeWithBase;
         if (containingType.BaseList is null)
