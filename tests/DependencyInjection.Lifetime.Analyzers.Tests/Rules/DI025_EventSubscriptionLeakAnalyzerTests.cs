@@ -2430,4 +2430,347 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
 
         await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    // ----------------------------------------------------------------
+    // Delegate-typed field/property subscriptions. C# forbids assigning
+    // another type's field-like event, so the cross-type Combine leak
+    // lives on a public delegate member: `_bus.Handlers =
+    // (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)`. The
+    // trivially-provable self-assignment form (and the `+=` twin) report
+    // identically to an event subscription; indirect shapes stay silent.
+    // ----------------------------------------------------------------
+
+    private const string DelegateFieldShell = """
+        using System;
+        using Microsoft.Extensions.DependencyInjection;
+
+        public class DelegateBus
+        {
+            public EventHandler Handlers;
+            public EventHandler Others;
+        }
+
+        """;
+
+    private const string SingletonDelegateBusTransientHandlerRegistrations = """
+        public static class Registrations
+        {
+            public static void Configure(IServiceCollection services)
+            {
+                services.AddSingleton<DelegateBus>();
+                services.AddTransient<OrderHandler>();
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task DelegateCombineSelfAssignment_SingletonPublisherDelegateField_ReportsDiagnostic()
+    {
+        var source = DelegateFieldShell + SingletonDelegateBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateCombineSelfAssignment_WithMatchingDelegateRemoveInDispose_NoDiagnostic()
+    {
+        var source = DelegateFieldShell + SingletonDelegateBusTransientHandlerRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    _bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage);
+                }
+
+                public void Dispose()
+                {
+                    _bus.Handlers = (EventHandler)Delegate.Remove(_bus.Handlers, OnMessage);
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateCombine_FirstArgumentDifferentMember_NoDiagnostic()
+    {
+        var source = DelegateFieldShell + SingletonDelegateBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    _bus.Handlers = (EventHandler)Delegate.Combine(_bus.Others, OnMessage);
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateCombine_ResultStoredInLocal_NoDiagnostic()
+    {
+        var source = DelegateFieldShell + SingletonDelegateBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    var combined = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage);
+                    _bus.Handlers = combined;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateFieldCompoundAssignment_SingletonPublisher_ReportsDiagnostic()
+    {
+        var source = DelegateFieldShell + SingletonDelegateBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    [|_bus.Handlers += OnMessage|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DelegateCombineSelfAssignment_ScopedPublisher_TransientSubscriber_ReportsInfoTierDiagnostic()
+    {
+        var source = DelegateFieldShell + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<DelegateBus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                private readonly DelegateBus _bus;
+
+                public OrderHandler(DelegateBus bus)
+                {
+                    _bus = bus;
+                    {|DI026:_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)|};
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    // ----------------------------------------------------------------
+    // Guardrail pins: shapes that must keep their current behavior.
+    // ----------------------------------------------------------------
+
+    [Fact]
+    public async Task WeakEventManagerStyleAddHandler_NoDiagnostic()
+    {
+        // A weak-event helper is a plain method call, not a += / Combine self-assignment,
+        // so the subscriber is never rooted through the analyzed shapes.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class WeakEventManager
+            {
+                public static void AddHandler(object source, string eventName, EventHandler handler) { }
+            }
+
+            public interface IBus
+            {
+                event EventHandler MessageReceived;
+            }
+
+            public class Bus : IBus
+            {
+                public event EventHandler MessageReceived;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IBus, Bus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    WeakEventManager.AddHandler(bus, "MessageReceived", OnMessage);
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticEvent_MinusEqualsInDispose_Suppresses()
+    {
+        var source = Usings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler : IDisposable
+            {
+                public OrderHandler()
+                {
+                    GlobalEvents.Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    GlobalEvents.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticEvent_ScopedSubscriber_ReportsWarningTier()
+    {
+        // A static event is process-lifetime, so a scoped subscriber always reports DI025
+        // at Warning — never the DI026 scoped-publisher Info tier.
+        var source = Usings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler
+            {
+                public OrderHandler()
+                {
+                    [|GlobalEvents.Changed += OnChanged|];
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BranchConditionalUnsubscribe_StillSuppresses()
+    {
+        // The -= sits behind a runtime guard, but the analyzer records removals structurally;
+        // matching one suppresses deliberately (a documented FN, favouring FP-safety).
+        var source = Usings + SingletonBusTransientHandlerRegistrations + """
+            public class OrderHandler : IDisposable
+            {
+                private readonly IBus _bus;
+                private bool _attached;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                    _attached = true;
+                }
+
+                public void Dispose()
+                {
+                    if (_attached)
+                    {
+                        _bus.MessageReceived -= OnMessage;
+                    }
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SelfUnsubscribingHandler_NoDiagnostic()
+    {
+        // The handler removes itself on first fire (unsubscribe-on-first-fire idiom); the -=
+        // inside the body is a matching removal, so the subscription is not a standing leak.
+        var source = Usings + SingletonBusTransientHandlerRegistrations + """
+            public class OrderHandler
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e)
+                {
+                    _bus.MessageReceived -= OnMessage;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

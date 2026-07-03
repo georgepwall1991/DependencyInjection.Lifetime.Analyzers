@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.15.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.16.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.15.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.16.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.15.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.16.0" />
 ```
 
 Then reference it from the project file:
@@ -1073,7 +1073,7 @@ DI024 stays quiet when the code already does the right thing: a scope created in
 
 ## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
 
-**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. Chained receivers (`_host.Bus.Changed += H`) report too when the publisher is a **stable projection** of an injected root: the lifetime proof anchors on the chain root's registration, and every intermediate segment must be a readonly field, a get-only auto-property, or a getter returning one — interface segments proven through the root's registered implementation types. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
+**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. Chained receivers (`_host.Bus.Changed += H`) report too when the publisher is a **stable projection** of an injected root: the lifetime proof anchors on the chain root's registration, and every intermediate segment must be a readonly field, a get-only auto-property, or a getter returning one — interface segments proven through the root's registered implementation types. C# forbids assigning another type's field-like event, so the cross-type delegate leak lives on a **delegate-typed field or property** of the publisher instead: `_bus.Handlers += OnMessage` and the equivalent self-assignment `_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)` report identically to an event `+=`, with a mirrored `Delegate.Remove` self-assignment recognized as the matching unsubscription. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
 
 **Why it matters:** This is the most common managed memory leak in .NET. The publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots **every subscriber instance the container ever creates** — each resolution leaks a handler plus the full object graph behind it, and every event raise fans out to thousands of stale handlers executing against released state. Catching it precisely requires knowing registration lifetimes, which is exactly what this analyzer knows and lifetime-blind analyzers cannot.
 

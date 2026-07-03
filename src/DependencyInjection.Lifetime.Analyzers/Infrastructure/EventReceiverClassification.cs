@@ -29,14 +29,14 @@ internal static class EventReceiverClassification
 {
     public static (EventReceiverKind Kind, ISymbol? Root, ImmutableArray<ISymbol> Segments, INamedTypeSymbol? PublisherType) ClassifyReceiver(
         ExpressionSyntax left,
-        IEventSymbol eventSymbol,
+        ISymbol member,
         INamedTypeSymbol containingType,
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken)
     {
-        if (eventSymbol.IsStatic)
+        if (member.IsStatic)
         {
-            return (EventReceiverKind.StaticEvent, null, ImmutableArray<ISymbol>.Empty, eventSymbol.ContainingType);
+            return (EventReceiverKind.StaticEvent, null, ImmutableArray<ISymbol>.Empty, member.ContainingType);
         }
 
         if (left is not MemberAccessExpressionSyntax memberAccess)
