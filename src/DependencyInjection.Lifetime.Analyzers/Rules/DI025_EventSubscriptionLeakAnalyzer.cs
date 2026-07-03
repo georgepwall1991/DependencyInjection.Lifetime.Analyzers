@@ -329,6 +329,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
 
         var registrations = registrationCollector.AllRegistrations.ToList();
         var subscriberRanks = BuildSubscriberRankMap(registrations);
+        var transientSubscribers = BuildSubscribersWithTransientRegistration(registrations);
         var removalList = removals.ToList();
         var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
 
@@ -350,7 +351,10 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             }
 
             context.ReportDiagnostic(
-                CreateDiagnostic(subscription, subscriberRank, isScopedPublisherTier, ineffectiveAnonymousRemoval));
+                CreateDiagnostic(
+                    subscription, subscriberRank, isScopedPublisherTier,
+                    transientSubscribers.Contains(subscription.ContainingType),
+                    ineffectiveAnonymousRemoval));
         }
     }
 
@@ -485,12 +489,35 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         removal.HandlerKind is EventHandlerKind.AnonymousCapturingInstance or EventHandlerKind.Unknown &&
         EventHandlerClassification.IsAnonymousRemoval(removal.HandlerKind, removal.HandlerDisplay);
 
+    /// <summary>
+    /// Diagnostic-property key carrying the subscriber's registered lifetime ("Transient" or
+    /// "Scoped") so the code fix can decide whether introducing IDisposable is safe without
+    /// re-running registration collection.
+    /// </summary>
+    internal const string SubscriberLifetimePropertyKey = "SubscriberLifetime";
+
     private static Diagnostic CreateDiagnostic(
         EventAccessRecord subscription,
         int subscriberRank,
         bool isScopedPublisherTier,
+        bool subscriberHasTransientRegistration,
         EventAccessRecord? ineffectiveAnonymousRemoval)
     {
+        // Stamp "Scoped" only when the subscriber is unambiguously scoped: scoped rank AND no
+        // transient registration. A subscriber registered both transient and scoped keeps a
+        // live transient registration, so the code fix must not implement IDisposable for it
+        // (that would recreate the DI008 disposable-transient shape). Everything else — the
+        // scoped-publisher tier (always transient subscribers) and mixed registrations — stamps
+        // "Transient". Purely additive metadata; the message args below are unchanged.
+        var isUnambiguouslyScoped =
+            !isScopedPublisherTier &&
+            subscriberRank == RankOf(ServiceLifetime.Scoped) &&
+            !subscriberHasTransientRegistration;
+
+        var properties = ImmutableDictionary<string, string?>.Empty.Add(
+            SubscriberLifetimePropertyKey,
+            isUnambiguouslyScoped ? "Scoped" : "Transient");
+
         if (isScopedPublisherTier)
         {
             // The scoped tier only ever fires for transient subscribers (equal ranks stay
@@ -507,6 +534,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                         DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherIneffectiveUnsubscribe,
                         subscription.Location,
                         additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                        properties,
                         subscription.ContainingType.Name,
                         subscription.Member.Name,
                         scopedPublisherText);
@@ -515,6 +543,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 return Diagnostic.Create(
                     DiagnosticDescriptors.EventSubscriptionLeakScopedPublisherAnonymousHandler,
                     subscription.Location,
+                    properties,
                     subscription.ContainingType.Name,
                     subscription.Member.Name,
                     scopedPublisherText);
@@ -523,6 +552,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return Diagnostic.Create(
                 DiagnosticDescriptors.EventSubscriptionLeakScopedPublisher,
                 subscription.Location,
+                properties,
                 subscription.ContainingType.Name,
                 subscription.HandlerDisplay,
                 subscription.Member.Name,
@@ -544,6 +574,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                     DiagnosticDescriptors.EventSubscriptionLeakIneffectiveUnsubscribe,
                     subscription.Location,
                     additionalLocations: new[] { ineffectiveAnonymousRemoval.Location },
+                    properties,
                     subscription.ContainingType.Name,
                     lifetimeText,
                     subscription.Member.Name,
@@ -553,6 +584,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return Diagnostic.Create(
                 DiagnosticDescriptors.EventSubscriptionLeakAnonymousHandler,
                 subscription.Location,
+                properties,
                 subscription.ContainingType.Name,
                 lifetimeText,
                 subscription.Member.Name,
@@ -562,6 +594,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         return Diagnostic.Create(
             DiagnosticDescriptors.EventSubscriptionLeak,
             subscription.Location,
+            properties,
             subscription.ContainingType.Name,
             lifetimeText,
             subscription.HandlerDisplay,
@@ -601,6 +634,34 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         }
 
         return ranks;
+    }
+
+    /// <summary>
+    /// Collects every type (base-chain aware, matching <see cref="BuildSubscriberRankMap"/>) that
+    /// has at least one transient registration. Used to keep the code-fix lifetime stamp honest:
+    /// a subscriber registered both transient and scoped must not be treated as safely scoped.
+    /// </summary>
+    private static HashSet<INamedTypeSymbol> BuildSubscribersWithTransientRegistration(
+        List<ServiceRegistration> registrations)
+    {
+        var transientSubscribers = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+
+        foreach (var registration in registrations)
+        {
+            if (registration.Lifetime != ServiceLifetime.Transient)
+            {
+                continue;
+            }
+
+            for (var current = registration.ImplementationType;
+                 current is not null && current.SpecialType != SpecialType.System_Object;
+                 current = current.BaseType)
+            {
+                transientSubscribers.Add(current);
+            }
+        }
+
+        return transientSubscribers;
     }
 
     /// <summary>
