@@ -807,6 +807,73 @@ public class DI025_EventSubscriptionLeakCodeFixTests
             .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
     }
 
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeDispatchesToAnotherObject()
+    {
+        // `_inner.Dispose(true)` disposes a different object, not the base's own virtual hook,
+        // so the added override would never run. Only a bare `Dispose(...)`/`this.Dispose(...)`
+        // counts as dispatch.
+        var source = Usings + """
+            public class Inner
+            {
+                public void Dispose(bool disposing) { }
+            }
+
+            public class DisposableBase : IDisposable
+            {
+                private readonly Inner _inner = new Inner();
+                public void Dispose() { _inner.Dispose(true); }
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
+    [Fact]
+    public async Task CodeFix_AddDispose_NotOffered_WhenBaseDisposeDispatchesFalse()
+    {
+        // `Dispose(false)` runs the managed-cleanup branch as if finalizing, so the generated
+        // `if (disposing)` guard would never fire on the container path. Require literal `true`.
+        var source = Usings + """
+            public class DisposableBase : IDisposable
+            {
+                public void Dispose() => Dispose(false);
+                protected virtual void Dispose(bool disposing) { }
+            }
+
+            public class OrderHandler : DisposableBase
+            {
+                private readonly IBus _bus;
+
+                public OrderHandler(IBus bus)
+                {
+                    _bus = bus;
+                    _bus.MessageReceived += OnMessage;
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await CodeFixVerifier<DI025_EventSubscriptionLeakAnalyzer, DI025_EventSubscriptionLeakCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(source, diagnostic => diagnostic.Id == "DI025", AddDisposeKey);
+    }
+
     // ----------------------------------------------------------------
     // Tier 3 — implement IDisposable outright, but only for
     // scoped-registered subscribers (a scope deterministically disposes

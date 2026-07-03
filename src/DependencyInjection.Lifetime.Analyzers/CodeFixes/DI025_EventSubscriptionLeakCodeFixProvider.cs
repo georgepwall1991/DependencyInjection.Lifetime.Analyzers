@@ -344,10 +344,12 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
 
     /// <summary>
     /// Confirms the standard dispose pattern is actually wired: the nearest accessible
-    /// parameterless <c>Dispose()</c> in the base chain must, in source, invoke <c>Dispose(...)</c>
-    /// with a single bool-shaped argument (a <c>true</c>/<c>false</c> literal or an identifier such
-    /// as <c>disposing</c>). A metadata-only base (no syntax to inspect) or a <c>Dispose()</c> that
-    /// never dispatches means a <c>protected override void Dispose(bool)</c> we add would never run.
+    /// parameterless <c>Dispose()</c> in the base chain must, in source, call its own
+    /// <c>Dispose(true)</c> (a bare <c>Dispose(true)</c> or <c>this.Dispose(true)</c>). A
+    /// metadata-only base (no syntax to inspect), a <c>Dispose()</c> that dispatches to another
+    /// object (<c>_inner.Dispose(true)</c>), or one that passes <c>false</c> means a
+    /// <c>protected override void Dispose(bool)</c> we add would never run its unsubscribe on the
+    /// container path.
     /// </summary>
     private static bool BaseDisposeDispatchesToBoolHook(
         INamedTypeSymbol typeSymbol,
@@ -395,18 +397,21 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
             .OfType<InvocationExpressionSyntax>()
             .Any(invocation =>
                 invocation.ArgumentList.Arguments.Count == 1 &&
-                IsBoolShapedArgument(invocation.ArgumentList.Arguments[0].Expression) &&
-                invocation.Expression switch
-                {
-                    IdentifierNameSyntax { Identifier.ValueText: "Dispose" } => true,
-                    MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Dispose" } => true,
-                    _ => false
-                });
+                invocation.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.TrueLiteralExpression) &&
+                IsSelfDisposeCall(invocation.Expression));
 
-    private static bool IsBoolShapedArgument(ExpressionSyntax expression) =>
-        expression.IsKind(SyntaxKind.TrueLiteralExpression) ||
-        expression.IsKind(SyntaxKind.FalseLiteralExpression) ||
-        expression is IdentifierNameSyntax;
+    /// <summary>
+    /// Recognizes a call to the current instance's own <c>Dispose</c> — a bare <c>Dispose(...)</c>
+    /// or <c>this.Dispose(...)</c>. A member access on any other receiver (<c>_inner.Dispose(...)</c>,
+    /// <c>base.Dispose(...)</c>) disposes a different object, not the base's virtual hook, so it
+    /// does not count as dispatch to the pattern we are extending.
+    /// </summary>
+    private static bool IsSelfDisposeCall(ExpressionSyntax invoked) => invoked switch
+    {
+        IdentifierNameSyntax { Identifier.ValueText: "Dispose" } => true,
+        MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name.Identifier.ValueText: "Dispose" } => true,
+        _ => false
+    };
 
     private static ExpressionStatementSyntax BuildUnsubscribeStatement(AssignmentExpressionSyntax subscription) =>
         SyntaxFactory.ExpressionStatement(
