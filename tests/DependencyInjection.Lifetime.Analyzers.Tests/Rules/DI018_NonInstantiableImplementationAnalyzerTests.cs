@@ -779,7 +779,7 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
-    public async Task StructRegistration_DoesNotReport()
+    public async Task StructRegistration_Reports()
     {
         var source = Usings + """
             public interface IMyService { }
@@ -794,7 +794,145 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
             }
             """;
 
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(11, 9)
+                .WithArguments("MyService", "IMyService", "value type has no declared public constructors"));
+    }
+
+    [Fact]
+    public async Task EnumSelfRegistration_Reports()
+    {
+        var source = Usings + """
+            public enum MyService
+            {
+                Default
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(MyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(13, 9)
+                .WithArguments("MyService", "MyService", "value type has no declared public constructors"));
+    }
+
+    [Fact]
+    public async Task StructFactoryRegistration_DoesNotReport()
+    {
+        var source = Usings + """
+            public struct MyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(MyService), _ => new MyService());
+                }
+            }
+            """;
+
         await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task EnumInstanceRegistration_DoesNotReport()
+    {
+        var source = Usings + """
+            public enum MyService
+            {
+                Default
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(MyService), MyService.Default);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StructWithExplicitPublicParameterlessConstructor_DoesNotReport()
+    {
+        var source = Usings + """
+            public struct MyService
+            {
+                public MyService() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(MyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StructWithExplicitPublicDependencyConstructor_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IDependency { }
+            public sealed class Dependency : IDependency { }
+            public readonly record struct MyService(IDependency Dependency);
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, Dependency>();
+                    services.AddSingleton(typeof(MyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StructWithOnlyInternalConstructor_Reports()
+    {
+        var source = Usings + """
+            public struct MyService
+            {
+                internal MyService(int value) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(MyService));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(13, 9)
+                .WithArguments("MyService", "MyService", "value type has no declared public constructors"));
     }
 
     [Fact]

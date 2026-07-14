@@ -246,7 +246,7 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "The registered implementation type cannot be constructed by the DI container because it is abstract, an interface, a static class, or has no accessible constructors. This will cause a runtime exception when the service is resolved.",
+        description: "The registered implementation type cannot be constructed by the DI container because it is abstract, an interface, a static class, a delegate, a value type with no declared public constructor, or a class with no accessible constructor. This will cause a runtime exception when the service is resolved.",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 
     /// <summary>

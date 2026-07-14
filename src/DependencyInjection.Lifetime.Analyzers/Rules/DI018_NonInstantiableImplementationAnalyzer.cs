@@ -10,8 +10,8 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
 /// <summary>
 /// Analyzer that detects registered implementation types that cannot be constructed
-/// by the DI container: abstract classes, interfaces, static classes, and types
-/// with no accessible constructors.
+/// by the DI container: abstract classes, interfaces, static classes, delegates,
+/// value types with no declared public constructor, and types with no accessible constructors.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnalyzer
@@ -109,11 +109,15 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
             return "type is a delegate";
         }
 
-        // Structs always have an implicit parameterless constructor, so they
-        // are always instantiable by the DI container — matches CanSelfBind.
-        if (type.TypeKind == TypeKind.Struct)
+        // Reflection does not surface a value type's implicit parameterless constructor,
+        // so constructor activation fails unless the value type declares a public one.
+        // Factory and instance registrations are excluded before this method is called.
+        if (type.IsValueType &&
+            !type.InstanceConstructors.Any(c =>
+                !c.IsImplicitlyDeclared &&
+                c.DeclaredAccessibility == Accessibility.Public))
         {
-            return null;
+            return "value type has no declared public constructors";
         }
 
         // No public constructors — matches CanSelfBind in DependencyResolutionEngine
