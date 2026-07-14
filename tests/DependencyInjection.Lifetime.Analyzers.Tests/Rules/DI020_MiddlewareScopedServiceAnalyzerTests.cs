@@ -39,6 +39,32 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
 
         """;
 
+    private const string StaticExtensionUsings = """
+        using System;
+        using System.Threading.Tasks;
+        using Microsoft.AspNetCore.Http;
+        using Microsoft.AspNetCore.Builder;
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace Microsoft.AspNetCore.Http
+        {
+            public class HttpContext { }
+            public delegate Task RequestDelegate(HttpContext context);
+        }
+
+        namespace Microsoft.AspNetCore.Builder
+        {
+            public interface IApplicationBuilder { }
+
+            public static class UseMiddlewareExtensions
+            {
+                public static IApplicationBuilder UseMiddleware<TMiddleware>(this IApplicationBuilder app, params object[] args) => app;
+                public static IApplicationBuilder UseMiddleware(this IApplicationBuilder app, Type middleware, params object[] args) => app;
+            }
+        }
+
+        """;
+
     [Fact]
     public async Task Middleware_WithScopedConstructorDependency_ReportsDiagnostic()
     {
@@ -419,6 +445,263 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticGenericExtensionRegistration_ReportsDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    UseMiddlewareExtensions.UseMiddleware<MyMiddleware>(app);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticNonGenericExtensionRegistration_ReportsDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    UseMiddlewareExtensions.UseMiddleware(app, typeof(MyMiddleware));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticGenericExtensionWithExplicitArgument_ReportsDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, string name, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    UseMiddlewareExtensions.UseMiddleware<MyMiddleware>(app, "name");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticGenericExtensionWithScopedInstance_NoDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app, IScopedService preBuilt)
+                {
+                    UseMiddlewareExtensions.UseMiddleware<MyMiddleware>(app, preBuilt);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticExtensionReceiverIsNotAnActivationArgument_NoDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, IApplicationBuilder builder, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    UseMiddlewareExtensions.UseMiddleware<MyMiddleware>(app);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_StaticExtensionNamedArgumentsUseParameterMapping_ReportsDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, string name, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    UseMiddlewareExtensions.UseMiddleware<MyMiddleware>(args: new object[] { "name" }, app: app);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_SameNamedStaticNonExtensionHelper_NoDiagnostic()
+    {
+        var source = StaticExtensionUsings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public static class MiddlewareHelper
+            {
+                public static IApplicationBuilder UseMiddleware<TMiddleware>(IApplicationBuilder app) => app;
+            }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, IScopedService scoped)
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    MiddlewareHelper.UseMiddleware<MyMiddleware>(app);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

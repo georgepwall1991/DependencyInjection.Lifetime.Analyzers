@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
@@ -97,7 +98,8 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
 
         // Must be called on IApplicationBuilder, IEndpointRouteBuilder, or IConventionBuilder.
         var originalSymbol = symbol.ReducedFrom ?? symbol;
-        var receiverType = symbol.ReducedFrom is not null
+        var isStaticExtensionInvocation = symbol.ReducedFrom is null && symbol.IsExtensionMethod;
+        var receiverType = isStaticExtensionInvocation || symbol.ReducedFrom is not null
             ? originalSymbol.Parameters.FirstOrDefault()?.Type
             : invocation.Expression switch
             {
@@ -130,17 +132,38 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         }
 
         INamedTypeSymbol? middlewareType;
-        IEnumerable<ArgumentSyntax> explicitArguments;
-        if (symbol.IsGenericMethod)
+        ImmutableArray<ITypeSymbol?> argumentTypes;
+        if (isStaticExtensionInvocation &&
+            semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation)
+        {
+            if (symbol.IsGenericMethod)
+            {
+                middlewareType = symbol.TypeArguments[0] as INamedTypeSymbol;
+                argumentTypes = GetExplicitArgumentTypes(invocationOperation, parameterOrdinal: 0);
+            }
+            else if (invocationOperation.Arguments.FirstOrDefault(
+                         argument => argument.Parameter?.Ordinal == 1)?.Value is ITypeOfOperation typeOfOperation)
+            {
+                middlewareType = typeOfOperation.TypeOperand as INamedTypeSymbol;
+                argumentTypes = GetExplicitArgumentTypes(invocationOperation, parameterOrdinal: 1);
+            }
+            else
+            {
+                return false;
+            }
+        }
+        else if (symbol.IsGenericMethod)
         {
             middlewareType = symbol.TypeArguments[0] as INamedTypeSymbol;
-            explicitArguments = invocation.ArgumentList.Arguments;
+            argumentTypes = GetExplicitArgumentTypes(invocation.ArgumentList.Arguments, semanticModel);
         }
         else if (invocation.ArgumentList.Arguments.Count > 0 &&
                  invocation.ArgumentList.Arguments[0].Expression is TypeOfExpressionSyntax typeOfExpression)
         {
             middlewareType = semanticModel.GetTypeInfo(typeOfExpression.Type).Type as INamedTypeSymbol;
-            explicitArguments = invocation.ArgumentList.Arguments.Skip(1);
+            argumentTypes = GetExplicitArgumentTypes(
+                invocation.ArgumentList.Arguments.Skip(1),
+                semanticModel);
         }
         else
         {
@@ -152,9 +175,49 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var argumentTypes = GetExplicitArgumentTypes(explicitArguments, semanticModel);
         usage = new MiddlewareUsage(middlewareType, argumentTypes, invocation.GetLocation());
         return true;
+    }
+
+    private static ImmutableArray<ITypeSymbol?> GetExplicitArgumentTypes(
+        IInvocationOperation invocation,
+        int parameterOrdinal)
+    {
+        var argumentTypes = ImmutableArray.CreateBuilder<ITypeSymbol?>();
+        foreach (var argument in invocation.Arguments.Where(
+                     argument => argument.Parameter?.Ordinal > parameterOrdinal))
+        {
+            if (argument.Value is IArrayCreationOperation
+                {
+                    Type: IArrayTypeSymbol
+                    {
+                        ElementType.SpecialType: SpecialType.System_Object
+                    },
+                    Initializer: { } initializer
+                })
+            {
+                foreach (var element in initializer.ElementValues)
+                {
+                    argumentTypes.Add(GetExplicitArgumentType(element));
+                }
+
+                continue;
+            }
+
+            argumentTypes.Add(GetExplicitArgumentType(argument.Value));
+        }
+
+        return argumentTypes.ToImmutable();
+    }
+
+    private static ITypeSymbol? GetExplicitArgumentType(IOperation operation)
+    {
+        while (operation is IConversionOperation { IsImplicit: true } conversion)
+        {
+            operation = conversion.Operand;
+        }
+
+        return operation.Type;
     }
 
     private static ImmutableArray<ITypeSymbol?> GetExplicitArgumentTypes(
