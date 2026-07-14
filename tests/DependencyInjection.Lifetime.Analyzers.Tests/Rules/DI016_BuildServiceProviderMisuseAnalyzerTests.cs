@@ -36,6 +36,58 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task BuilderServices_WithStaticBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(FakeBuilder builder)
+                {
+                    ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(builder.Services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithSpan(12, 53, 12, 73));
+    }
+
+    [Fact]
+    public async Task BuilderServices_WithNamedReorderedStaticBuildServiceProviderCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(FakeBuilder builder)
+                {
+                    ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(
+                        options: new ServiceProviderOptions(),
+                        services: builder.Services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithSpan(12, 53, 12, 73));
+    }
+
+    [Fact]
     public async Task ServiceCollectionExtensionMethod_WithBuildServiceProviderCall_ReportsDiagnostic()
     {
         var source = Usings + """
