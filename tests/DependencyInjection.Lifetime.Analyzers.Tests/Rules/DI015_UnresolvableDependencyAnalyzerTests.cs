@@ -4096,6 +4096,120 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredService_WithHostLifetimeDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class MyService
+            {
+                public MyService(Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithHostLifetimeDependencyAndStrictMode_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class MyService
+            {
+                public MyService(Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|DI015:services.AddSingleton<MyService>()|};
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI015.assume_framework_services_registered = false
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithKeyedHostLifetimeDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class MyService
+            {
+                public MyService(
+                    [FromKeyedServices("worker")] Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|DI015:services.AddSingleton<MyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithSameNamedUserHostLifetime_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace MyApp
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class MyService
+            {
+                public MyService(MyApp.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|DI015:services.AddSingleton<MyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task RegisteredService_WithFrameworkDependencyAndStrictMode_ReportsDiagnostic()
     {
         var source = Usings + """

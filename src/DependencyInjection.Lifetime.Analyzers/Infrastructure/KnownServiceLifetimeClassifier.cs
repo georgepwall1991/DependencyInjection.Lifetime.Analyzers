@@ -106,6 +106,8 @@ internal sealed class KnownServiceLifetimeClassifier
                 (namespaceName == "Microsoft.Extensions.Hosting" ||
                  namespaceName == "Microsoft.AspNetCore.Hosting")) ||
                (type.Name == "IHostApplicationLifetime" &&
+                namespaceName == "Microsoft.Extensions.Hosting") ||
+               (type.Name == "IHostLifetime" &&
                 namespaceName == "Microsoft.Extensions.Hosting");
     }
 
