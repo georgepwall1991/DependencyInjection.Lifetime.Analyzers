@@ -1913,10 +1913,49 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (parentExpression is ConditionalExpressionSyntax conditionalExpression &&
+                (conditionalExpression.WhenTrue == current || conditionalExpression.WhenFalse == current) &&
+                !IsUserDefinedConversionResult(current, semanticModel))
+            {
+                current = parentExpression;
+                continue;
+            }
+
+            if (parentExpression is BinaryExpressionSyntax binaryExpression &&
+                binaryExpression.IsKind(SyntaxKind.CoalesceExpression) &&
+                IsSameInstanceCoalesceArm(binaryExpression, current, semanticModel))
+            {
+                current = parentExpression;
+                continue;
+            }
+
             break;
         }
 
         return current;
+    }
+
+    private static bool IsSameInstanceCoalesceArm(
+        BinaryExpressionSyntax coalesceExpression,
+        SyntaxNode current,
+        SemanticModel semanticModel)
+    {
+        if (IsUserDefinedConversionResult(current, semanticModel))
+        {
+            return false;
+        }
+
+        if (coalesceExpression.Right == current)
+        {
+            return true;
+        }
+
+        // Roslyn exposes the left operand's conversion through ValueConversion rather
+        // than SemanticModel.GetConversion. Reject wrapper-producing conversions because
+        // disposing or returning the coalesce result does not transfer provider ownership.
+        return coalesceExpression.Left == current &&
+               semanticModel.GetOperation(coalesceExpression) is ICoalesceOperation coalesceOperation &&
+               !coalesceOperation.ValueConversion.IsUserDefined;
     }
 
     private static bool IsSameInstanceCast(
