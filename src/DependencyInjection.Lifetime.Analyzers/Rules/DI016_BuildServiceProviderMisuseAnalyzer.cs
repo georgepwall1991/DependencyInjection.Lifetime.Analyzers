@@ -392,6 +392,16 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         IInvocationOperation invocation,
         out ExpressionSyntax receiverExpression)
     {
+        var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
+        if (invocation.TargetMethod.ReducedFrom is null &&
+            sourceMethod.IsExtensionMethod &&
+            invocation.Arguments.FirstOrDefault(
+                argument => argument.Parameter?.Ordinal == 0)?.Value.Syntax is ExpressionSyntax staticReceiver)
+        {
+            receiverExpression = staticReceiver;
+            return true;
+        }
+
         if (invocation.Syntax is InvocationExpressionSyntax invocationSyntax)
         {
             if (invocationSyntax.Expression is MemberAccessExpressionSyntax { Expression: var receiver })
