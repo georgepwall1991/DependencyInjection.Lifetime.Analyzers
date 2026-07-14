@@ -2648,4 +2648,183 @@ public class Program
 }";
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalResultDisposed_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool create)
+    {
+        var services = new ServiceCollection();
+        var provider = create ? services.BuildServiceProvider() : null;
+        provider?.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceResultDisposed_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main(ServiceCollection? services)
+    {
+        var provider = services?.BuildServiceProvider()
+            ?? new ServiceCollection().BuildServiceProvider();
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalResultReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ServiceProvider CreateProvider(bool create, ServiceProvider fallback)
+    {
+        var services = new ServiceCollection();
+        return create ? services.BuildServiceProvider() : fallback;
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceResultReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public ServiceProvider CreateProvider(ServiceCollection? services)
+    {
+        return services?.BuildServiceProvider()
+            ?? new ServiceCollection().BuildServiceProvider();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalResultDisposedOnlyOnUnrelatedBranch_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool create, bool cleanup)
+    {
+        var services = new ServiceCollection();
+        var provider = create ? [|services.BuildServiceProvider()|] : null;
+        if (cleanup)
+        {
+            provider?.Dispose();
+        }
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalUserDefinedConversionDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool create)
+    {
+        var services = new ServiceCollection();
+        ProviderWrapper wrapper = create
+            ? [|services.BuildServiceProvider()|]
+            : new ProviderWrapper();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalUserDefinedConversionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public ProviderWrapper CreateProvider(bool create)
+    {
+        var services = new ServiceCollection();
+        return create
+            ? [|services.BuildServiceProvider()|]
+            : new ProviderWrapper();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceUserDefinedConversionDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main(ServiceCollection? services)
+    {
+        ProviderWrapper wrapper = services?[|.BuildServiceProvider()|]
+            ?? new ProviderWrapper();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceUserDefinedConversionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public ProviderWrapper CreateProvider(ServiceCollection? services)
+    {
+        return services?[|.BuildServiceProvider()|]
+            ?? new ProviderWrapper();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }
