@@ -2680,7 +2680,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
             var lockTarget = semanticModel.GetSymbolInfo(
                 lockStatement.Expression, context.CancellationToken).Symbol;
-            if (lockTarget is ILocalSymbol local && !IsDeclaredOutside(local, handlerBoundary))
+            if (lockTarget is ILocalSymbol or IParameterSymbol &&
+                !IsDeclaredOutside(lockTarget, handlerBoundary))
             {
                 // Per-invocation monitor: keep looking for an outer, genuinely shared lock.
                 continue;

@@ -4400,6 +4400,84 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task LockOnHandlerParameter_StillReports()
+    {
+        // Each handler invocation receives its own event args, so locking that parameter does
+        // not serialize concurrent callbacks.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 4
+                    });
+                    processor.ProcessMessageAsync += Handle;
+                }
+
+                private Task Handle(ProcessMessageEventArgs args)
+                {
+                    lock (args)
+                    {
+                        {|DI021:_db|}.Add(args);
+                        _db.SaveChanges();
+                    }
+
+                    return Task.CompletedTask;
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LockOnCapturedOuterParameter_NoDiagnostic()
+    {
+        // The same outer parameter is captured by every callback invocation, so it is a shared
+        // monitor that does serialize the handler.
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+
+                public Worker(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(ServiceBusClient client, object gate)
+                {
+                    var processor = client.CreateProcessor("queue", new ServiceBusProcessorOptions
+                    {
+                        MaxConcurrentCalls = 4
+                    });
+                    processor.ProcessMessageAsync += args =>
+                    {
+                        lock (gate)
+                        {
+                            _db.Add(args);
+                            _db.SaveChanges();
+                        }
+
+                        return Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task AsyncLockGuard_UseOutsideUsingRegion_StillReports()
     {
         // The disposable async-lock only guards the using region; the access after it races.
