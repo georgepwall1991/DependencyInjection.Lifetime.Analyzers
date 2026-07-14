@@ -90,13 +90,15 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             string description,
             string sinkDisplay,
             string knobName,
-            ISymbol? timerInstance = null)
+            ISymbol? timerInstance = null,
+            bool handlerParametersArePerInvocation = true)
         {
             Concurrency = concurrency;
             Description = description;
             SinkDisplay = sinkDisplay;
             KnobName = knobName;
             TimerInstance = timerInstance;
+            HandlerParametersArePerInvocation = handlerParametersArePerInvocation;
         }
 
         public SinkConcurrency Concurrency { get; }
@@ -112,6 +114,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         /// <summary>For timer sinks: the local/field holding this timer, used to correlate re-arm guards.</summary>
         public ISymbol? TimerInstance { get; }
+
+        /// <summary>Whether each callback invocation receives distinct parameter objects.</summary>
+        public bool HandlerParametersArePerInvocation { get; }
     }
 
     // ---------------------------------------------------------------------
@@ -448,7 +453,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             "System.Threading.Timer callbacks (timer callbacks can overlap)",
             "System.Threading.Timer callbacks",
             "period",
-            timerInstance: GetCreationTargetSymbol(creation));
+            timerInstance: GetCreationTargetSymbol(creation),
+            handlerParametersArePerInvocation: false);
         AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax, scopedTierCandidates);
     }
 
@@ -2207,7 +2213,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
 
             if (IsDisposeOnlyUse(operation.Syntax) ||
-                IsInsideLock(context, operation.Syntax, handlerBoundary) ||
+                IsInsideLock(context, operation.Syntax, handlerBoundary, sink) ||
                 guards.Covers(operation.Syntax))
             {
                 continue;
@@ -2368,7 +2374,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
-            if (IsInsideLock(context, invocation.Syntax, handlerBoundary) || guards.Covers(invocation.Syntax))
+            if (IsInsideLock(context, invocation.Syntax, handlerBoundary, sink) || guards.Covers(invocation.Syntax))
             {
                 continue;
             }
@@ -2668,7 +2674,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     private static bool IsInsideLock(
         OperationAnalysisContext context,
         SyntaxNode useSyntax,
-        SyntaxNode handlerBoundary)
+        SyntaxNode handlerBoundary,
+        SinkContext sink)
     {
         var semanticModel = context.Operation.SemanticModel;
         for (var node = useSyntax.Parent; node is not null && node != handlerBoundary; node = node.Parent)
@@ -2680,7 +2687,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
             var lockTarget = semanticModel.GetSymbolInfo(
                 lockStatement.Expression, context.CancellationToken).Symbol;
-            if (lockTarget is ILocalSymbol or IParameterSymbol &&
+            if ((lockTarget is ILocalSymbol ||
+                 lockTarget is IParameterSymbol && sink.HandlerParametersArePerInvocation) &&
                 !IsDeclaredOutside(lockTarget, handlerBoundary))
             {
                 // Per-invocation monitor: keep looking for an outer, genuinely shared lock.
