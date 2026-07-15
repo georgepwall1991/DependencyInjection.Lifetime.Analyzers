@@ -83,6 +83,48 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
+    public async Task StaticExtensionCall_TransientSubscriberSingletonObservable_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    [|System.RxStub.Subscribe(_ticker, OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticExtensionCall_NamedArgumentsReordered_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    [|System.RxStub.Subscribe(onNext: OnTick, source: _ticker)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task TransientSubscriber_CtorParameterReceiver_Reports()
     {
         var source = Prelude + SingletonTickerTransientHandler + """
@@ -246,6 +288,52 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     // ----------------------------------------------------------------
     // Negatives
     // ----------------------------------------------------------------
+
+    [Fact]
+    public async Task StaticExtensionCall_StaticCallback_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    System.RxStub.Subscribe(_ticker, value => { });
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NonExtensionStaticHelperNamedSubscribe_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public static class SubscriptionHelper
+            {
+                public static IDisposable Subscribe<T>(IObservable<T> source, Action<T> onNext) =>
+                    System.RxStub.Subscribe(source, onNext);
+            }
+
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    SubscriptionHelper.Subscribe(_ticker, OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 
     [Fact]
     public async Task MultiCallback_AllStatic_Silent()

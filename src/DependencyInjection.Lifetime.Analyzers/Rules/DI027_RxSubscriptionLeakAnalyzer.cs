@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
@@ -112,8 +113,7 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         var semanticModel = context.SemanticModel;
         var cancellationToken = context.CancellationToken;
 
-        // Only `receiver.Subscribe(...)` — the static-call shape `ObservableExtensions.Subscribe(x, h)`
-        // and the IObserver<T> overload are documented FN for v1.
+        // The IObserver<T> overload is a documented FN for v1.
         if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
             memberAccess.Name.Identifier.ValueText != "Subscribe" ||
             invocation.ArgumentList.Arguments.Count == 0)
@@ -124,8 +124,32 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         // FQN-light match: any method named Subscribe returning System.IDisposable, invoked on a
         // System.IObservable<T> receiver. Covers System.Reactive, community Rx, and test stubs alike.
         if (semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol is not IMethodSymbol method ||
-            !ReturnsDisposable(method.ReturnType) ||
-            semanticModel.GetTypeInfo(memberAccess.Expression, cancellationToken).Type is not { } receiverType ||
+            !ReturnsDisposable(method.ReturnType))
+        {
+            return;
+        }
+
+        var observableExpression = memberAccess.Expression;
+        ArgumentSyntax? observableArgument = null;
+
+        // A direct static extension call has the extension container on the left of Subscribe;
+        // resolve the actual observable through the bound `this` parameter. Operation argument
+        // mapping preserves correctness when named arguments are reordered.
+        if (method.IsStatic)
+        {
+            if (!method.IsExtensionMethod ||
+                semanticModel.GetOperation(invocation, cancellationToken) is not IInvocationOperation operation ||
+                operation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Syntax
+                    is not ArgumentSyntax sourceArgument)
+            {
+                return;
+            }
+
+            observableArgument = sourceArgument;
+            observableExpression = sourceArgument.Expression;
+        }
+
+        if (semanticModel.GetTypeInfo(observableExpression, cancellationToken).Type is not { } receiverType ||
             !ImplementsObservable(receiverType, iObservable))
         {
             return;
@@ -148,6 +172,11 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         string? handlerDisplay = null;
         foreach (var argument in invocation.ArgumentList.Arguments)
         {
+            if (argument == observableArgument)
+            {
+                continue;
+            }
+
             var (handlerKind, _, candidateDisplay) = EventHandlerClassification.ClassifyHandler(
                 argument.Expression, containingType, semanticModel, cancellationToken);
             if (handlerKind != EventHandlerKind.Unknown)
@@ -164,7 +193,7 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
 
         var (receiverKind, receiverRoot, receiverSegments, publisherType) =
             EventReceiverClassification.ClassifyReceiverExpression(
-                memberAccess.Expression, containingType, semanticModel, cancellationToken);
+                observableExpression, containingType, semanticModel, cancellationToken);
         if (receiverKind == EventReceiverKind.Unknown)
         {
             return;
