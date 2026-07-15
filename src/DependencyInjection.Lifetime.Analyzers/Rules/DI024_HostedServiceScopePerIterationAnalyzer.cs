@@ -1315,6 +1315,11 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             case ParenthesizedExpressionSyntax parenthesized:
                 return IsNegatedCancellationCondition(parenthesized.Expression, semanticModel);
 
+            // Each nested ! flips polarity back to the positive-condition classifier.
+            case PrefixUnaryExpressionSyntax
+                { RawKind: (int)SyntaxKind.LogicalNotExpression } nestedNegation:
+                return IsLongRunningCondition(nestedNegation.Operand, semanticModel);
+
             case ExpressionSyntax expression when IsCancellationRequestedAccess(expression, semanticModel):
                 return true;
 
