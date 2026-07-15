@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.4] - 2026-07-16
+
+### Fixed
+
+- **DI024 nested logical negation** — hosted-service loop analysis now reduces nested `!` operators by polarity before applying the existing cancellation, conjunction, disjunction, and De Morgan rules. Odd-parity cancellation loops such as `while (!(!(!token.IsCancellationRequested)))` report, while even-parity conditions and cancellation-plus-counter bounded loops remain silent.
+
 ## [2.18.3] - 2026-07-16
 
 ### Fixed
