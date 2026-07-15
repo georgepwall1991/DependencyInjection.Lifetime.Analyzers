@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.3] - 2026-07-16
+
+### Fixed
+
+- **DI027 direct self-observer subscriptions** — discarded BCL subscriptions such as `observable.Subscribe(this)` now report when `this` is bound to an `IObserver<T>` parameter, because the longer-lived observable directly retains the shorter-lived subscriber. Separate observer objects and non-observer overloads remain silent.
+
 ## [2.18.2] - 2026-07-15
 
 ### Fixed
