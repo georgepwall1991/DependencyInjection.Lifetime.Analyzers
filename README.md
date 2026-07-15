@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.2" />
 ```
 
 Then reference it from the project file:
@@ -1192,7 +1192,9 @@ public class TickHandler : IDisposable
 }
 ```
 
-**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), or a local initialized with the token that is never referenced again (and is not a `using` declaration). Everything else stays silent and is a documented false negative: tokens stored in a **field** (dispose-path analysis is deferred), `using`/`using var` subscriptions, tokens that are later `.Dispose()`d, returned, or passed as arguments, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable` patterns, and the BCL `Subscribe(IObserver<T>)` overload (only the `Action<T>`-based overloads carry an instance-capturing handler). As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, unregistered subscriber/publisher types, keyed-only publishers, and unstable chained projections all stay silent, and the static `ObservableExtensions.Subscribe(source, handler)` call shape is not matched (only the `source.Subscribe(handler)` form).
+DI027 recognizes both idiomatic receiver syntax (`source.Subscribe(handler)`) and direct static extension syntax (`ObservableExtensions.Subscribe(source, handler)`). Static calls must bind to a real extension method; Roslyn's bound parameter mapping identifies the observable even when named arguments are reordered, and the source argument is never mistaken for a handler.
+
+**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), or a local initialized with the token that is never referenced again (and is not a `using` declaration). Everything else stays silent and is a documented false negative: tokens stored in a **field** (dispose-path analysis is deferred), `using`/`using var` subscriptions, tokens that are later `.Dispose()`d, returned, or passed as arguments, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable` patterns, and the BCL `Subscribe(IObserver<T>)` overload (only the `Action<T>`-based overloads carry an instance-capturing handler). As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, and non-extension static helpers named `Subscribe` all stay silent.
 
 **Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.
 
