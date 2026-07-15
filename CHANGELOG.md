@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.1] - 2026-07-15
+
+### Fixed
+
+- **DI024 compound cancellation loops** — hosted-service scope-per-iteration analysis now recognises parenthesised `&&` and `||` compositions of long-running loop conditions and applies De Morgan semantics to negated cancellation-token conditions. Hoisted scopes and scoped services are reported when the compound condition can run for the host lifetime, while bounded conjunctions and unproven conditions remain silent.
+
 ## [2.18.0] - 2026-07-03
 
 ### Added
