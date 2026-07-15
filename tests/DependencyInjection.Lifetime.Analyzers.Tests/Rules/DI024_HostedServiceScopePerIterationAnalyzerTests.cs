@@ -78,6 +78,344 @@ public class DI024_HostedServiceScopePerIterationAnalyzerTests
     }
 
     [Fact]
+    public async Task HoistedScope_CompoundCancellationLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var secondaryToken = CancellationToken.None;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!stoppingToken.IsCancellationRequested && !secondaryToken.IsCancellationRequested)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_ParenthesizedCompoundCancellationLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var secondaryToken = CancellationToken.None;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while ((!stoppingToken.IsCancellationRequested) && (!secondaryToken.IsCancellationRequested))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_DisjunctiveCancellationLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var secondaryToken = CancellationToken.None;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!stoppingToken.IsCancellationRequested || !secondaryToken.IsCancellationRequested)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_ParenthesizedNegatedCancellationLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!(stoppingToken.IsCancellationRequested))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_NegatedDisjunctiveCancellationLoop_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var secondaryToken = CancellationToken.None;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!(stoppingToken.IsCancellationRequested || secondaryToken.IsCancellationRequested))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_NegatedDisjunctionWithBoundedOperand_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var remaining = 10;
+                    using var scope = _scopeFactory.CreateScope();
+                    while (!(stoppingToken.IsCancellationRequested || remaining-- > 0))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_NegatedConjunctionWithCancellationFirst_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var gate = false;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!(stoppingToken.IsCancellationRequested && gate))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_NegatedConjunctionWithCancellationSecond_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var gate = false;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!(gate && stoppingToken.IsCancellationRequested))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_NegatedConjunctionWithoutCancellation_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var firstGate = false;
+                    var secondGate = false;
+                    using var scope = _scopeFactory.CreateScope();
+                    while (!(firstGate && secondGate))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_CancellationAndBoundedCondition_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var remaining = 10;
+                    using var scope = _scopeFactory.CreateScope();
+                    while (!stoppingToken.IsCancellationRequested && remaining-- > 0)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_BoundedAndCancellationCondition_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var remaining = 10;
+                    using var scope = _scopeFactory.CreateScope();
+                    while (remaining-- > 0 && !stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_BoundedOrCancellationCondition_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var remaining = 10;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (remaining-- > 0 || !stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_CancellationOrBoundedCondition_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var remaining = 10;
+                    using var scope = [|_scopeFactory.CreateScope()|];
+                    while (!stoppingToken.IsCancellationRequested || remaining-- > 0)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task HoistedAsyncScope_UsedInsideLoop_ReportsDiagnostic()
     {
         var source = Usings + """

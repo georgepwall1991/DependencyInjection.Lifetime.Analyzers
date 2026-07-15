@@ -1266,12 +1266,27 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
     {
         switch (condition)
         {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return IsLongRunningCondition(parenthesized.Expression, semanticModel);
+
+            // Both sides of && must be long-running because either side can bound the loop.
+            case BinaryExpressionSyntax conjunction
+                when conjunction.IsKind(SyntaxKind.LogicalAndExpression):
+                return IsLongRunningCondition(conjunction.Left, semanticModel) &&
+                       IsLongRunningCondition(conjunction.Right, semanticModel);
+
+            // Either side of || can keep the loop running indefinitely.
+            case BinaryExpressionSyntax disjunction
+                when disjunction.IsKind(SyntaxKind.LogicalOrExpression):
+                return IsLongRunningCondition(disjunction.Left, semanticModel) ||
+                       IsLongRunningCondition(disjunction.Right, semanticModel);
+
             case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.TrueLiteralExpression):
                 return true;
 
             // while (!token.IsCancellationRequested)
             case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression } negation
-                when IsCancellationRequestedAccess(negation.Operand, semanticModel):
+                when IsNegatedCancellationCondition(negation.Operand, semanticModel):
                 return true;
 
             // while (await timer.WaitForNextTickAsync(token))
@@ -1285,6 +1300,35 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 when UnwrapInvocation(awaitExpression.Expression) is { } invocation &&
                      IsChannelReaderMethod(invocation, semanticModel, "WaitToReadAsync"):
                 return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsNegatedCancellationCondition(
+        ExpressionSyntax condition,
+        SemanticModel semanticModel)
+    {
+        switch (condition)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return IsNegatedCancellationCondition(parenthesized.Expression, semanticModel);
+
+            case ExpressionSyntax expression when IsCancellationRequestedAccess(expression, semanticModel):
+                return true;
+
+            // De Morgan: !(A || B) becomes !A && !B, so both sides must qualify.
+            case BinaryExpressionSyntax disjunction
+                when disjunction.IsKind(SyntaxKind.LogicalOrExpression):
+                return IsNegatedCancellationCondition(disjunction.Left, semanticModel) &&
+                       IsNegatedCancellationCondition(disjunction.Right, semanticModel);
+
+            // De Morgan: !(A && B) becomes !A || !B, so either side can keep the loop running.
+            case BinaryExpressionSyntax conjunction
+                when conjunction.IsKind(SyntaxKind.LogicalAndExpression):
+                return IsNegatedCancellationCondition(conjunction.Left, semanticModel) ||
+                       IsNegatedCancellationCondition(conjunction.Right, semanticModel);
 
             default:
                 return false;
