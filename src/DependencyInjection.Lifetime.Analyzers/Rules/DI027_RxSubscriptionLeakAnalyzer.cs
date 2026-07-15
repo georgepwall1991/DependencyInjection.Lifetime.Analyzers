@@ -35,7 +35,8 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         context.RegisterCompilationStartAction(compilationContext =>
         {
             var iObservable = compilationContext.Compilation.GetTypeByMetadataName("System.IObservable`1");
-            if (iObservable is null)
+            var iObserver = compilationContext.Compilation.GetTypeByMetadataName("System.IObserver`1");
+            if (iObservable is null || iObserver is null)
             {
                 return;
             }
@@ -58,7 +59,8 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 SyntaxKind.InvocationExpression);
 
             compilationContext.RegisterSyntaxNodeAction(
-                syntaxContext => CollectSubscription(syntaxContext, iObservable, subscriptions),
+                syntaxContext => CollectSubscription(
+                    syntaxContext, iObservable, iObserver, subscriptions),
                 SyntaxKind.InvocationExpression);
 
             compilationContext.RegisterCompilationEndAction(endContext =>
@@ -107,13 +109,13 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
     private static void CollectSubscription(
         SyntaxNodeAnalysisContext context,
         INamedTypeSymbol iObservable,
+        INamedTypeSymbol iObserver,
         ConcurrentBag<SubscriptionRecord> records)
     {
         var invocation = (InvocationExpressionSyntax)context.Node;
         var semanticModel = context.SemanticModel;
         var cancellationToken = context.CancellationToken;
 
-        // The IObserver<T> overload is a documented FN for v1.
         if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess ||
             memberAccess.Name.Identifier.ValueText != "Subscribe" ||
             invocation.ArgumentList.Arguments.Count == 0)
@@ -124,7 +126,8 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         // FQN-light match: any method named Subscribe returning System.IDisposable, invoked on a
         // System.IObservable<T> receiver. Covers System.Reactive, community Rx, and test stubs alike.
         if (semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol is not IMethodSymbol method ||
-            !ReturnsDisposable(method.ReturnType))
+            !ReturnsDisposable(method.ReturnType) ||
+            semanticModel.GetOperation(invocation, cancellationToken) is not IInvocationOperation operation)
         {
             return;
         }
@@ -138,7 +141,6 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         if (method.IsStatic)
         {
             if (!method.IsExtensionMethod ||
-                semanticModel.GetOperation(invocation, cancellationToken) is not IInvocationOperation operation ||
                 operation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Syntax
                     is not ArgumentSyntax sourceArgument)
             {
@@ -184,6 +186,15 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 handlerDisplay = candidateDisplay;
                 break;
             }
+
+            var argumentOperation = operation.Arguments.FirstOrDefault(
+                candidate => candidate.Syntax == argument);
+            if (argumentOperation is not null &&
+                IsContainingInstanceObserver(argumentOperation, containingType, iObserver))
+            {
+                handlerDisplay = "this";
+                break;
+            }
         }
 
         if (handlerDisplay is null)
@@ -212,6 +223,37 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             observableName,
             handlerDisplay,
             invocation.GetLocation()));
+    }
+
+    private static bool IsContainingInstanceObserver(
+        IArgumentOperation argument,
+        INamedTypeSymbol containingType,
+        INamedTypeSymbol iObserver)
+    {
+        if (argument.Parameter?.Type is not INamedTypeSymbol parameterType ||
+            !SymbolEqualityComparer.Default.Equals(parameterType.OriginalDefinition, iObserver))
+        {
+            return false;
+        }
+
+        IOperation value = argument.Value;
+        while (true)
+        {
+            switch (value)
+            {
+                case IConversionOperation conversion:
+                    value = conversion.Operand;
+                    continue;
+                case IParenthesizedOperation parenthesized:
+                    value = parenthesized.Operand;
+                    continue;
+                case IInstanceReferenceOperation instanceReference:
+                    return instanceReference.ReferenceKind == InstanceReferenceKind.ContainingTypeInstance &&
+                        SymbolEqualityComparer.Default.Equals(instanceReference.Type, containingType);
+                default:
+                    return false;
+            }
+        }
     }
 
     /// <summary>

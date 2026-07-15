@@ -125,6 +125,29 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
+    public async Task BclObserverOverload_SubscriberPassesThis_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler : IObserver<int>
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    [|_ticker.Subscribe(this)|];
+                }
+
+                public void OnNext(int value) { }
+                public void OnError(Exception error) { }
+                public void OnCompleted() { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task TransientSubscriber_CtorParameterReceiver_Reports()
     {
         var source = Prelude + SingletonTickerTransientHandler + """
@@ -597,6 +620,31 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
                     _ticker = ticker;
                     _observer = observer;
                     _ticker.Subscribe(_observer);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NonObserverSubscribeOverload_PassesThis_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public static class ObserverLikeExtensions
+            {
+                public static IDisposable Subscribe<T>(this IObservable<T> source, TickHandler handler) =>
+                    System.RxStub.Subscribe(source, value => { });
+            }
+
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    _ticker.Subscribe(this);
                 }
             }
             """;
