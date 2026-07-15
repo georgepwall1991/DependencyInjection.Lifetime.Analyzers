@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.1
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.1">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.1" />
 ```
 
 Then reference it from the project file:
@@ -1030,7 +1030,7 @@ When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnos
 
 ## DI024: Hosted Service Creates Scope Outside Execution Loop
 
-**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — `while (!stoppingToken.IsCancellationRequested)`, `while (true)`, `for (;;)`, or a `PeriodicTimer` `WaitForNextTickAsync` loop — and uses it inside the loop, either directly or through a service resolved from it. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
+**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — including direct or compound cancellation checks, `while (true)`, `for (;;)`, `PeriodicTimer` loops, and channel-consumer loops — and uses it inside the loop, either directly or through a service resolved from it. Compound conditions stay conservative: every `&&` operand must be long-running, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
 
 **Why it matters:** The well-known hosted-service idiom is *scope per iteration*. A scope hoisted above the loop keeps the same scoped instances alive for the entire process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, a unit of work accumulates every iteration's state, and a single failure poisons all subsequent iterations.
 
@@ -1067,7 +1067,7 @@ protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 }
 ```
 
-DI024 stays quiet when the code already does the right thing: a scope created inside the loop (including an inner batch loop reusing the outer iteration's scope), a startup scope consumed entirely before the loop (migrations), a dispose-and-recreate scope reassigned inside the loop, a hoisted scope whose every resolution is provably singleton (hoisting is then behaviorally identical), bounded loops, and hoisted services whose lifetime cannot be proven scoped from the visible registrations.
+DI024 stays quiet when the code already does the right thing: a scope created inside the loop (including an inner batch loop reusing the outer iteration's scope), a startup scope consumed entirely before the loop (migrations), a dispose-and-recreate scope reassigned inside the loop, a hoisted scope whose every resolution is provably singleton (hoisting is then behaviorally identical), bounded loops such as cancellation-plus-counter conjunctions, and hoisted services whose lifetime cannot be proven scoped from the visible registrations.
 
 **Code Fix:** No. Moving the scope into the loop is a statement-level rewrite with disposal implications; apply the correct pattern above manually.
 
