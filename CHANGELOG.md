@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.2] - 2026-07-15
+
+### Fixed
+
+- **DI027 direct static extension calls** — Rx subscriptions invoked as `ObservableExtensions.Subscribe(source, handler)` now receive the same discarded-token and lifetime analysis as `source.Subscribe(handler)`. Bound extension-parameter mapping preserves named and reordered arguments, while non-extension static helpers and static callbacks remain silent.
+
 ## [2.18.1] - 2026-07-15
 
 ### Fixed
