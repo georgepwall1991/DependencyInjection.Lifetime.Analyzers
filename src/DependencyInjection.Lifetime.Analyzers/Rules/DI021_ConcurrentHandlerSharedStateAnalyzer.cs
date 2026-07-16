@@ -143,7 +143,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             {
                 var trace = TraceEventSinkOptions(
                     context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
-                var knob = EvaluateTracedKnob(context, assignment.Syntax, trace, "MaxConcurrentCalls");
+                var knob = EvaluateTracedKnob(
+                    context,
+                    assignment.Syntax,
+                    trace,
+                    "MaxConcurrentCalls",
+                    "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
                 var concurrency = knob switch
                 {
                     KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
@@ -167,9 +172,18 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // single-call configuration on this processor's own options makes dispatch sequential.
                 var trace = TraceEventSinkOptions(
                     context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
-                var sessions = EvaluateTracedKnob(context, assignment.Syntax, trace, "MaxConcurrentSessions");
+                var sessions = EvaluateTracedKnob(
+                    context,
+                    assignment.Syntax,
+                    trace,
+                    "MaxConcurrentSessions",
+                    "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
                 var callsPerSession = EvaluateTracedKnob(
-                    context, assignment.Syntax, trace, "MaxConcurrentCallsPerSession");
+                    context,
+                    assignment.Syntax,
+                    trace,
+                    "MaxConcurrentCallsPerSession",
+                    "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
                 var sequential = trace.Traced &&
                                  sessions == KnobProof.ProvenSequential &&
                                  callsPerSession is KnobProof.ProvenSequential or KnobProof.NotFound;
@@ -206,15 +220,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // the same tree, the knob is proven instance-correlated: a different factory's
                 // setting never contaminates this consumer, and a fresh factory that never sets
                 // the knob keeps the sequential default. Untraceable chains fall back to the
-                // strengthen-only containing-type scan (a constant above 1 anywhere is still
-                // evidence of concurrency) with the config-gated DI022 tier.
+                // strengthen-only containing-type scan (a constant above 1 on the real SDK
+                // property is still evidence of concurrency) with the config-gated DI022 tier.
                 SinkConcurrency concurrency;
                 if (TryTraceRabbitConsumerChain(
                         context, eventReference, out var chainTrace, out var freshFactory, out var channelOptionsOverride) &&
                     !channelOptionsOverride)
                 {
                     var chainKnob = EvaluateTracedKnob(
-                        context, assignment.Syntax, chainTrace, "ConsumerDispatchConcurrency");
+                        context,
+                        assignment.Syntax,
+                        chainTrace,
+                        "ConsumerDispatchConcurrency",
+                        "RabbitMQ.Client.ConnectionFactory");
                     concurrency = chainKnob switch
                     {
                         KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
@@ -233,7 +251,11 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 else
                 {
                     var knob = EvaluateTracedKnob(
-                        context, assignment.Syntax, OptionsTrace.Untraceable, "ConsumerDispatchConcurrency");
+                        context,
+                        assignment.Syntax,
+                        OptionsTrace.Untraceable,
+                        "ConsumerDispatchConcurrency",
+                        "RabbitMQ.Client.ConnectionFactory");
                     concurrency = knob == KnobProof.ProvenConcurrent
                         ? SinkConcurrency.Concurrent
                         : SinkConcurrency.Unprovable;
@@ -296,7 +318,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         // Only the ParallelOptions instance passed to THIS call can prove sequential execution.
         var optionsTrace = TraceInvocationOptionsArgument(
             invocation, "System.Threading.Tasks.ParallelOptions");
-        var knob = EvaluateTracedKnob(context, invocation.Syntax, optionsTrace, "MaxDegreeOfParallelism");
+        var knob = EvaluateTracedKnob(
+            context,
+            invocation.Syntax,
+            optionsTrace,
+            "MaxDegreeOfParallelism",
+            "System.Threading.Tasks.ParallelOptions");
         if (optionsTrace.Traced && knob == KnobProof.ProvenSequential)
         {
             return;
@@ -490,7 +517,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         // is never written. A parameter or field with no observed writes proves nothing — the
         // caller may have set the knob.
         var tracedToFreshCreation = trace.InlineCreation is not null || trace.HelperDeclaration is not null;
-        var knob = EvaluateTracedKnob(context, creation.Syntax, trace, "MaxDegreeOfParallelism");
+        var knob = EvaluateTracedKnob(
+            context,
+            creation.Syntax,
+            trace,
+            "MaxDegreeOfParallelism",
+            "System.Threading.Tasks.Dataflow.ExecutionDataflowBlockOptions");
         var concurrency = knob switch
         {
             KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
@@ -1449,7 +1481,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         OperationAnalysisContext context,
         SyntaxNode anchor,
         OptionsTrace trace,
-        string knobName)
+        string knobName,
+        string knobContainingTypeName)
     {
         var semanticModel = context.Operation.SemanticModel;
         if (semanticModel is null)
@@ -1474,9 +1507,13 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
         else if (!trace.Traced)
         {
-            // Untraceable receiver: a knob constant above 1 anywhere in the type is still evidence
-            // of concurrency, but nothing here can prove this particular sink sequential.
-            return AnyKnobConstantAboveOneInType(context, anchor, knobName)
+            // Untraceable receiver: a knob constant above 1 on the expected SDK property is still
+            // evidence of concurrency, but nothing here can prove this particular sink sequential.
+            return AnyKnobConstantAboveOneInType(
+                    context,
+                    anchor,
+                    knobName,
+                    knobContainingTypeName)
                 ? KnobProof.ProvenConcurrent
                 : KnobProof.NotFound;
         }
@@ -1746,7 +1783,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     private static bool AnyKnobConstantAboveOneInType(
         OperationAnalysisContext context,
         SyntaxNode anchor,
-        string knobName)
+        string knobName,
+        string knobContainingTypeName)
     {
         var typeDeclaration = anchor.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
         var semanticModel = context.Operation.SemanticModel;
@@ -1757,13 +1795,10 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
-            var name = assignment.Left switch
-            {
-                MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
-                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                _ => null
-            };
-            if (name != knobName)
+            if (semanticModel.GetSymbolInfo(assignment.Left, context.CancellationToken).Symbol
+                    is not IPropertySymbol property ||
+                property.Name != knobName ||
+                property.ContainingType.ToDisplayString() != knobContainingTypeName)
             {
                 continue;
             }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.11] - 2026-07-16
+
+### Fixed
+
+- **DI021/DI022 symbol-bound concurrency knobs** — strengthen-only fallback scans now accept a constant concurrency value only when the assignment binds to the expected SDK option property for Service Bus, RabbitMQ, `ParallelOptions`, or TPL Dataflow. Unrelated user properties with names such as `MaxConcurrentCalls` or `ConsumerDispatchConcurrency` no longer upgrade a config-gated DI022 Info diagnostic into a false DI021 Warning.
+
 ## [2.18.10] - 2026-07-16
 
 ### Fixed

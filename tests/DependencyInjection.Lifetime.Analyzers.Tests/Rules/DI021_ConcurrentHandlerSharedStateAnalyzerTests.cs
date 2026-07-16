@@ -828,6 +828,41 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
         await VerifyAsync(source);
     }
 
+    [Fact]
+    public async Task ServiceBusProcessor_UnrelatedSameNamedKnob_DoesNotUpgradeInfo()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public sealed class LocalOptions
+            {
+                public int MaxConcurrentCalls { get; set; }
+            }
+
+            public class Worker
+            {
+                private readonly AppDbContext _db;
+                private readonly ServiceBusProcessor _processor;
+
+                public Worker(AppDbContext db, ServiceBusProcessor processor)
+                {
+                    _db = db;
+                    _processor = processor;
+                }
+
+                public void Start()
+                {
+                    var unrelated = new LocalOptions { MaxConcurrentCalls = 8 };
+                    _processor.ProcessMessageAsync += async args =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
     // ---------------------------------------------------------------------
     // Cross-method knob proofs: options built by same-type helper methods
     // ---------------------------------------------------------------------
@@ -3171,10 +3206,44 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task RabbitMq_UnrelatedSameNamedKnob_DoesNotUpgradeInfo()
+    {
+        var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
+            public sealed class LocalOptions
+            {
+                public int ConsumerDispatchConcurrency { get; set; }
+            }
+
+            public class OrderConsumer
+            {
+                private readonly AppDbContext _db;
+
+                public OrderConsumer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start(IModel channel)
+                {
+                    var unrelated = new LocalOptions { ConsumerDispatchConcurrency = 4 };
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += async (sender, args) =>
+                    {
+                        {|DI022:_db|}.Add(args);
+                        await _db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task RabbitMq_ConsumerDispatchConcurrencyAboveOne_ReportsWarning()
     {
-        // A constant ConsumerDispatchConcurrency above 1 in the containing type proves the
-        // dispatch pump is concurrent, upgrading the config-gated Info to the full warning.
+        // A constant on the real RabbitMQ ConsumerDispatchConcurrency property proves the dispatch
+        // pump is concurrent, upgrading the config-gated Info to the full warning.
         var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
             public class OrderConsumer
             {

@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.10
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.11
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.10">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.11">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.10" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.11" />
 ```
 
 Then reference it from the project file:
@@ -960,7 +960,7 @@ public class MyMiddleware
 - `ServiceBusProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (when `MaxConcurrentCalls` is provably above 1)
 - `ServiceBusSessionProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (sessions are pumped concurrently by default)
 - `EventProcessorClient.ProcessEventAsync` / `ProcessErrorAsync` (partitions are processed concurrently)
-- RabbitMQ `EventingBasicConsumer.Received` / `AsyncEventingBasicConsumer.Received` / `ReceivedAsync` (instance-correlated: the consumer's own factory/connection/channel chain proves `ConsumerDispatchConcurrency` — proven 1 or a fresh default factory stays silent, proven above 1 warns, untraceable chains stay config-gated DI022)
+- RabbitMQ `EventingBasicConsumer.Received` / `AsyncEventingBasicConsumer.Received` / `ReceivedAsync` (instance-correlated: the consumer's own factory/connection/channel chain proves `ConsumerDispatchConcurrency` — proven 1 or a fresh default factory stays silent, proven above 1 warns, untraceable chains stay config-gated DI022; fallback constants must bind to the real RabbitMQ property)
 - `System.Threading.Timer` callbacks with a finite period (callbacks can overlap)
 - `System.Timers.Timer.Elapsed` (elapsed events can overlap unless `AutoReset = false` or a `SynchronizingObject` is set)
 - `Parallel.For` / `ForEach` / `ForEachAsync` / `Invoke` bodies
