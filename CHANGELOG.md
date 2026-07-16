@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.9] - 2026-07-16
+
+### Fixed
+
+- **DI014 conditional/coalesce ownership transfer** — root-provider disposal and caller-ownership proofs now follow `BuildServiceProvider()` results through ternary arms and null-coalescing operands. Returned providers and providers assigned to reliably disposed locals, fields, or properties no longer produce false positives, including nested transparent wrappers; user-defined conversions still break the same-instance proof and report.
+
 ## [2.18.8] - 2026-07-16
 
 ### Fixed
