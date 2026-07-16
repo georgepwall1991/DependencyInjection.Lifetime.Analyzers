@@ -401,6 +401,31 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task BuilderParameterMethod_WithCoalesceThrowServicesReceiver_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection? Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    (builder.Services ?? throw new InvalidOperationException()).{|#0:BuildServiceProvider|}();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+    }
+
+    [Fact]
     public async Task BuilderParameterMethod_WithSameTypeCastServicesReceiver_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -626,6 +651,27 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
                 {
                     var services = new ServiceCollection();
                     return services.BuildServiceProvider();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuilderParameterMethod_WithArbitraryCoalesceFallback_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection? Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    (builder.Services ?? new ServiceCollection()).BuildServiceProvider();
                 }
             }
             """;
