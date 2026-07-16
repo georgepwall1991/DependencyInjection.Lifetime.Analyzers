@@ -743,7 +743,7 @@ public class DI019_RootScopedResolutionCodeFixTests
     }
 
     [Fact]
-    public async Task RootResolution_StaticExtensionForm_NoDiagnosticSoNoBrokenFix()
+    public async Task RootResolution_StaticExtensionForm_NoCodeFixOffered()
     {
         var source = Usings + """
             public interface IScoped { }
@@ -754,7 +754,7 @@ public class DI019_RootScopedResolutionCodeFixTests
                 public void Run(IServiceCollection services)
                 {
                     var provider = services.BuildServiceProvider();
-                    var service = ServiceProviderServiceExtensions.GetRequiredService<IScoped>(provider);
+                    var service = {|#0:ServiceProviderServiceExtensions.GetRequiredService<IScoped>(provider)|};
                 }
 
                 public void ConfigureServices(IServiceCollection services)
@@ -764,11 +764,12 @@ public class DI019_RootScopedResolutionCodeFixTests
             }
             """;
 
-        // In the explicit static-extension form the member-access receiver is the declaring type
-        // (`ServiceProviderServiceExtensions`), not a provider instance, so DI019 does not report
-        // here. The fix can therefore never rewrite it into the uncompilable
-        // `ServiceProviderServiceExtensions.CreateScope()`. The code fix also guards type receivers
-        // directly as defense in depth.
-        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+        var expected = CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+            .WithLocation(0)
+            .WithArguments("IScoped", "IScoped");
+
+        await CodeFixVerifier<DI019_RootScopedResolutionAnalyzer, DI019_RootScopedResolutionCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(source, expected);
     }
 }
