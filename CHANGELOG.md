@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.6] - 2026-07-16
+
+### Fixed
+
+- **DI024 keyed service resolution** — hosted-service reuse analysis now carries the compile-time service key through generic and direct-`typeof(T)` non-generic `GetKeyedService`/`GetRequiredKeyedService` calls. Keyed scoped services resolved once before a process-lifetime loop report, while scopes used only for the matching keyed singleton no longer warn; dynamic keys remain conservative and silent.
+
 ## [2.18.5] - 2026-07-16
 
 ### Fixed
