@@ -140,29 +140,95 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
         foreach (var method in executionMethods)
         {
-            var qualifyingLoops = FindLongRunningLoops(method.Body!, context.SemanticModel);
-            foreach (var loop in qualifyingLoops)
-            {
-                // A long-running loop nested inside another long-running loop (channel drain inside
-                // a cancellation loop) is analyzed against locals declared inside the enclosing
-                // loop's body only: locals hoisted above the enclosing loop are that loop's report.
-                var enclosing = qualifyingLoops
-                    .Where(other => other != loop && GetLoopBody(other)?.Span.Contains(loop.Span) == true)
-                    .OrderByDescending(other => other.SpanStart)
-                    .FirstOrDefault();
+            AnalyzeMethodLoops(context, wellKnownTypes, method, fields, hoistedScopes, hoistedServices);
+        }
 
-                // The boundary may be any statement (a using statement wrapping the nested loop
-                // declares a scope that spans the inner drain); the declaration walk understands
-                // using-statement variables.
-                var boundary = enclosing is null ? method.Body : GetLoopBody(enclosing);
-                if (boundary is null)
+        foreach (var helper in FindDirectPrivateHelpers(typeDeclaration, executionMethods, context.SemanticModel))
+        {
+            // Direct helper bodies get the full local analysis, but no field candidates. A field
+            // assigned in a helper may be recreated per iteration, so broadening field dominance
+            // across this new method boundary would trade the recall win for false positives.
+            AnalyzeMethodLoops(
+                context,
+                wellKnownTypes,
+                helper,
+                FieldCandidates.Empty,
+                hoistedScopes,
+                hoistedServices);
+        }
+    }
+
+    private static void AnalyzeMethodLoops(
+        SyntaxNodeAnalysisContext context,
+        WellKnownTypes wellKnownTypes,
+        MethodDeclarationSyntax method,
+        FieldCandidates fields,
+        ConcurrentBag<HoistedScopeCandidate> hoistedScopes,
+        ConcurrentBag<HoistedServiceCandidate> hoistedServices)
+    {
+        var qualifyingLoops = FindLongRunningLoops(method.Body!, context.SemanticModel);
+        foreach (var loop in qualifyingLoops)
+        {
+            // A long-running loop nested inside another long-running loop (channel drain inside
+            // a cancellation loop) is analyzed against locals declared inside the enclosing
+            // loop's body only: locals hoisted above the enclosing loop are that loop's report.
+            var enclosing = qualifyingLoops
+                .Where(other => other != loop && GetLoopBody(other)?.Span.Contains(loop.Span) == true)
+                .OrderByDescending(other => other.SpanStart)
+                .FirstOrDefault();
+
+            // The boundary may be any statement (a using statement wrapping the nested loop
+            // declares a scope that spans the inner drain); the declaration walk understands
+            // using-statement variables.
+            var boundary = enclosing is null ? method.Body : GetLoopBody(enclosing);
+            if (boundary is null)
+            {
+                continue;
+            }
+
+            AnalyzeLoop(context, wellKnownTypes, method, boundary, loop, fields, hoistedScopes, hoistedServices);
+        }
+    }
+
+    private static IEnumerable<MethodDeclarationSyntax> FindDirectPrivateHelpers(
+        TypeDeclarationSyntax typeDeclaration,
+        IEnumerable<MethodDeclarationSyntax> executionMethods,
+        SemanticModel semanticModel)
+    {
+        var helpers = new HashSet<MethodDeclarationSyntax>();
+        foreach (var executionMethod in executionMethods)
+        {
+            foreach (var invocation in executionMethod.Body!.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (invocation.Ancestors()
+                    .TakeWhile(ancestor => ancestor != executionMethod.Body)
+                    .Any(ancestor => ancestor is AnonymousFunctionExpressionSyntax or
+                        LocalFunctionStatementSyntax or
+                        QueryExpressionSyntax) ||
+                    semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol
+                    {
+                        MethodKind: MethodKind.Ordinary,
+                        DeclaredAccessibility: Accessibility.Private
+                    } methodSymbol)
                 {
                     continue;
                 }
 
-                AnalyzeLoop(context, wellKnownTypes, method, boundary, loop, fields, hoistedScopes, hoistedServices);
+                foreach (var syntaxReference in methodSymbol.DeclaringSyntaxReferences)
+                {
+                    if (syntaxReference.SyntaxTree != typeDeclaration.SyntaxTree ||
+                        syntaxReference.GetSyntax() is not MethodDeclarationSyntax { Body: not null } helper ||
+                        helper.Parent != typeDeclaration)
+                    {
+                        continue;
+                    }
+
+                    helpers.Add(helper);
+                }
             }
         }
+
+        return helpers;
     }
 
     /// <summary>
