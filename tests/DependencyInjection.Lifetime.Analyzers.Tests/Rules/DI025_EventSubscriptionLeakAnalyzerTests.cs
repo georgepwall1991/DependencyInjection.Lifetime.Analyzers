@@ -61,6 +61,24 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
 
         """;
 
+    private const string CastBusUsings = """
+        using System;
+        using Microsoft.Extensions.DependencyInjection;
+
+        public interface IBaseBus
+        {
+            event EventHandler Changed;
+        }
+
+        public interface IDerivedBus : IBaseBus { }
+
+        public sealed class DerivedBus : IDerivedBus
+        {
+            public event EventHandler Changed;
+        }
+
+        """;
+
     // ----------------------------------------------------------------
     // Positives: transient/scoped subscriber, singleton/static publisher
     // ----------------------------------------------------------------
@@ -129,6 +147,176 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
                 }
 
                 private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedInjectedFieldReceiver_SingletonPublisher_ReportsDI025()
+    {
+        var source = CastBusUsings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IDerivedBus, DerivedBus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                private readonly IDerivedBus _bus;
+
+                public OrderHandler(IDerivedBus bus)
+                {
+                    _bus = bus;
+                    {|DI025:((IBaseBus)_bus).Changed += OnChanged|};
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedConstructorParameterReceiver_SingletonPublisher_ReportsDI025()
+    {
+        var source = CastBusUsings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IDerivedBus, DerivedBus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                public OrderHandler(IDerivedBus bus)
+                {
+                    {|DI025:((IBaseBus)bus).Changed += OnChanged|};
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedInjectedFieldReceiver_ScopedPublisher_ReportsDI026()
+    {
+        var source = CastBusUsings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IDerivedBus, DerivedBus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                private readonly IDerivedBus _bus;
+
+                public OrderHandler(IDerivedBus bus)
+                {
+                    _bus = bus;
+                    {|DI026:((IBaseBus)_bus).Changed += OnChanged|};
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedStableChainedReceiver_SingletonPublisher_ReportsDI025()
+    {
+        var source = CastBusUsings + """
+            public interface IBusHost
+            {
+                IDerivedBus Bus { get; }
+            }
+
+            public sealed class BusHost : IBusHost
+            {
+                public BusHost(IDerivedBus bus) => Bus = bus;
+
+                public IDerivedBus Bus { get; }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IDerivedBus, DerivedBus>();
+                    services.AddSingleton<IBusHost, BusHost>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                private readonly IBusHost _host;
+
+                public OrderHandler(IBusHost host)
+                {
+                    _host = host;
+                    {|DI025:((IBaseBus)_host.Bus).Changed += OnChanged|};
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedUnstableChainedReceiver_NoDiagnostic()
+    {
+        var source = CastBusUsings + """
+            public interface IBusHost
+            {
+                IDerivedBus Bus { get; }
+            }
+
+            public sealed class BusHost : IBusHost
+            {
+                public IDerivedBus Bus => new DerivedBus();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IBusHost, BusHost>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                private readonly IBusHost _host;
+
+                public OrderHandler(IBusHost host)
+                {
+                    _host = host;
+                    ((IBaseBus)_host.Bus).Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
             }
             """;
 
@@ -760,6 +948,46 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
         await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task UserDefinedConversionReceiver_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public sealed class Bus
+            {
+                public event EventHandler Changed;
+            }
+
+            public sealed class BusHolder
+            {
+                public static explicit operator Bus(BusHolder holder) => new Bus();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<BusHolder>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler
+            {
+                public OrderHandler(BusHolder holder)
+                {
+                    ((Bus)holder).Changed += OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Unsubscribe proofs
     // ----------------------------------------------------------------
@@ -784,6 +1012,41 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
                 }
 
                 private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastedReceiver_MatchingUncastUnsubscribe_NoDiagnostic()
+    {
+        var source = CastBusUsings + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IDerivedBus, DerivedBus>();
+                    services.AddTransient<OrderHandler>();
+                }
+            }
+
+            public sealed class OrderHandler : IDisposable
+            {
+                private readonly IDerivedBus _bus;
+
+                public OrderHandler(IDerivedBus bus)
+                {
+                    _bus = bus;
+                    ((IBaseBus)_bus).Changed += OnChanged;
+                }
+
+                public void Dispose()
+                {
+                    _bus.Changed -= OnChanged;
+                }
+
+                private void OnChanged(object sender, EventArgs e) { }
             }
             """;
 

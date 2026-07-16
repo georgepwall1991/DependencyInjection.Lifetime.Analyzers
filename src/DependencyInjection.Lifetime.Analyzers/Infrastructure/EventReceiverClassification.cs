@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
@@ -46,7 +47,8 @@ internal static class EventReceiverClassification
             return (EventReceiverKind.Unknown, null, ImmutableArray<ISymbol>.Empty, null);
         }
 
-        var receiverExpression = UnwrapReceiver(memberAccess.Expression);
+        var receiverExpression = UnwrapEventReceiver(
+            memberAccess.Expression, semanticModel, cancellationToken);
 
         if (receiverExpression is MemberAccessExpressionSyntax chain)
         {
@@ -191,6 +193,27 @@ internal static class EventReceiverClassification
                     return expression;
             }
         }
+    }
+
+    private static ExpressionSyntax UnwrapEventReceiver(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        expression = UnwrapReceiver(expression);
+
+        while (expression is CastExpressionSyntax cast &&
+            semanticModel.GetOperation(cast, cancellationToken) is IConversionOperation conversion &&
+            !conversion.Conversion.IsUserDefined &&
+            (conversion.Conversion.IsIdentity || conversion.Conversion.IsReference))
+        {
+            // Identity and reference casts preserve the publisher instance. If the operand is
+            // a member chain, the existing stable-projection proof still decides whether it is
+            // safe to classify; user-defined and value-changing conversions remain opaque.
+            expression = UnwrapReceiver(cast.Expression);
+        }
+
+        return expression;
     }
 
     /// <summary>

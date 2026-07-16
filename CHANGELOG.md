@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.15] - 2026-07-16
+
+### Fixed
+
+- **DI025/DI026 identity-preserving publisher casts** — event subscriptions now retain injected-receiver lifetime proofs through identity and reference casts, including constructor parameters, injected fields, and already-proven stable receiver chains. Matching unsubscriptions canonicalize across casted and uncast syntax, while user-defined conversions and unstable chains remain conservative and silent; DI027 and the code fixer are unchanged.
+
 ## [2.18.14] - 2026-07-16
 
 ### Fixed
