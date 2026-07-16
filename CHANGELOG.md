@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.16] - 2026-07-16
+
+### Fixed
+
+- **DI016 direct static `BuildServiceProvider` calls** — registration-context analysis now recovers the `IServiceCollection` receiver from the bound extension parameter for `ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(...)`. Builder `.Services` flows report in ordinary methods and top-level statements even with named/reordered arguments, while provider-factory methods that intentionally return `IServiceProvider` remain quiet.
+
 ## [2.18.15] - 2026-07-16
 
 ### Fixed
