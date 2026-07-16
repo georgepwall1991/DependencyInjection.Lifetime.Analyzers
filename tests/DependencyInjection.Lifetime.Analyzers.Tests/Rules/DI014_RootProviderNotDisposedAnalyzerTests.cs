@@ -2648,4 +2648,141 @@ public class Program
 }";
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalArmsReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public IServiceProvider Create(bool usePrimary)
+    {
+        var services = new ServiceCollection();
+        return usePrimary
+            ? services.BuildServiceProvider()
+            : services.BuildServiceProvider();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_CoalesceFallbackReturned_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public IServiceProvider Create(IServiceProvider? existing)
+    {
+        var services = new ServiceCollection();
+        return existing ?? services.BuildServiceProvider();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalLocalDisposed_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool useBuilt, ServiceProvider fallback)
+    {
+        var services = new ServiceCollection();
+        var provider = useBuilt ? services.BuildServiceProvider() : fallback;
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_CoalesceLocalDisposed_NoDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main(ServiceProvider? existing)
+    {
+        var services = new ServiceCollection();
+        var provider = existing ?? services.BuildServiceProvider();
+        provider.Dispose();
+    }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalFieldDisposedByOwner_NoDiagnostic()
+    {
+        var source = Usings + @"
+public sealed class Program : IDisposable
+{
+    private readonly ServiceProvider _provider;
+
+    public Program(bool useBuilt, ServiceProvider fallback)
+    {
+        var services = new ServiceCollection();
+        _provider = useBuilt ? services.BuildServiceProvider() : fallback;
+    }
+
+    public void Dispose() => _provider.Dispose();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_ConditionalUserDefinedConversionDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Program
+{
+    public void Main(bool useBuilt)
+    {
+        var services = new ServiceCollection();
+        ProviderWrapper wrapper = useBuilt
+            ? [|services.BuildServiceProvider()|]
+            : new ProviderWrapper();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BuildServiceProvider_CoalesceUserDefinedConversionDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main(ProviderWrapper? existing)
+    {
+        var services = new ServiceCollection();
+        ProviderWrapper wrapper = existing ?? [|services.BuildServiceProvider()|];
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }

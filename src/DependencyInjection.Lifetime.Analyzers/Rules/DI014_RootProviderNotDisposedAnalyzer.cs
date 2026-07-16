@@ -1913,6 +1913,25 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (parentExpression is ConditionalExpressionSyntax conditionalExpression &&
+                (conditionalExpression.WhenTrue == current || conditionalExpression.WhenFalse == current) &&
+                !IsUserDefinedConversionResult(current, semanticModel))
+            {
+                // When this arm runs, the conditional result is the same provider instance.
+                current = parentExpression;
+                continue;
+            }
+
+            if (parentExpression is BinaryExpressionSyntax coalesceExpression &&
+                coalesceExpression.IsKind(SyntaxKind.CoalesceExpression) &&
+                (coalesceExpression.Left == current || coalesceExpression.Right == current) &&
+                !IsUserDefinedConversionResult(current, semanticModel))
+            {
+                // When this operand supplies the coalesce result, ownership follows it outward.
+                current = parentExpression;
+                continue;
+            }
+
             break;
         }
 
