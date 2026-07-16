@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.19] - 2026-07-16
+
+### Fixed
+
+- **DI016 null-coalescing throw guards** — builder `.Services` registration flows now remain recognizable through an identity-preserving `?? throw` guard, so `(builder.Services ?? throw ...).BuildServiceProvider()` reports like the unguarded call. Coalesces with an arbitrary fallback collection remain conservative and silent because the provider may be built from a different source.
+
 ## [2.18.18] - 2026-07-16
 
 ### Fixed

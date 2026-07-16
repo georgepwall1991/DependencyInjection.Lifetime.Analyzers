@@ -293,6 +293,20 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
                 semanticModelsByTree);
         }
 
+        if (expression is BinaryExpressionSyntax coalesce &&
+            coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+            coalesce.Right is ThrowExpressionSyntax)
+        {
+            return IsServicesPropertySource(
+                coalesce.Left,
+                semanticModel,
+                iServiceCollectionType,
+                boundary,
+                depth + 1,
+                visitedSymbols,
+                semanticModelsByTree);
+        }
+
         if (expression is CastExpressionSyntax cast &&
             semanticModel.GetTypeInfo(cast.Type).Type is { } castType &&
             IsAssignableToIServiceCollection(castType, iServiceCollectionType))
