@@ -4532,6 +4532,73 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task LockOnReassignedField_StillReports()
+    {
+        // Replacing the monitor inside each invocation means concurrent handlers can lock
+        // different objects even though the target is a field.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Importer
+            {
+                private readonly AppDbContext _db;
+                private object _gate = new object();
+
+                public Importer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Import(object[] rows)
+                {
+                    Parallel.ForEach(rows, row =>
+                    {
+                        _gate = new object();
+                        lock (_gate)
+                        {
+                            {|DI021:_db|}.Add(row);
+                            _db.SaveChanges();
+                        }
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LockOnReassignedCapturedOuterParameter_StillReports()
+    {
+        // A captured parameter starts shared, but assigning a fresh monitor per invocation makes
+        // the subsequent locks instance-dependent rather than globally serializing.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Importer
+            {
+                private readonly AppDbContext _db;
+
+                public Importer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Import(object[] rows, object gate)
+                {
+                    Parallel.ForEach(rows, row =>
+                    {
+                        gate = new object();
+                        lock (gate)
+                        {
+                            {|DI021:_db|}.Add(row);
+                            _db.SaveChanges();
+                        }
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task AsyncLockGuard_UseOutsideUsingRegion_StillReports()
     {
         // The disposable async-lock only guards the using region; the access after it races.
