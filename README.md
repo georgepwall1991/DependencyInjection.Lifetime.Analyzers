@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.19
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.20
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.19">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.20">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.19" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.20" />
 ```
 
 Then reference it from the project file:
@@ -877,7 +877,7 @@ services.AddSingleton(typeof(MyValueService), _ => new MyValueService());
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`. Both ordinary extension syntax and direct static calls through the framework `ServiceProviderServiceExtensions` type are analyzed, including reordered named arguments.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`. Both ordinary extension syntax and direct static calls through the exact framework `ServiceProviderServiceExtensions` and `ServiceProviderKeyedServiceExtensions` types are analyzed, including reordered named arguments; same-named user extensions stay silent.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 

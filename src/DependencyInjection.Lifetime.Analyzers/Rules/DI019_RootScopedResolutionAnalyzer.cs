@@ -318,7 +318,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         isEnumerableRequest = false;
 
         var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
-        if (!IsServiceResolutionMethod(sourceMethod, wellKnownTypes))
+        if (!IsServiceResolutionMethod(sourceMethod, semanticModel.Compilation, wellKnownTypes))
         {
             return false;
         }
@@ -366,7 +366,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsServiceResolutionMethod(IMethodSymbol sourceMethod, WellKnownTypes wellKnownTypes)
+    private static bool IsServiceResolutionMethod(
+        IMethodSymbol sourceMethod,
+        Compilation compilation,
+        WellKnownTypes wellKnownTypes)
     {
         if (sourceMethod.Name is not ("GetService" or "GetRequiredService" or "GetServices" or
             "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices"))
@@ -376,6 +379,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
         {
+            if (!IsFrameworkServiceResolutionExtension(sourceMethod, compilation))
+            {
+                return false;
+            }
+
             var receiverType = sourceMethod.Parameters[0].Type;
             return wellKnownTypes.IsServiceProvider(receiverType) ||
                    wellKnownTypes.IsKeyedServiceProvider(receiverType);
@@ -384,6 +392,31 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return wellKnownTypes.IsServiceProvider(sourceMethod.ContainingType) ||
                wellKnownTypes.IsKeyedServiceProvider(sourceMethod.ContainingType) ||
                IsConcreteServiceProvider(sourceMethod.ContainingType);
+    }
+
+    private static bool IsFrameworkServiceResolutionExtension(
+        IMethodSymbol method,
+        Compilation compilation)
+    {
+        var expectedTypeName = method.Name is "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices"
+            ? "ServiceProviderKeyedServiceExtensions"
+            : "ServiceProviderServiceExtensions";
+
+        if (method.ContainingType.Name != expectedTypeName ||
+            method.ContainingType.ContainingNamespace.ToDisplayString() !=
+            "Microsoft.Extensions.DependencyInjection")
+        {
+            return false;
+        }
+
+        if (!method.ContainingType.Locations.Any(location => location.IsInSource))
+        {
+            return method.ContainingAssembly.Name == "Microsoft.Extensions.DependencyInjection.Abstractions";
+        }
+
+        var metadataName = $"Microsoft.Extensions.DependencyInjection.{expectedTypeName}";
+        return !compilation.SourceModule.ReferencedAssemblySymbols.Any(
+            assembly => assembly.GetTypeByMetadataName(metadataName) is not null);
     }
 
     private static bool IsConcreteServiceProvider(ITypeSymbol? type) =>

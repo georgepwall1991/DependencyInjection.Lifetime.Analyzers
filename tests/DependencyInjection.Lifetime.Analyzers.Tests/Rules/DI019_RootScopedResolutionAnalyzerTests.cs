@@ -987,6 +987,88 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task UserDefinedStaticGetRequiredServiceFromLocalRootProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class CustomProviderExtensions
+            {
+                public static T GetRequiredService<T>(this IServiceProvider provider) => default!;
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    CustomProviderExtensions.GetRequiredService<IScopedService>(provider);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task UserDefinedReducedGetRequiredServiceFromLocalRootProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class CustomProviderExtensions
+            {
+                public static T GetRequiredService<T>(this IServiceProvider provider, string marker) => default!;
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<IScopedService>("custom");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SourceDefinedFrameworkNamedGetRequiredServiceFromLocalRootProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceProviderServiceExtensions
+                {
+                    public static T GetRequiredService<T>(this IServiceProvider provider, string marker) => default!;
+                }
+            }
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    var provider = services.BuildServiceProvider();
+                    Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                        .GetRequiredService<IScopedService>(provider, "custom");
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task StaticGetRequiredServiceWithReorderedNamedArgumentsFromAppServices_ReportsDiagnostic()
     {
         var source = Usings + """
