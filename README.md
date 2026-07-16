@@ -864,7 +864,7 @@ services.AddSingleton<IMyService, GoodConcreteService>();
 services.AddSingleton<MyHandler>(sp => (msg) => Console.WriteLine(msg));
 
 // Supply value types explicitly instead of asking the container to activate them:
-services.AddSingleton(_ => new MyValueService());
+services.AddSingleton(typeof(MyValueService), _ => new MyValueService());
 ```
 
 **Code Fix:** No.
