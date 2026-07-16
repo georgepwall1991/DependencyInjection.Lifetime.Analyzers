@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.13
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.14
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.13">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.14">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.13" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.14" />
 ```
 
 Then reference it from the project file:
@@ -832,7 +832,7 @@ public sealed class PaymentService : IPaymentService
 
 ## DI018: Non-Instantiable Implementation Type
 
-**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, delegate types registered without a factory, or concrete classes with no public constructors.
+**What it catches:** registrations whose implementation type cannot be constructed by the DI container, such as abstract classes, interfaces, static classes, delegate types registered without a factory, default structs and enums, or concrete classes with no public constructors.
 
 **Why it matters:** these registrations compile, but fail at runtime when the container tries to activate the service.
 
@@ -850,17 +850,21 @@ public sealed class BadPrivateCtorService : IMyService
 services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
 
-DI018 also reports abstract classes, interfaces, static classes, and delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`) used as implementation types without a factory expression. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
+DI018 also reports abstract classes, interfaces, static classes, delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`), default structs, and enums used as implementation types without a factory expression. The default container activates implementation types through public constructors returned by reflection: Roslyn's synthetic value-type constructor is not emitted as constructor metadata, so a default struct or enum fails at first resolution. A struct with an explicitly declared public constructor remains valid. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
 
 **Better pattern:**
 
 ```csharp
 public sealed class GoodConcreteService : IMyService { }
+public readonly struct MyValueService { }
 
 services.AddSingleton<IMyService, GoodConcreteService>();
 
 // For delegate types, register with a factory expression:
 services.AddSingleton<MyHandler>(sp => (msg) => Console.WriteLine(msg));
+
+// Supply value types explicitly instead of asking the container to activate them:
+services.AddSingleton(_ => new MyValueService());
 ```
 
 **Code Fix:** No.
