@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
@@ -960,6 +961,8 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             AwaitExpressionSyntax awaitExpression => UnwrapInvocation(awaitExpression.Expression),
             CastExpressionSyntax cast => UnwrapInvocation(cast.Expression),
             ParenthesizedExpressionSyntax parenthesized => UnwrapInvocation(parenthesized.Expression),
+            PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppression =>
+                UnwrapInvocation(suppression.Operand),
             _ => null
         };
 
@@ -1118,22 +1121,64 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
     {
         serviceType = null!;
         if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
-            methodSymbol.Name is not ("GetRequiredService" or "GetService") ||
-            !methodSymbol.IsGenericMethod ||
-            methodSymbol.TypeArguments.Length != 1)
+            methodSymbol.Name is not ("GetRequiredService" or "GetService"))
         {
             return false;
         }
 
         var containingType = methodSymbol.ContainingType;
-        if (containingType?.Name != "ServiceProviderServiceExtensions" ||
-            containingType.ContainingNamespace?.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
+        if (methodSymbol.IsGenericMethod)
+        {
+            if (methodSymbol.TypeArguments.Length != 1 ||
+                containingType?.Name != "ServiceProviderServiceExtensions" ||
+                containingType.ContainingNamespace?.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
+            {
+                return false;
+            }
+
+            serviceType = methodSymbol.TypeArguments[0];
+            return true;
+        }
+
+        var compilation = semanticModel.Compilation;
+        var serviceProviderExtensions = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions");
+        var serviceProvider = compilation.GetTypeByMetadataName("System.IServiceProvider");
+        var isRequiredServiceExtension = methodSymbol.Name == "GetRequiredService" &&
+            SymbolEqualityComparer.Default.Equals(containingType, serviceProviderExtensions);
+        var isServiceProviderMethod = methodSymbol.Name == "GetService" &&
+            SymbolEqualityComparer.Default.Equals(containingType, serviceProvider);
+        if (!isRequiredServiceExtension && !isServiceProviderMethod ||
+            semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation)
         {
             return false;
         }
 
-        serviceType = methodSymbol.TypeArguments[0];
-        return true;
+        var serviceTypeArgument = invocationOperation.Arguments
+            .FirstOrDefault(argument => argument.Parameter?.Name == "serviceType");
+        if (serviceTypeArgument is null)
+        {
+            return false;
+        }
+
+        IOperation value = serviceTypeArgument.Value;
+        while (true)
+        {
+            switch (value)
+            {
+                case IConversionOperation conversion:
+                    value = conversion.Operand;
+                    continue;
+                case IParenthesizedOperation parenthesized:
+                    value = parenthesized.Operand;
+                    continue;
+                case ITypeOfOperation typeOfOperation:
+                    serviceType = typeOfOperation.TypeOperand;
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 
     private static IEnumerable<VariableDeclaratorSyntax> GetLocalsDeclaredBeforeLoop(
