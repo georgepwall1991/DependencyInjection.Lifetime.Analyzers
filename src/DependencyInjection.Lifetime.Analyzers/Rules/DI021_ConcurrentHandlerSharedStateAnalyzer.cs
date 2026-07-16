@@ -220,8 +220,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // the same tree, the knob is proven instance-correlated: a different factory's
                 // setting never contaminates this consumer, and a fresh factory that never sets
                 // the knob keeps the sequential default. Untraceable chains fall back to the
-                // strengthen-only containing-type scan (a constant above 1 anywhere is still
-                // evidence of concurrency) with the config-gated DI022 tier.
+                // strengthen-only containing-type scan (a constant above 1 on the real SDK
+                // property is still evidence of concurrency) with the config-gated DI022 tier.
                 SinkConcurrency concurrency;
                 if (TryTraceRabbitConsumerChain(
                         context, eventReference, out var chainTrace, out var freshFactory, out var channelOptionsOverride) &&
@@ -1507,8 +1507,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
         else if (!trace.Traced)
         {
-            // Untraceable receiver: a knob constant above 1 anywhere in the type is still evidence
-            // of concurrency, but nothing here can prove this particular sink sequential.
+            // Untraceable receiver: a knob constant above 1 on the expected SDK property is still
+            // evidence of concurrency, but nothing here can prove this particular sink sequential.
             return AnyKnobConstantAboveOneInType(
                     context,
                     anchor,
