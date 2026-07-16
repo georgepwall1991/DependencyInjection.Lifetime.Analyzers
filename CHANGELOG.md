@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.12] - 2026-07-16
+
+### Fixed
+
+- **DI021 invocation-local lock parameters** — serialization suppression now requires a parameter monitor to be declared outside the concurrent handler. Locking the handler's own parameter no longer hides shared-state diagnostics because different invocations can receive different monitor objects; a parameter captured from the enclosing method remains a valid shared lock.
+
 ## [2.18.11] - 2026-07-16
 
 ### Fixed

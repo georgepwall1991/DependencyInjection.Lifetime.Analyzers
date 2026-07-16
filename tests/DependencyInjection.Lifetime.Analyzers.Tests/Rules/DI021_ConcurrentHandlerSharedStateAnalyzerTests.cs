@@ -4469,6 +4469,69 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task LockOnPerInvocationParameter_StillReports()
+    {
+        // Each invocation can receive a different monitor object, so locking the handler's own
+        // parameter does not serialize concurrent invocations.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Importer
+            {
+                private readonly AppDbContext _db;
+
+                public Importer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Import(object[] rows)
+                {
+                    Parallel.ForEach(rows, row =>
+                    {
+                        lock (row)
+                        {
+                            {|DI021:_db|}.Add(row);
+                            _db.SaveChanges();
+                        }
+                    });
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LockOnCapturedOuterParameter_NoDiagnostic()
+    {
+        // The outer method contributes one shared monitor to every handler invocation.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Importer
+            {
+                private readonly AppDbContext _db;
+
+                public Importer(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Import(object[] rows, object gate)
+                {
+                    Parallel.ForEach(rows, row =>
+                    {
+                        lock (gate)
+                        {
+                            _db.Add(row);
+                            _db.SaveChanges();
+                        }
+                    });
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task AsyncLockGuard_UseOutsideUsingRegion_StillReports()
     {
         // The disposable async-lock only guards the using region; the access after it races.
