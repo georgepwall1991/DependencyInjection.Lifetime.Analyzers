@@ -2242,7 +2242,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
 
             if (IsDisposeOnlyUse(operation.Syntax) ||
-                IsInsideLock(context, operation.Syntax, handlerBoundary) ||
+                IsInsideLock(context, operation.Syntax, handlerBoundary, writtenSymbols) ||
                 guards.Covers(operation.Syntax))
             {
                 continue;
@@ -2329,7 +2329,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
 
         AnalyzeCapturedScopeResolutions(
-            context, operations, handlerBoundary, handlerSymbol, sink, registrationSyntax, guards);
+            context, operations, handlerBoundary, handlerSymbol, sink, registrationSyntax, guards, writtenSymbols);
     }
 
     private sealed class DirectCandidate
@@ -2358,7 +2358,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         IMethodSymbol handlerSymbol,
         SinkContext sink,
         SyntaxNode registrationSyntax,
-        HandlerGuards guards)
+        HandlerGuards guards,
+        HashSet<ISymbol> writtenSymbols)
     {
         var reportedTypes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var operation in operations)
@@ -2403,7 +2404,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
-            if (IsInsideLock(context, invocation.Syntax, handlerBoundary) || guards.Covers(invocation.Syntax))
+            if (IsInsideLock(context, invocation.Syntax, handlerBoundary, writtenSymbols) || guards.Covers(invocation.Syntax))
             {
                 continue;
             }
@@ -2703,7 +2704,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
     private static bool IsInsideLock(
         OperationAnalysisContext context,
         SyntaxNode useSyntax,
-        SyntaxNode handlerBoundary)
+        SyntaxNode handlerBoundary,
+        HashSet<ISymbol> writtenSymbols)
     {
         var semanticModel = context.Operation.SemanticModel;
         for (var node = useSyntax.Parent; node is not null && node != handlerBoundary; node = node.Parent)
@@ -2715,6 +2717,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
             var lockTarget = semanticModel.GetSymbolInfo(
                 lockStatement.Expression, context.CancellationToken).Symbol;
+            if (lockTarget is null || writtenSymbols.Contains(lockTarget))
+            {
+                // A handler-written monitor can change identity between invocations.
+                continue;
+            }
+
             if (lockTarget is ILocalSymbol or IParameterSymbol &&
                 !IsDeclaredOutside(lockTarget, handlerBoundary))
             {
