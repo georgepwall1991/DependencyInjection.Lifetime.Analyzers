@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.4
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.5
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.4">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.5">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.4" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.5" />
 ```
 
 Then reference it from the project file:
@@ -1030,7 +1030,7 @@ When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnos
 
 ## DI024: Hosted Service Creates Scope Outside Execution Loop
 
-**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — including direct or compound cancellation checks, `while (true)`, `for (;;)`, `PeriodicTimer` loops, and channel-consumer loops — and uses it inside the loop, either directly or through a service resolved from it. Compound conditions stay conservative: nested `!` operators are reduced by polarity, every `&&` operand must be long-running, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
+**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — including direct or compound cancellation checks, `while (true)`, `for (;;)`, `PeriodicTimer` loops, and channel-consumer loops — and uses it inside the loop, either directly or through a service resolved from it. Generic and direct-`typeof(T)` non-generic `GetService`/`GetRequiredService` resolutions participate; runtime `Type` values stay conservative. Compound conditions stay conservative: nested `!` operators are reduced by polarity, every `&&` operand must be long-running, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
 
 **Why it matters:** The well-known hosted-service idiom is *scope per iteration*. A scope hoisted above the loop keeps the same scoped instances alive for the entire process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, a unit of work accumulates every iteration's state, and a single failure poisons all subsequent iterations.
 
