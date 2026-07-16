@@ -746,6 +746,149 @@ public class DI024_HostedServiceScopePerIterationAnalyzerTests
     }
 
     [Fact]
+    public async Task HoistedScopedService_GenericKeyedResolution_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class KeyedRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IWorker, Worker>("tenant");
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceProvider _provider;
+
+                public PollingService(IServiceProvider provider) => _provider = provider;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var worker = [|_provider.GetRequiredKeyedService<IWorker>("tenant")|];
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>
+            .VerifyDiagnosticsWithReferencesAsync(
+                source,
+                AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.ReferenceAssembliesWithLatestDi);
+    }
+
+    [Fact]
+    public async Task HoistedScopedService_NonGenericKeyedResolution_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class KeyedRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IWorker, Worker>("tenant");
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceProvider _provider;
+
+                public PollingService(IServiceProvider provider) => _provider = provider;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var worker = (IWorker)[|_provider.GetRequiredKeyedService(typeof(IWorker), "tenant")|];
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>
+            .VerifyDiagnosticsWithReferencesAsync(
+                source,
+                AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.ReferenceAssembliesWithLatestDi);
+    }
+
+    [Fact]
+    public async Task HoistedScopedServiceField_KeyedResolution_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class KeyedRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IWorker, Worker>("tenant");
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IWorker _worker;
+
+                public PollingService(IServiceProvider provider)
+                {
+                    _worker = [|provider.GetKeyedService<IWorker>("tenant")|]!;
+                }
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await _worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>
+            .VerifyDiagnosticsWithReferencesAsync(
+                source,
+                AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.ReferenceAssembliesWithLatestDi);
+    }
+
+    [Fact]
+    public async Task HoistedService_DynamicKey_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class KeyedRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IWorker, Worker>("tenant");
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceProvider _provider;
+
+                public PollingService(IServiceProvider provider) => _provider = provider;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    var key = DateTime.UtcNow.Ticks.ToString();
+                    var worker = _provider.GetRequiredKeyedService<IWorker>(key);
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>
+            .VerifyNoDiagnosticsWithReferencesAsync(
+                source,
+                AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.ReferenceAssembliesWithLatestDi);
+    }
+
+    [Fact]
     public async Task HoistedScope_InHostedServiceStartAsync_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -954,6 +1097,44 @@ public class DI024_HostedServiceScopePerIterationAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HoistedScope_AllKeyedResolutionsProvenSingleton_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class KeyedRegistrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IWorker, Worker>();
+                    services.AddKeyedScoped<IWorker, Worker>("other");
+                    services.AddKeyedSingleton<IWorker, Worker>("tenant");
+                }
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredKeyedService<IWorker>("tenant");
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>
+            .VerifyNoDiagnosticsWithReferencesAsync(
+                source,
+                AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.ReferenceAssembliesWithLatestDi);
     }
 
     [Fact]
