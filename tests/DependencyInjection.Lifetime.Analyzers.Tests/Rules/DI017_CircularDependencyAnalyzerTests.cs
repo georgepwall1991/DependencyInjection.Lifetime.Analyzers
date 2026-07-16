@@ -1026,6 +1026,123 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task CircularDependency_OnEquivalentReorderedGreedyConstructors_Reports()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafe { }
+
+            public class Safe : ISafe { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b, ISafe safe) { }
+                public ServiceA(ISafe safe, IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ISafe, Safe>();
+                    {|#0:services.AddScoped<IServiceA, ServiceA>()|};
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.CircularDependency)
+                .WithLocation(0)
+                .WithArguments("ServiceA", "IServiceA -> IServiceB -> IServiceA"));
+    }
+
+    [Fact]
+    public async Task CircularDependency_OnGreedyConstructorWithoutSuperset_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafe { }
+            public interface IOther { }
+
+            public class Safe : ISafe { }
+            public class Other : IOther { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA(IServiceB b, ISafe safe) { }
+                public ServiceA(IOther other) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ISafe, Safe>();
+                    services.AddScoped<IOther, Other>();
+                    services.AddScoped<IServiceA, ServiceA>();
+                    services.AddScoped<IServiceB, ServiceB>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CircularDependency_OnSameTypedConstructorsWithDifferentKeys_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafe { }
+
+            public class Safe : ISafe { }
+            public class SafeB : IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA([FromKeyedServices("cycle")] IServiceB b, ISafe safe) { }
+                public ServiceA(ISafe safe, [FromKeyedServices("safe")] IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ISafe, Safe>();
+                    services.AddKeyedScoped<IServiceB, ServiceB>("cycle");
+                    services.AddKeyedScoped<IServiceB, SafeB>("safe");
+                    services.AddScoped<IServiceA, ServiceA>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.ReferenceAssembliesWithLatestKeyedDi);
+    }
+
+    [Fact]
     public async Task CircularDependency_OnNonSelectedShorterConstructor_DoesNotReport()
     {
         var source = Usings + """

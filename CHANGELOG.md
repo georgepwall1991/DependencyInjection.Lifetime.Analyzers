@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.10] - 2026-07-16
+
+### Fixed
+
+- **DI017 MEDI constructor-set fidelity** — circular-dependency analysis now mirrors the default container's resolvable-constructor ambiguity rule: the greediest constructor is selected only when its resolved service-identifier set contains every other resolvable constructor's service identifiers. Equivalent constructors whose parameters are reordered now expose real cycles, while non-superset constructor sets — including same-typed keyed parameters requesting different keys — stay silent because the container rejects them as ambiguous before activation.
+
 ## [2.18.9] - 2026-07-16
 
 ### Fixed

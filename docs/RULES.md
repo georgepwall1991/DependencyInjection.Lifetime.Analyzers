@@ -680,7 +680,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 ## DI017: Circular Dependency
 
-**What it catches:** high-confidence activation cycles such as `A -> B -> A`, including longer transitive loops through constructors, explicit `GetRequiredService` / `GetRequiredKeyedService` factory calls, `ActivatorUtilities` factory construction, keyed-service inheritance, open-generic registrations, exact closed registrations that override open-generic fallbacks, and registered `IEnumerable<T>` elements. It analyzes only reachable service-registration flows and stays silent when constructor selection, factory behavior, keyed lookup, or registration reachability is ambiguous.
+**What it catches:** high-confidence activation cycles such as `A -> B -> A`, including longer transitive loops through constructors, explicit `GetRequiredService` / `GetRequiredKeyedService` factory calls, `ActivatorUtilities` factory construction, keyed-service inheritance, open-generic registrations, exact closed registrations that override open-generic fallbacks, and registered `IEnumerable<T>` elements. It analyzes only reachable service-registration flows and mirrors the default container's constructor-set rule: equivalent reordered greedy constructors expose the same cycle, while a greediest constructor whose resolved service identifiers (type plus key) are not a superset of every other resolvable constructor stays silent as ambiguous.
 
 **Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
 
@@ -708,7 +708,7 @@ public sealed class PaymentService : IPaymentService
 DI017 intentionally remains conservative:
 
 - It honors source-ordered effective registrations, including duplicate overrides, `TryAdd`, `RemoveAll`, and `Replace` removal semantics.
-- It does not report cycles from uninvoked registration helpers, unrelated `IServiceCollection` instances, opaque factory bodies, unregistered optional/default constructor parameters, implementation instances, or ambiguous equally greedy constructors.
+- It does not report cycles from uninvoked registration helpers, unrelated `IServiceCollection` instances, opaque factory bodies, unregistered optional/default constructor parameters, implementation instances, or resolvable constructor sets with no service-identifier superset.
 - `IEnumerable<T>` parameters are treated as cycle edges only when matching element registrations exist; empty collections stay silent.
 
 **Code Fix:** No. Breaking dependency cycles is a design change.
