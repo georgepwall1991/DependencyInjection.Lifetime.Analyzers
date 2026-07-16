@@ -801,7 +801,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 ## DI017: Circular Dependency
 
-**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It follows effective registration precedence, including exact closed registrations before open-generic fallbacks, and mirrors the default container's constructor-set rule: the greediest resolvable constructor is analyzed only when its parameter types contain every other resolvable constructor's parameter types. Equivalent reordered constructors therefore expose the same real cycle, while non-superset sets stay silent because activation is ambiguous.
+**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It follows effective registration precedence, including exact closed registrations before open-generic fallbacks, and mirrors the default container's constructor-set rule: the greediest resolvable constructor is analyzed only when its resolved service identifiers (type plus key) contain every other resolvable constructor's service identifiers. Equivalent reordered constructors therefore expose the same real cycle, while non-superset sets stay silent because activation is ambiguous.
 
 **Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
 
