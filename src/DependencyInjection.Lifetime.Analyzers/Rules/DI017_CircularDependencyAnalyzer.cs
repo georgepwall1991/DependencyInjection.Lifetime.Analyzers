@@ -424,20 +424,26 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         var resolvableConstructors = constructors
             .Where(constructor => constructor.Parameters.All(parameter =>
                 IsDirectlyResolvableConstructorParameter(parameter, registration, graph)))
+            .OrderByDescending(constructor => constructor.Parameters.Length)
             .ToList();
         if (resolvableConstructors.Count == 0)
         {
             return [];
         }
 
-        var selectedParameterCount = resolvableConstructors.Max(constructor => constructor.Parameters.Length);
-        var selectedConstructors = resolvableConstructors
-            .Where(constructor => constructor.Parameters.Length == selectedParameterCount)
-            .ToList();
+        var selectedConstructor = resolvableConstructors[0];
+        foreach (var constructor in resolvableConstructors.Skip(1))
+        {
+            var isParameterSubset = constructor.Parameters.All(parameter =>
+                selectedConstructor.Parameters.Any(selectedParameter =>
+                    SymbolEqualityComparer.Default.Equals(selectedParameter.Type, parameter.Type)));
+            if (!isParameterSubset)
+            {
+                return [];
+            }
+        }
 
-        return selectedConstructors.Count == 1
-            ? selectedConstructors
-            : [];
+        return [selectedConstructor];
     }
 
     private static bool IsDirectlyResolvableConstructorParameter(
