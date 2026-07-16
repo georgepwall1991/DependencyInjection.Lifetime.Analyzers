@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.8] - 2026-07-16
+
+### Fixed
+
+- **DI020 direct static `UseMiddleware` calls** — middleware activation analysis now recognizes generic and direct-`typeof(T)` non-generic calls made through the framework `UseMiddlewareExtensions` class. Receiver, middleware, and explicit activation arguments are bound by declared parameter, including reordered named arguments and expanded `params`; runtime `Type` values and user-defined same-named static helpers remain conservative and silent.
+
 ## [2.18.7] - 2026-07-16
 
 ### Fixed
