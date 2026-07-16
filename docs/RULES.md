@@ -761,7 +761,7 @@ services.AddSingleton(typeof(MyValueService), _ => new MyValueService());
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`. Both ordinary extension syntax and direct static calls through the framework `ServiceProviderServiceExtensions` type are analyzed, including reordered named arguments.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 
@@ -793,7 +793,7 @@ DI019: Service 'OrderProcessor' resolves scoped dependency from the root provide
 
 That is strictly more actionable than the container's own `ValidateOnBuild` exception, which reports only the two endpoints and leaves the chain in between for you to reconstruct.
 
-**Code Fix:** Yes. Offers to wrap the resolution in a `using` declaration or block with a new scope.
+**Code Fix:** Yes. Offers to wrap ordinary extension-form resolutions in a `using` declaration or block with a new scope. Direct static-call syntax reports without a code fix because rewriting the declaring type as a provider receiver would not compile.
 
 ---
 
