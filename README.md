@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.16
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.17
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.16">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.17">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.16" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.17" />
 ```
 
 Then reference it from the project file:
@@ -250,6 +250,8 @@ public void UseServiceNow()
 ## DI003: Captive Dependency
 
 **What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` calls where DI still resolves a scoped or transient constructor parameter.
+
+`ServiceDescriptor` registrations prepended with `services.Insert(0, descriptor)` are analyzed too, including reordered named arguments, concrete framework `ServiceCollection` receivers, and repeated prepends whose runtime list precedence differs from source order. Nonzero or dynamic insert indexes and source-defined concrete `Insert` bodies stay conservative because their absolute position or mutation behavior is not provable.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
