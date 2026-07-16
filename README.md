@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.11
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 2.18.12
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.11">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.12">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.11" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="2.18.12" />
 ```
 
 Then reference it from the project file:
@@ -1006,7 +1006,7 @@ private async Task HandleAsync(ProcessSessionMessageEventArgs args)
 }
 ```
 
-DI021 stays quiet for handlers that already do the right thing: a scope created **inside** the handler, `IDbContextFactory<TContext>` usage, instances created inline, and handlers that explicitly serialize themselves (`lock`, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
+DI021 stays quiet for handlers that already do the right thing: a scope created **inside** the handler, `IDbContextFactory<TContext>` usage, instances created inline, and handlers that explicitly serialize themselves (`lock` on a monitor shared from outside the handler, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Locking the handler's own parameter or an object created inside the handler does not serialize separate invocations and still reports. Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
 
 **Code Fix:** Yes. Rewrites the handler to resolve the service from a new scope per invocation, plumbs `IServiceScopeFactory` through the constructor when needed, and removes the now-dead captured field.
 
