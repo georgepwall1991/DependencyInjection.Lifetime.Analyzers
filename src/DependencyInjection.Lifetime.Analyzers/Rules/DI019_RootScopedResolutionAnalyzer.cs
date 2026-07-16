@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
@@ -157,7 +158,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     out var key,
                     out var isKeyed,
                     out var isEnumerableRequest) ||
-                !TryGetResolutionReceiver(invocation, methodSymbol, out var receiver))
+                !TryGetResolutionReceiver(invocation, methodSymbol, semanticModel, out var receiver))
             {
                 continue;
             }
@@ -450,9 +451,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     private static bool TryGetResolutionReceiver(
         InvocationExpressionSyntax invocation,
         IMethodSymbol methodSymbol,
+        SemanticModel semanticModel,
         out ExpressionSyntax receiver)
     {
         receiver = null!;
+
+        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
+        if (methodSymbol.ReducedFrom is null &&
+            sourceMethod.IsExtensionMethod &&
+            semanticModel.GetOperation(invocation) is IInvocationOperation invocationOperation)
+        {
+            foreach (var argument in invocationOperation.Arguments)
+            {
+                if (argument.Parameter?.Ordinal == 0 && argument.Syntax is ArgumentSyntax argumentSyntax)
+                {
+                    receiver = argumentSyntax.Expression;
+                    return true;
+                }
+            }
+        }
 
         // The provider is the receiver of the resolution member itself. Check the member access
         // first: in `host?.Services.GetRequiredService<T>()` the conditional access's WhenNotNull is
@@ -471,7 +488,6 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        var sourceMethod = methodSymbol.ReducedFrom ?? methodSymbol;
         if (!sourceMethod.IsExtensionMethod || invocation.ArgumentList.Arguments.Count == 0)
         {
             return false;
