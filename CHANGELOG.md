@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.14] - 2026-07-16
+
+### Fixed
+
+- **DI018 value-type activation fidelity** — default structs and enums registered by implementation type now report because the default container's reflection path cannot see their synthetic parameterless constructors and fails at first resolution. Structs with an explicitly declared public constructor remain valid, while factory and implementation-instance registrations stay quiet.
+
 ## [2.18.13] - 2026-07-16
 
 ### Fixed
