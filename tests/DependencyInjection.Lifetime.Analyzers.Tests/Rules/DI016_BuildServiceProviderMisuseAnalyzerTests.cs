@@ -200,6 +200,85 @@ public class DI016_BuildServiceProviderMisuseAnalyzerTests
     }
 
     [Fact]
+    public async Task BuilderServices_DirectStaticCallWithReorderedNamedArguments_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static void Configure(FakeBuilder builder)
+                {
+                    ServiceCollectionContainerBuilderExtensions.{|#0:BuildServiceProvider|}(
+                        options: new ServiceProviderOptions(),
+                        services: builder.Services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+    }
+
+    [Fact]
+    public async Task TopLevelBuilderServices_DirectStaticCall_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            var builder = new FakeBuilder();
+            ServiceCollectionContainerBuilderExtensions.{|#0:BuildServiceProvider|}(builder.Services);
+
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI016_BuildServiceProviderMisuseAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies = Microsoft.CodeAnalysis.Testing.ReferenceAssemblies.Net.Net60
+                .AddPackages([
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+                    new Microsoft.CodeAnalysis.Testing.PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0"),
+                ]),
+        };
+        test.TestState.OutputKind = Microsoft.CodeAnalysis.OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.BuildServiceProviderMisuse)
+                .WithLocation(0));
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ProviderFactory_DirectStaticCall_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeBuilder
+            {
+                public IServiceCollection Services { get; } = new ServiceCollection();
+            }
+
+            public static class Composition
+            {
+                public static IServiceProvider CreateProvider(FakeBuilder builder)
+                {
+                    return ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(builder.Services);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI016_BuildServiceProviderMisuseAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task HelperMethodReturningBuilderServices_FromDifferentFile_ReportsDiagnostic()
     {
         var caller = Usings + """
