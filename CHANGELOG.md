@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.18] - 2026-07-16
+
+### Fixed
+
+- **DI019 direct static service-resolution calls** — root-provider analysis now recovers the provider from the bound ordinal-zero extension parameter for direct calls through `ServiceProviderServiceExtensions`, including non-generic overloads with reordered named arguments. Calls through scoped or otherwise unproven providers remain quiet, and the code fixer deliberately offers no rewrite for static-call syntax.
+
 ## [2.18.17] - 2026-07-16
 
 ### Fixed
