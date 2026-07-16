@@ -1147,13 +1147,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         var isRequiredServiceExtension = methodSymbol.Name == "GetRequiredService" &&
             SymbolEqualityComparer.Default.Equals(containingType, serviceProviderExtensions);
         var isServiceProviderMethod = methodSymbol.Name == "GetService" &&
-            (SymbolEqualityComparer.Default.Equals(containingType, serviceProvider) ||
-             containingType?.Name == "IServiceProvider" &&
-             containingType.ContainingNamespace?.ToDisplayString() == "System") &&
-            methodSymbol.Parameters.Any(parameter =>
-                parameter.Name == "serviceType" &&
-                parameter.Type.Name == "Type" &&
-                parameter.Type.ContainingNamespace?.ToDisplayString() == "System");
+            SymbolEqualityComparer.Default.Equals(containingType, serviceProvider);
         if (!isRequiredServiceExtension && !isServiceProviderMethod ||
             semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation)
         {
