@@ -109,16 +109,13 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
             return "type is a delegate";
         }
 
-        // Structs always have an implicit parameterless constructor, so they
-        // are always instantiable by the DI container — matches CanSelfBind.
-        if (type.TypeKind == TypeKind.Struct)
-        {
-            return null;
-        }
-
-        // No public constructors — matches CanSelfBind in DependencyResolutionEngine
-        // which requires public constructors for activation.
-        if (type.TypeKind == TypeKind.Class &&
+        // The default container activates implementation types through reflection.
+        // Roslyn exposes a synthetic parameterless constructor for value types,
+        // but Type.GetConstructors() cannot see it, so only explicitly declared
+        // public constructors make structs and enums activatable.
+        if ((type.TypeKind == TypeKind.Class ||
+             type.TypeKind == TypeKind.Struct ||
+             type.TypeKind == TypeKind.Enum) &&
             !HasPublicConstructorForRegistration(type))
         {
             return "type has no accessible constructors";
@@ -134,6 +131,7 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
         // read from OriginalDefinition for unbound generic types.
         var typeToCheck = type.IsUnboundGenericType ? type.OriginalDefinition : type;
         return typeToCheck.InstanceConstructors.Any(c =>
+            (typeToCheck.TypeKind == TypeKind.Class || !c.IsImplicitlyDeclared) &&
             c.DeclaredAccessibility == Accessibility.Public);
     }
 }
