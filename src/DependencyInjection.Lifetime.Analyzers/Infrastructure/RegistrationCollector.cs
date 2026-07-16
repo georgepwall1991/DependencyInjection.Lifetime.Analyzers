@@ -308,7 +308,7 @@ public sealed class RegistrationCollector
 
     private IEnumerable<ServiceRegistration> GetSourceOrderedRegistrations()
     {
-        var sourceOrdered = _allRegistrations
+        var ordered = _allRegistrations
             .Select(registration =>
             {
                 var lineSpan = registration.Location.GetLineSpan();
@@ -332,13 +332,11 @@ public sealed class RegistrationCollector
             .ThenBy(item => item.Line)
             .ThenBy(item => item.Column)
             .ThenBy(item => item.DiscoveryOrder)
-            .Select(item => item.Registration)
-            .ToArray();
+            .Select(item => item.Registration);
 
         var seen = new HashSet<ServiceIdentifier>(ServiceIdentifierComparer.Instance);
         var seenImplementations = new HashSet<ServiceImplementationIdentifier>(ServiceImplementationIdentifierComparer.Instance);
-        var effective = new List<ServiceRegistration>();
-        foreach (var registration in sourceOrdered)
+        foreach (var registration in ordered)
         {
             var identifier = new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed);
             if (registration.SkipIfSameImplementationAlreadyRegistered)
@@ -357,7 +355,7 @@ public sealed class RegistrationCollector
                 }
 
                 seen.Add(identifier);
-                effective.Add(registration);
+                yield return registration;
                 continue;
             }
 
@@ -378,11 +376,6 @@ public sealed class RegistrationCollector
                         registration.ImplementationType));
             }
 
-            effective.Add(registration);
-        }
-
-        foreach (var registration in effective)
-        {
             yield return registration;
         }
     }
