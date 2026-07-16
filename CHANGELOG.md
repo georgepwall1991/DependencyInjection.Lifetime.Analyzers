@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.5] - 2026-07-16
+
+### Fixed
+
+- **DI024 non-generic service resolution** — hosted-service reuse analysis now understands framework `GetRequiredService(typeof(T))` and `IServiceProvider.GetService(typeof(T))` calls, including casts and null-forgiving wrappers. Scoped services resolved once before a process-lifetime loop report, while scopes used only for registration-proven singletons no longer produce an opaque-use warning; runtime `Type` values and user-defined same-named methods remain conservative and silent.
+
 ## [2.18.4] - 2026-07-16
 
 ### Fixed
