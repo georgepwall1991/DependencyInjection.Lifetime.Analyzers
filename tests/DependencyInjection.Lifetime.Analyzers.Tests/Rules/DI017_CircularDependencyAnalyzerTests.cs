@@ -1104,6 +1104,45 @@ public class DI017_CircularDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task CircularDependency_OnSameTypedConstructorsWithDifferentKeys_DoesNotReport()
+    {
+        var source = Usings + """
+            public interface IServiceA { }
+            public interface IServiceB { }
+            public interface ISafe { }
+
+            public class Safe : ISafe { }
+            public class SafeB : IServiceB { }
+
+            public class ServiceA : IServiceA
+            {
+                public ServiceA([FromKeyedServices("cycle")] IServiceB b, ISafe safe) { }
+                public ServiceA(ISafe safe, [FromKeyedServices("safe")] IServiceB b) { }
+            }
+
+            public class ServiceB : IServiceB
+            {
+                public ServiceB(IServiceA a) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ISafe, Safe>();
+                    services.AddKeyedScoped<IServiceB, ServiceB>("cycle");
+                    services.AddKeyedScoped<IServiceB, SafeB>("safe");
+                    services.AddScoped<IServiceA, ServiceA>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI017_CircularDependencyAnalyzer>.ReferenceAssembliesWithLatestKeyedDi);
+    }
+
+    [Fact]
     public async Task CircularDependency_OnNonSelectedShorterConstructor_DoesNotReport()
     {
         var source = Usings + """
