@@ -96,8 +96,13 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         }
 
         // Must be called on IApplicationBuilder, IEndpointRouteBuilder, or IConventionBuilder.
+        // A direct static call to the framework extension class has no reduced receiver, so use
+        // its first parameter as the receiver and bind the remaining arguments by parameter.
         var originalSymbol = symbol.ReducedFrom ?? symbol;
-        var receiverType = symbol.ReducedFrom is not null
+        var isDirectFrameworkExtension = IsDirectFrameworkExtension(symbol, semanticModel.Compilation);
+        var receiverType = isDirectFrameworkExtension
+            ? originalSymbol.Parameters.FirstOrDefault()?.Type
+            : symbol.ReducedFrom is not null
             ? originalSymbol.Parameters.FirstOrDefault()?.Type
             : invocation.Expression switch
             {
@@ -131,7 +136,25 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
 
         INamedTypeSymbol? middlewareType;
         IEnumerable<ArgumentSyntax> explicitArguments;
-        if (symbol.IsGenericMethod)
+        if (isDirectFrameworkExtension)
+        {
+            if (symbol.IsGenericMethod)
+            {
+                middlewareType = symbol.TypeArguments[0] as INamedTypeSymbol;
+            }
+            else if (GetSourceArguments(invocation, symbol, "middleware").FirstOrDefault() is { } middlewareArgument &&
+                     middlewareArgument.Expression is TypeOfExpressionSyntax typeOfExpression)
+            {
+                middlewareType = semanticModel.GetTypeInfo(typeOfExpression.Type).Type as INamedTypeSymbol;
+            }
+            else
+            {
+                return false;
+            }
+
+            explicitArguments = GetSourceArguments(invocation, symbol, "args");
+        }
+        else if (symbol.IsGenericMethod)
         {
             middlewareType = symbol.TypeArguments[0] as INamedTypeSymbol;
             explicitArguments = invocation.ArgumentList.Arguments;
@@ -155,6 +178,62 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         var argumentTypes = GetExplicitArgumentTypes(explicitArguments, semanticModel);
         usage = new MiddlewareUsage(middlewareType, argumentTypes, invocation.GetLocation());
         return true;
+    }
+
+    private static bool IsDirectFrameworkExtension(IMethodSymbol symbol, Compilation compilation)
+    {
+        if (!symbol.IsExtensionMethod || symbol.ReducedFrom is not null)
+        {
+            return false;
+        }
+
+        var frameworkExtensions = compilation.GetTypeByMetadataName(
+            "Microsoft.AspNetCore.Builder.UseMiddlewareExtensions");
+        return frameworkExtensions is not null &&
+               SymbolEqualityComparer.Default.Equals(symbol.ContainingType, frameworkExtensions);
+    }
+
+    private static IEnumerable<ArgumentSyntax> GetSourceArguments(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        string parameterName)
+    {
+        var assignedOrdinals = new HashSet<int>();
+        var nextPositionalOrdinal = 0;
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            IParameterSymbol? parameter;
+            if (argument.NameColon is { Name.Identifier.ValueText: { } name })
+            {
+                parameter = method.Parameters.FirstOrDefault(candidate => candidate.Name == name);
+                if (parameter is not null)
+                {
+                    assignedOrdinals.Add(parameter.Ordinal);
+                }
+            }
+            else
+            {
+                while (nextPositionalOrdinal < method.Parameters.Length &&
+                       assignedOrdinals.Contains(nextPositionalOrdinal))
+                {
+                    nextPositionalOrdinal++;
+                }
+
+                parameter = nextPositionalOrdinal < method.Parameters.Length
+                    ? method.Parameters[nextPositionalOrdinal]
+                    : method.Parameters.LastOrDefault(candidate => candidate.IsParams);
+                if (parameter is not null && !parameter.IsParams)
+                {
+                    assignedOrdinals.Add(parameter.Ordinal);
+                    nextPositionalOrdinal++;
+                }
+            }
+
+            if (parameter?.Name == parameterName)
+            {
+                yield return argument;
+            }
+        }
     }
 
     private static ImmutableArray<ITypeSymbol?> GetExplicitArgumentTypes(
