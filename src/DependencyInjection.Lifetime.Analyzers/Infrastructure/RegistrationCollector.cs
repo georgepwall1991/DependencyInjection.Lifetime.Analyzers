@@ -11,7 +11,7 @@ using Microsoft.CodeAnalysis.Operations;
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
 /// <summary>
-/// Collects service registrations from IServiceCollection extension method calls.
+/// Collects service registrations from supported IServiceCollection operations.
 /// </summary>
 public sealed class RegistrationCollector
 {
@@ -248,7 +248,9 @@ public sealed class RegistrationCollector
         .GroupBy(
             registration => new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed),
             ServiceIdentifierComparer.Instance)
-        .Select(group => group.Last());
+        .Select(group =>
+            group.LastOrDefault(registration => !registration.PrependToCollection) ??
+            group.First());
 
     /// <summary>
     /// Gets all ordered registrations for analyzing registration order.
@@ -261,7 +263,7 @@ public sealed class RegistrationCollector
     public IEnumerable<OrderedRegistrationMutation> OrderedMutations => _orderedMutations;
 
     /// <summary>
-    /// Gets all collected Add* registrations (including duplicates) that include implementation metadata.
+    /// Gets all collected registrations (including duplicates) that include implementation metadata.
     /// </summary>
     public IEnumerable<ServiceRegistration> AllRegistrations => GetSourceOrderedRegistrations();
 
@@ -306,7 +308,7 @@ public sealed class RegistrationCollector
 
     private IEnumerable<ServiceRegistration> GetSourceOrderedRegistrations()
     {
-        var ordered = _allRegistrations
+        var sourceOrdered = _allRegistrations
             .Select(registration =>
             {
                 var lineSpan = registration.Location.GetLineSpan();
@@ -330,11 +332,13 @@ public sealed class RegistrationCollector
             .ThenBy(item => item.Line)
             .ThenBy(item => item.Column)
             .ThenBy(item => item.DiscoveryOrder)
-            .Select(item => item.Registration);
+            .Select(item => item.Registration)
+            .ToArray();
 
         var seen = new HashSet<ServiceIdentifier>(ServiceIdentifierComparer.Instance);
         var seenImplementations = new HashSet<ServiceImplementationIdentifier>(ServiceImplementationIdentifierComparer.Instance);
-        foreach (var registration in ordered)
+        var effective = new List<ServiceRegistration>();
+        foreach (var registration in sourceOrdered)
         {
             var identifier = new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed);
             if (registration.SkipIfSameImplementationAlreadyRegistered)
@@ -353,7 +357,7 @@ public sealed class RegistrationCollector
                 }
 
                 seen.Add(identifier);
-                yield return registration;
+                effective.Add(registration);
                 continue;
             }
 
@@ -374,6 +378,11 @@ public sealed class RegistrationCollector
                         registration.ImplementationType));
             }
 
+            effective.Add(registration);
+        }
+
+        foreach (var registration in effective)
+        {
             yield return registration;
         }
     }
@@ -405,15 +414,18 @@ public sealed class RegistrationCollector
 
         var isExtension = IsServiceCollectionExtensionMethod(methodSymbol);
         var isAddMethod = IsServiceCollectionAddMethod(methodSymbol);
+        var isInsertMethod = IsServiceCollectionInsertMethod(methodSymbol);
 
-        // Check if this is an extension method on IServiceCollection OR ICollection.Add
-        if (!isExtension && !isAddMethod)
+        // Check if this is an extension method on IServiceCollection or a descriptor
+        // mutation exposed through the collection interfaces it inherits.
+        if (!isExtension && !isAddMethod && !isInsertMethod)
         {
             return;
         }
 
-        // If it's the instance Add method, verify the receiver is IServiceCollection
-        if (isAddMethod && !IsReceiverServiceCollection(invocation, semanticModel))
+        // Instance collection methods are shared by other descriptor collections, so
+        // verify that the actual receiver is IServiceCollection before recording them.
+        if ((isAddMethod || isInsertMethod) && !IsReceiverServiceCollection(invocation, semanticModel))
         {
             return;
         }
@@ -421,6 +433,11 @@ public sealed class RegistrationCollector
         var methodName = methodSymbol.Name;
         var isTryAdd = IsTryAddMethod(methodName);
         var isTryAddEnumerable = methodName == "TryAddEnumerable";
+
+        if (isInsertMethod && !IsConstantZeroInsert(invocation, semanticModel))
+        {
+            return;
+        }
 
         if (TryAnalyzeRegistrationMutation(
                 invocation,
@@ -645,8 +662,9 @@ public sealed class RegistrationCollector
             // Extract service, implementation types, factory expression, and key from standard methods
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, key, implementationInstanceTypeIsExact) = ExtractTypes(methodSymbol, invocation, semanticModel);
         }
-        else if ((methodName == "Add" || methodName == "TryAdd" || methodName == "TryAddEnumerable") &&
-                 (isExtension || isAddMethod))
+        else if (((methodName == "Add" || methodName == "TryAdd" || methodName == "TryAddEnumerable") &&
+                  (isExtension || isAddMethod)) ||
+                 isInsertMethod)
         {
             // Handle Add(ServiceDescriptor)
             (serviceType, implementationType, factoryExpression, hasImplementationInstance, lifetime, key, isKeyed, implementationInstanceTypeIsExact) =
@@ -715,7 +733,8 @@ public sealed class RegistrationCollector
                 isTryAdd,
                 isTryAddEnumerable,
                 implementationInstanceTypeIsExact,
-                factoryProvidedParameterTypes);
+                factoryProvidedParameterTypes,
+                prependToCollection: isInsertMethod);
 
             _allRegistrations.Add(registration);
 
@@ -848,6 +867,78 @@ public sealed class RegistrationCollector
         return paramType.Name == "ServiceDescriptor" &&
                (paramType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection" ||
                 paramType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.Abstractions");
+    }
+
+    private bool IsServiceCollectionInsertMethod(IMethodSymbol method)
+    {
+        if (method.Name != "Insert" ||
+            method.IsStatic ||
+            !method.ReturnsVoid ||
+            method.Parameters.Length != 2 ||
+            method.Parameters[0].Type.SpecialType != SpecialType.System_Int32 ||
+            !IsServiceDescriptorType(method.Parameters[1].Type))
+        {
+            return false;
+        }
+
+        if (IsServiceDescriptorListType(method.ContainingType))
+        {
+            return true;
+        }
+
+        // A source-defined IServiceCollection implementation can remap a same-shaped
+        // method to IList<T>.Insert while giving it arbitrary behavior. Trust the BCL
+        // interface member itself and metadata implementations, but keep custom source
+        // bodies conservative.
+        if (method.Locations.Any(location => location.IsInSource))
+        {
+            return false;
+        }
+
+        foreach (var interfaceType in method.ContainingType.AllInterfaces)
+        {
+            if (!IsServiceDescriptorListType(interfaceType))
+            {
+                continue;
+            }
+
+            foreach (var interfaceMember in interfaceType.GetMembers("Insert").OfType<IMethodSymbol>())
+            {
+                if (method.ContainingType.FindImplementationForInterfaceMember(interfaceMember) is IMethodSymbol implementation &&
+                    SymbolEqualityComparer.Default.Equals(implementation, method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsServiceDescriptorListType(INamedTypeSymbol type) =>
+        type.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IList_T &&
+        type.TypeArguments.Length == 1 &&
+        IsServiceDescriptorType(type.TypeArguments[0]);
+
+    private static bool IsConstantZeroInsert(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        if (semanticModel.GetOperation(invocation) is not IInvocationOperation operation)
+        {
+            return false;
+        }
+
+        foreach (var argument in operation.Arguments)
+        {
+            if (argument.Parameter?.Ordinal == 0 &&
+                argument.Value.ConstantValue is { HasValue: true, Value: int index })
+            {
+                return index == 0;
+            }
+        }
+
+        return false;
     }
 
     private bool IsReceiverServiceCollection(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
