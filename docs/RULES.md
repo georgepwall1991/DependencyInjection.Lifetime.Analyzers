@@ -792,7 +792,7 @@ That is strictly more actionable than the container's own `ValidateOnBuild` exce
 
 ## DI020: Middleware Captures Scoped Service In Constructor
 
-**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service).
+**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service). Middleware registrations are recognized in reduced extension form (`app.UseMiddleware<T>()`) and in direct framework static form (`UseMiddlewareExtensions.UseMiddleware<T>(app)` / `UseMiddlewareExtensions.UseMiddleware(app, typeof(T))`), with explicit activation arguments matched to constructor parameters.
 
 **Why it matters:** Conventional middleware (used via `app.UseMiddleware<T>()`) is instantiated once per application lifetime. Injecting a scoped service into the constructor will cause that specific scoped instance to be captured for the entire application lifetime, which often leads to "captive dependency" bugs or runtime errors (e.g., if the service is a DbContext).
 
