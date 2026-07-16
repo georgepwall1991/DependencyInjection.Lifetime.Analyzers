@@ -877,14 +877,13 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     public async Task DefaultStruct_RegisteredWithFactory_DoesNotReport()
     {
         var source = Usings + """
-            public interface IMyService { }
-            public struct MyService : IMyService { }
+            public struct MyService { }
 
             public class Startup
             {
                 public void ConfigureServices(IServiceCollection services)
                 {
-                    services.AddSingleton<IMyService>(_ => new MyService());
+                    services.AddSingleton(typeof(MyService), _ => new MyService());
                 }
             }
             """;
