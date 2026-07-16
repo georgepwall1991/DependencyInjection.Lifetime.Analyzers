@@ -376,6 +376,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
         {
+            if (!IsFrameworkServiceResolutionExtension(sourceMethod))
+            {
+                return false;
+            }
+
             var receiverType = sourceMethod.Parameters[0].Type;
             return wellKnownTypes.IsServiceProvider(receiverType) ||
                    wellKnownTypes.IsKeyedServiceProvider(receiverType);
@@ -384,6 +389,17 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return wellKnownTypes.IsServiceProvider(sourceMethod.ContainingType) ||
                wellKnownTypes.IsKeyedServiceProvider(sourceMethod.ContainingType) ||
                IsConcreteServiceProvider(sourceMethod.ContainingType);
+    }
+
+    private static bool IsFrameworkServiceResolutionExtension(IMethodSymbol method)
+    {
+        var expectedTypeName = method.Name is "GetKeyedService" or "GetRequiredKeyedService" or "GetKeyedServices"
+            ? "ServiceProviderKeyedServiceExtensions"
+            : "ServiceProviderServiceExtensions";
+
+        return method.ContainingType.Name == expectedTypeName &&
+               method.ContainingType.ContainingNamespace.ToDisplayString() ==
+               "Microsoft.Extensions.DependencyInjection";
     }
 
     private static bool IsConcreteServiceProvider(ITypeSymbol? type) =>
