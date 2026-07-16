@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.13] - 2026-07-16
+
+### Fixed
+
+- **DI021 stable shared lock monitors** — lock suppression now rejects monitor fields, outer locals, and captured parameters that the concurrent handler writes. Replacing the monitor inside an invocation can make handlers lock different objects, so those shared-state accesses continue to report; stable shared monitors remain valid serialization guards.
+
 ## [2.18.12] - 2026-07-16
 
 ### Fixed
