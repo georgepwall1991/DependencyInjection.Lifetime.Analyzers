@@ -69,7 +69,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                     .Select(group => new HoistedScopeCandidate(
                         group.Key,
                         group.OrderBy(candidate => candidate.LoopLocation.SourceSpan.Start).First().LoopLocation,
-                        group.SelectMany(candidate => candidate.ResolvedServiceTypes).ToImmutableArray(),
+                        group.SelectMany(candidate => candidate.ResolvedServices).ToImmutableArray(),
                         group.Any(candidate => candidate.HasNonResolutionUse),
                         group.First().MethodName));
 
@@ -80,9 +80,10 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                     // to per-iteration scopes. Any scoped/unproven resolution (or a use we cannot
                     // see through) keeps the report.
                     if (!candidate.HasNonResolutionUse &&
-                        candidate.ResolvedServiceTypes.Length > 0 &&
-                        candidate.ResolvedServiceTypes.All(type =>
-                            registrationCollector.GetLifetime(type) == Infrastructure.ServiceLifetime.Singleton))
+                        candidate.ResolvedServices.Length > 0 &&
+                        candidate.ResolvedServices.All(service =>
+                            registrationCollector.GetLifetime(service.ServiceType, service.Key, service.IsKeyed) ==
+                            Infrastructure.ServiceLifetime.Singleton))
                     {
                         continue;
                     }
@@ -100,7 +101,10 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 {
                     // Only flag when the registration provably makes the service scoped; unknown
                     // lifetimes stay silent (registrations may live in another assembly).
-                    if (registrationCollector.GetLifetime(candidate.ServiceType) != Infrastructure.ServiceLifetime.Scoped)
+                    if (registrationCollector.GetLifetime(
+                            candidate.Service.ServiceType,
+                            candidate.Service.Key,
+                            candidate.Service.IsKeyed) != Infrastructure.ServiceLifetime.Scoped)
                     {
                         continue;
                     }
@@ -109,7 +113,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                         DiagnosticDescriptors.HostedServiceScopedServicePerIteration,
                         candidate.Location,
                         additionalLocations: new[] { candidate.LoopLocation },
-                        candidate.ServiceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                        candidate.Service.ServiceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
                         candidate.MethodName));
                 }
             });
@@ -278,23 +282,23 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                 continue;
             }
 
-            ITypeSymbol? serviceType = null;
+            ServiceResolution? service = null;
             var allResolutions = true;
             foreach (var site in creations)
             {
                 if (!TryGetResolution(site.Invocation!, site.Model, out var resolved) ||
-                    (serviceType is not null && !SymbolEqualityComparer.Default.Equals(serviceType, resolved)))
+                    (service is { } prior && !AreSameResolution(prior, resolved)))
                 {
                     allResolutions = false;
                     break;
                 }
 
-                serviceType = resolved;
+                service = resolved;
             }
 
-            if (allResolutions && serviceType is not null)
+            if (allResolutions && service is not null)
             {
-                serviceFields[pair.Key] = new FieldEntry(sites, serviceType, null);
+                serviceFields[pair.Key] = new FieldEntry(sites, service, null);
             }
         }
 
@@ -538,9 +542,9 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         var scopeLocals = new Dictionary<ISymbol, InvocationExpressionSyntax>(SymbolEqualityComparer.Default);
         var candidateScopes = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
-        // Symbols holding a service resolved before the loop: symbol -> (service type, the
+        // Symbols holding a service resolved before the loop: symbol -> (resolution identity, the
         // resolution invocation, the hoisted scope symbol it was resolved from, if any).
-        var serviceLocals = new Dictionary<ISymbol, (ITypeSymbol ServiceType, InvocationExpressionSyntax Invocation, ISymbol? SourceScope, InvocationExpressionSyntax? SourceCreation, bool SourceWithinBoundary)>(SymbolEqualityComparer.Default);
+        var serviceLocals = new Dictionary<ISymbol, (ServiceResolution Service, InvocationExpressionSyntax Invocation, ISymbol? SourceScope, InvocationExpressionSyntax? SourceCreation, bool SourceWithinBoundary)>(SymbolEqualityComparer.Default);
 
         var methodBody = method.Body!;
         var declarations = new List<(ILocalSymbol Local, InvocationExpressionSyntax Invocation, bool WithinBoundary)>();
@@ -722,10 +726,10 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         {
             if (withinBoundary &&
                 !scopeLocals.ContainsKey(local) &&
-                TryGetResolution(invocation, semanticModel, out var serviceType))
+                TryGetResolution(invocation, semanticModel, out var service))
             {
                 var source = FindReferencedScopeLocal(invocation, semanticModel, scopeLocals, scopeWrites, method, providerAliases);
-                serviceLocals[local] = (serviceType, invocation, source?.Symbol, source?.Creation, source?.WithinBoundary ?? false);
+                serviceLocals[local] = (service, invocation, source?.Symbol, source?.Creation, source?.WithinBoundary ?? false);
             }
         }
 
@@ -740,7 +744,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             // site's own semantic model (sites may live in another partial declaration).
             var fieldSourceScope = pair.Value.SiteSourceScopes?[index];
             serviceLocals[pair.Key] = (
-                pair.Value.ServiceType!,
+                pair.Value.Service!.Value,
                 pair.Value.Sites[index].Invocation!,
                 fieldSourceScope,
                 fieldSourceScope is { } fieldScopeSymbol && scopeLocals.TryGetValue(fieldScopeSymbol, out var fieldScopeCreation)
@@ -808,9 +812,9 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             // (or a provider alias used as `sp.Get*Service<T>()`) contributes a typed
             // resolution; any other shape (passed to a method, disposed, provider handed
             // elsewhere) is an opaque use.
-            if (TryGetEnclosingResolution(identifier, semanticModel, out var resolvedType))
+            if (TryGetEnclosingResolution(identifier, semanticModel, out var resolvedService))
             {
-                usage.ResolvedTypes.Add(resolvedType);
+                usage.ResolvedServices.Add(resolvedService);
             }
             else
             {
@@ -841,7 +845,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                     scopeUsage[scopeSymbol] = usage;
                 }
 
-                usage.ResolvedTypes.AddRange(pair.Value.ResolvedTypes);
+                usage.ResolvedServices.AddRange(pair.Value.ResolvedServices);
                 usage.HasNonResolutionUse |= pair.Value.HasNonResolutionUse;
                 continue;
             }
@@ -849,7 +853,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             hoistedScopes.Add(new HoistedScopeCandidate(
                 aliasCreation.GetLocation(),
                 loop.GetLocation(),
-                pair.Value.ResolvedTypes.ToImmutableArray(),
+                pair.Value.ResolvedServices.ToImmutableArray(),
                 pair.Value.HasNonResolutionUse,
                 method.Identifier.Text));
         }
@@ -859,7 +863,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         // resolved from a provider that is not a hoisted scope.
         foreach (var local in serviceUsedInLoop)
         {
-            var (serviceType, invocation, sourceScope, sourceCreation, sourceWithinBoundary) = serviceLocals[local];
+            var (service, invocation, sourceScope, sourceCreation, sourceWithinBoundary) = serviceLocals[local];
             if (reassignedInLoop.Contains(local))
             {
                 continue;
@@ -881,7 +885,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                         hoistedScopes.Add(new HoistedScopeCandidate(
                             sourceCreation.GetLocation(),
                             loop.GetLocation(),
-                            ImmutableArray.Create(serviceType),
+                            ImmutableArray.Create(service),
                             hasNonResolutionUse: false,
                             method.Identifier.Text));
                     }
@@ -902,14 +906,14 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
                     scopeUsage[sourceScope] = usage;
                 }
 
-                usage.ResolvedTypes.Add(serviceType);
+                usage.ResolvedServices.Add(service);
             }
             else
             {
                 hoistedServices.Add(new HoistedServiceCandidate(
                     invocation.GetLocation(),
                     loop.GetLocation(),
-                    serviceType,
+                    service,
                     method.Identifier.Text));
             }
         }
@@ -924,7 +928,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             hoistedScopes.Add(new HoistedScopeCandidate(
                 scopeLocals[pair.Key].GetLocation(),
                 loop.GetLocation(),
-                pair.Value.ResolvedTypes.ToImmutableArray(),
+                pair.Value.ResolvedServices.ToImmutableArray(),
                 pair.Value.HasNonResolutionUse,
                 method.Identifier.Text));
         }
@@ -1071,9 +1075,9 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
     private static bool TryGetEnclosingResolution(
         IdentifierNameSyntax identifier,
         SemanticModel semanticModel,
-        out ITypeSymbol resolvedType)
+        out ServiceResolution resolution)
     {
-        resolvedType = null!;
+        resolution = default;
         for (SyntaxNode? current = identifier.Parent; current is not null; current = current.Parent)
         {
             if (current is StatementSyntax or LambdaExpressionSyntax or LocalFunctionStatementSyntax)
@@ -1082,9 +1086,9 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             }
 
             if (current is InvocationExpressionSyntax invocation &&
-                TryGetResolution(invocation, semanticModel, out var serviceType))
+                TryGetResolution(invocation, semanticModel, out var service))
             {
-                resolvedType = serviceType;
+                resolution = service;
                 return true;
             }
         }
@@ -1117,46 +1121,86 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
     private static bool TryGetResolution(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
-        out ITypeSymbol serviceType)
+        out ServiceResolution resolution)
     {
-        serviceType = null!;
-        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
-            methodSymbol.Name is not ("GetRequiredService" or "GetService"))
+        resolution = default;
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol)
         {
             return false;
         }
 
+        var compilation = semanticModel.Compilation;
         var containingType = methodSymbol.ContainingType;
+        var serviceProviderExtensions = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions");
+        var keyedServiceProviderExtensions = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.ServiceProviderKeyedServiceExtensions");
+        var serviceProvider = compilation.GetTypeByMetadataName("System.IServiceProvider");
+        var keyedServiceProvider = compilation.GetTypeByMetadataName(
+            "Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider");
+        var isUnkeyed = methodSymbol.Name is "GetRequiredService" or "GetService" &&
+            (SymbolEqualityComparer.Default.Equals(containingType, serviceProviderExtensions) ||
+             methodSymbol.Name == "GetService" &&
+             SymbolEqualityComparer.Default.Equals(containingType, serviceProvider));
+        var isKeyed = methodSymbol.Name is "GetRequiredKeyedService" or "GetKeyedService" &&
+            (SymbolEqualityComparer.Default.Equals(containingType, keyedServiceProviderExtensions) ||
+             SymbolEqualityComparer.Default.Equals(containingType, keyedServiceProvider));
+        if (!isUnkeyed && !isKeyed)
+        {
+            return false;
+        }
+
         if (methodSymbol.IsGenericMethod)
         {
-            if (methodSymbol.TypeArguments.Length != 1 ||
-                containingType?.Name != "ServiceProviderServiceExtensions" ||
-                containingType.ContainingNamespace?.ToDisplayString() != "Microsoft.Extensions.DependencyInjection")
+            if (methodSymbol.TypeArguments.Length != 1)
             {
                 return false;
             }
 
-            serviceType = methodSymbol.TypeArguments[0];
+            if (isKeyed)
+            {
+                if (!TryGetServiceKey(invocation, semanticModel, out var key))
+                {
+                    return false;
+                }
+
+                resolution = new ServiceResolution(methodSymbol.TypeArguments[0], key, isKeyed: true);
+                return true;
+            }
+
+            resolution = new ServiceResolution(methodSymbol.TypeArguments[0], key: null, isKeyed: false);
             return true;
         }
 
-        var compilation = semanticModel.Compilation;
-        var serviceProviderExtensions = compilation.GetTypeByMetadataName(
-            "Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions");
-        var serviceProvider = compilation.GetTypeByMetadataName("System.IServiceProvider");
-        var isRequiredServiceExtension = methodSymbol.Name == "GetRequiredService" &&
-            SymbolEqualityComparer.Default.Equals(containingType, serviceProviderExtensions);
-        var isServiceProviderMethod = methodSymbol.Name == "GetService" &&
-            SymbolEqualityComparer.Default.Equals(containingType, serviceProvider);
-        if (!isRequiredServiceExtension && !isServiceProviderMethod ||
-            semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation)
+        if (!TryGetServiceType(invocation, semanticModel, out var serviceType))
         {
             return false;
         }
 
-        var serviceTypeArgument = invocationOperation.Arguments
-            .FirstOrDefault(argument => argument.Parameter?.Name == "serviceType");
-        if (serviceTypeArgument is null)
+        if (isKeyed)
+        {
+            if (!TryGetServiceKey(invocation, semanticModel, out var key))
+            {
+                return false;
+            }
+
+            resolution = new ServiceResolution(serviceType, key, isKeyed: true);
+            return true;
+        }
+
+        resolution = new ServiceResolution(serviceType, key: null, isKeyed: false);
+        return true;
+    }
+
+    private static bool TryGetServiceType(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out ITypeSymbol serviceType)
+    {
+        serviceType = null!;
+        if (semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation ||
+            invocationOperation.Arguments.FirstOrDefault(argument => argument.Parameter?.Name == "serviceType")
+                is not { } serviceTypeArgument)
         {
             return false;
         }
@@ -1180,6 +1224,27 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             }
         }
     }
+
+    private static bool TryGetServiceKey(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        out object? key)
+    {
+        key = null;
+        if (semanticModel.GetOperation(invocation) is not IInvocationOperation invocationOperation ||
+            invocationOperation.Arguments.FirstOrDefault(argument => argument.Parameter?.Name == "serviceKey")
+                is not { Value.Syntax: ExpressionSyntax keyExpression })
+        {
+            return false;
+        }
+
+        return SyntaxValueHelpers.TryExtractServiceKeyValue(keyExpression, semanticModel, out key, out _);
+    }
+
+    private static bool AreSameResolution(ServiceResolution left, ServiceResolution right) =>
+        left.IsKeyed == right.IsKeyed &&
+        Equals(left.Key, right.Key) &&
+        SymbolEqualityComparer.Default.Equals(left.ServiceType, right.ServiceType);
 
     private static IEnumerable<VariableDeclaratorSyntax> GetLocalsDeclaredBeforeLoop(
         SyntaxNode boundary,
@@ -1497,29 +1562,29 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
     private sealed class ScopeUsage
     {
-        public List<ITypeSymbol> ResolvedTypes { get; } = new();
+        public List<ServiceResolution> ResolvedServices { get; } = new();
 
         public bool HasNonResolutionUse { get; set; }
     }
 
     private sealed class FieldEntry
     {
-        public FieldEntry(List<FieldSite> sites, ITypeSymbol? serviceType, List<ISymbol?>? siteSourceScopes)
+        public FieldEntry(List<FieldSite> sites, ServiceResolution? service, List<ISymbol?>? siteSourceScopes)
         {
             Sites = sites;
-            ServiceType = serviceType;
+            Service = service;
             SiteSourceScopes = siteSourceScopes;
         }
 
         public List<FieldSite> Sites { get; }
 
-        public ITypeSymbol? ServiceType { get; }
+        public ServiceResolution? Service { get; }
 
         /// <summary>Per-site source-scope attribution, parallel to <see cref="Sites"/>.</summary>
         public List<ISymbol?>? SiteSourceScopes { get; }
 
         public FieldEntry WithSiteSourceScopes(List<ISymbol?> siteSourceScopes) =>
-            new(Sites, ServiceType, siteSourceScopes);
+            new(Sites, Service, siteSourceScopes);
     }
 
     private sealed class FieldCandidates
@@ -1546,13 +1611,13 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         public HoistedScopeCandidate(
             Location location,
             Location loopLocation,
-            ImmutableArray<ITypeSymbol> resolvedServiceTypes,
+            ImmutableArray<ServiceResolution> resolvedServices,
             bool hasNonResolutionUse,
             string methodName)
         {
             Location = location;
             LoopLocation = loopLocation;
-            ResolvedServiceTypes = resolvedServiceTypes;
+            ResolvedServices = resolvedServices;
             HasNonResolutionUse = hasNonResolutionUse;
             MethodName = methodName;
         }
@@ -1561,7 +1626,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
         public Location LoopLocation { get; }
 
-        public ImmutableArray<ITypeSymbol> ResolvedServiceTypes { get; }
+        public ImmutableArray<ServiceResolution> ResolvedServices { get; }
 
         public bool HasNonResolutionUse { get; }
 
@@ -1573,12 +1638,12 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         public HoistedServiceCandidate(
             Location location,
             Location loopLocation,
-            ITypeSymbol serviceType,
+            ServiceResolution service,
             string methodName)
         {
             Location = location;
             LoopLocation = loopLocation;
-            ServiceType = serviceType;
+            Service = service;
             MethodName = methodName;
         }
 
@@ -1586,8 +1651,24 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
         public Location LoopLocation { get; }
 
-        public ITypeSymbol ServiceType { get; }
+        public ServiceResolution Service { get; }
 
         public string MethodName { get; }
+    }
+
+    private readonly struct ServiceResolution
+    {
+        public ServiceResolution(ITypeSymbol serviceType, object? key, bool isKeyed)
+        {
+            ServiceType = serviceType;
+            Key = key;
+            IsKeyed = isKeyed;
+        }
+
+        public ITypeSymbol ServiceType { get; }
+
+        public object? Key { get; }
+
+        public bool IsKeyed { get; }
     }
 }
