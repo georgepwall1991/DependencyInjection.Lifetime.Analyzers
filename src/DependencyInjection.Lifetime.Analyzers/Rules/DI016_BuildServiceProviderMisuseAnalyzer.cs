@@ -392,6 +392,20 @@ public sealed class DI016_BuildServiceProviderMisuseAnalyzer : DiagnosticAnalyze
         IInvocationOperation invocation,
         out ExpressionSyntax receiverExpression)
     {
+        if (invocation.TargetMethod.ReducedFrom is null &&
+            invocation.TargetMethod.IsExtensionMethod)
+        {
+            foreach (var argument in invocation.Arguments)
+            {
+                if (argument.Parameter?.Ordinal == 0 &&
+                    argument.Syntax is ArgumentSyntax argumentSyntax)
+                {
+                    receiverExpression = argumentSyntax.Expression;
+                    return true;
+                }
+            }
+        }
+
         if (invocation.Syntax is InvocationExpressionSyntax invocationSyntax)
         {
             if (invocationSyntax.Expression is MemberAccessExpressionSyntax { Expression: var receiver })
