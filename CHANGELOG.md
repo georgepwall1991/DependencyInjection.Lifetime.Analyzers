@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.7] - 2026-07-16
+
+### Fixed
+
+- **DI024 direct private helper loops** — hosted-service analysis now follows one-hop, directly invoked private helpers in the same type declaration and applies the existing helper-local scope/service loop checks. Unsafe helper-local reuse now reports, while uncalled helpers, deferred lambda/local-function/query invocations, transitive helpers, and cross-method field flow remain conservative and silent.
+
 ## [2.18.6] - 2026-07-16
 
 ### Fixed
