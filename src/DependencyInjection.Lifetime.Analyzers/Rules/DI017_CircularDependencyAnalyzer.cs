@@ -436,7 +436,10 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         {
             var isParameterSubset = constructor.Parameters.All(parameter =>
                 selectedConstructor.Parameters.Any(selectedParameter =>
-                    SymbolEqualityComparer.Default.Equals(selectedParameter.Type, parameter.Type)));
+                    IsSameResolvedConstructorParameter(
+                        selectedParameter,
+                        parameter,
+                        registration)));
             if (!isParameterSubset)
             {
                 return [];
@@ -444,6 +447,39 @@ public sealed class DI017_CircularDependencyAnalyzer : DiagnosticAnalyzer
         }
 
         return [selectedConstructor];
+    }
+
+    private static bool IsSameResolvedConstructorParameter(
+        IParameterSymbol selectedParameter,
+        IParameterSymbol candidateParameter,
+        ServiceRegistration registration)
+    {
+        if (!SymbolEqualityComparer.Default.Equals(selectedParameter.Type, candidateParameter.Type))
+        {
+            return false;
+        }
+
+        var selectedIsServiceKey = KeyedServiceHelpers.IsServiceKeyParameter(selectedParameter);
+        var candidateIsServiceKey = KeyedServiceHelpers.IsServiceKeyParameter(candidateParameter);
+        if (selectedIsServiceKey || candidateIsServiceKey)
+        {
+            return selectedIsServiceKey == candidateIsServiceKey;
+        }
+
+        var selectedKey = KeyedServiceHelpers.GetServiceKey(
+            selectedParameter,
+            registration.IsKeyed ? registration.Key : null,
+            registration.IsKeyed,
+            registration.IsKeyed ? registration.KeyLiteral : null);
+        var candidateKey = KeyedServiceHelpers.GetServiceKey(
+            candidateParameter,
+            registration.IsKeyed ? registration.Key : null,
+            registration.IsKeyed,
+            registration.IsKeyed ? registration.KeyLiteral : null);
+        return !selectedKey.IsUnknown &&
+               !candidateKey.IsUnknown &&
+               selectedKey.IsKeyed == candidateKey.IsKeyed &&
+               Equals(selectedKey.Key, candidateKey.Key);
     }
 
     private static bool IsDirectlyResolvableConstructorParameter(
