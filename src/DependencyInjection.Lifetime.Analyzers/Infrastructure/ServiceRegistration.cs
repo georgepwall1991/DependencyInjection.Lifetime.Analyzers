@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace DependencyInjection.Lifetime.Analyzers.Infrastructure;
 
 /// <summary>
-/// Represents a discovered service registration from AddSingleton/AddScoped/AddTransient calls.
+/// Represents a discovered dependency-injection service registration.
 /// </summary>
 public sealed class ServiceRegistration
 {
@@ -82,6 +82,13 @@ public sealed class ServiceRegistration
     public bool SkipIfSameImplementationAlreadyRegistered { get; }
 
     /// <summary>
+    /// Gets whether this descriptor was inserted at collection index zero instead of
+    /// appended. Multiple prepend operations appear in reverse execution order in the
+    /// final descriptor list.
+    /// </summary>
+    public bool PrependToCollection { get; }
+
+    /// <summary>
     /// Gets whether <see cref="ImplementationType"/> is provably the runtime type for an
     /// instance-backed registration (the instance expression is an object creation, or its
     /// static type is sealed or a value type). When false, the recorded type is only the
@@ -115,7 +122,9 @@ public sealed class ServiceRegistration
         bool isTryAdd = false,
         bool skipIfSameImplementationAlreadyRegistered = false,
         bool implementationInstanceTypeIsExact = true,
-        ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes = default)
+        ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes = default,
+        bool prependToCollection = false
+    )
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
@@ -131,6 +140,7 @@ public sealed class ServiceRegistration
         SkipIfAlreadyRegistered = skipIfAlreadyRegistered;
         IsTryAdd = isTryAdd;
         SkipIfSameImplementationAlreadyRegistered = skipIfSameImplementationAlreadyRegistered;
+        PrependToCollection = prependToCollection;
         ImplementationInstanceTypeIsExact = implementationInstanceTypeIsExact;
         FactoryProvidedParameterTypes = factoryProvidedParameterTypes.IsDefault
             ? ImmutableArray<ITypeSymbol>.Empty

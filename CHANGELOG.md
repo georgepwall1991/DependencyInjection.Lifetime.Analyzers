@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.17] - 2026-07-16
+
+### Fixed
+
+- **DI003 `IServiceCollection.Insert(0, ...)` registrations** — the shared registration collector now includes `ServiceDescriptor` registrations prepended at a compile-time-zero index, including reordered named arguments and concrete framework `ServiceCollection` receivers. Descriptor precedence models normal additions plus repeated prepends in runtime list order, so a prepended descriptor cannot falsely override a later descriptor; nonzero or dynamic indexes and source-defined concrete `Insert` bodies remain conservative and silent because their absolute position or mutation behavior is not provable.
+
 ## [2.18.16] - 2026-07-16
 
 ### Fixed
