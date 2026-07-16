@@ -3242,8 +3242,8 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     [Fact]
     public async Task RabbitMq_ConsumerDispatchConcurrencyAboveOne_ReportsWarning()
     {
-        // A constant ConsumerDispatchConcurrency above 1 in the containing type proves the
-        // dispatch pump is concurrent, upgrading the config-gated Info to the full warning.
+        // A constant on the real RabbitMQ ConsumerDispatchConcurrency property proves the dispatch
+        // pump is concurrent, upgrading the config-gated Info to the full warning.
         var source = RabbitMqUsing + BaseUsings + RabbitMqStubs + EfCoreStubs + """
             public class OrderConsumer
             {
