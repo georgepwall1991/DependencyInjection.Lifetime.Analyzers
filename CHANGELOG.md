@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.20] - 2026-07-17
+
+### Fixed
+
+- **DI019 exact framework resolution extensions** — same-named user-defined `GetService*` extensions no longer trigger root-scoped diagnostics merely because their receiver is an `IServiceProvider`. Both reduced and direct-static calls must now bind to the matching framework `ServiceProviderServiceExtensions` or `ServiceProviderKeyedServiceExtensions` container; real framework calls keep the existing root-provider analysis.
+
 ## [2.18.19] - 2026-07-16
 
 ### Fixed
