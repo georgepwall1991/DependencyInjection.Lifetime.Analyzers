@@ -2352,6 +2352,36 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderAliasAfterUnusedRefLocalRetarget_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseOther)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    IServiceProvider candidate = root;
+                    IServiceProvider other = root;
+                    ref IServiceProvider alias = ref candidate;
+                    alias = ref other;
+                    {|#0:(chooseOther ? other : root).GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
     public async Task ConditionalProviderAliasBeforeDeferredWrite_ReportsDiagnostic()
     {
         var source = Usings + """
