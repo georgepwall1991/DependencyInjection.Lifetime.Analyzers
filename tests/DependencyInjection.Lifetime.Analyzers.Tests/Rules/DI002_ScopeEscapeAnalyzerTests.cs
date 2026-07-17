@@ -843,6 +843,83 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
+    public async Task ScopedService_AddedToCallerOwnedCollectionParameter_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(ICollection<IMyService> destination)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    destination.Add({|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_TrackedLocalAddedToCallerOwnedCollectionParameter_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(ICollection<IMyService> destination)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    destination.Add(service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ScopedService_FieldDictionaryIndexerAssignment_ReportsDiagnostic()
     {
         var source = Usings + """
