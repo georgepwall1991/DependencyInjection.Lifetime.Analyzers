@@ -39,11 +39,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         {
             Facts = [];
             SymbolsWithFacts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            RefAliasReferents = new Dictionary<ISymbol, ISymbol>(SymbolEqualityComparer.Default);
         }
 
         public List<ProviderFact> Facts { get; }
 
         private HashSet<ISymbol> SymbolsWithFacts { get; }
+
+        private Dictionary<ISymbol, ISymbol> RefAliasReferents { get; }
 
         public void Add(ProviderFact fact)
         {
@@ -52,6 +55,19 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         public bool HasFact(ISymbol symbol) => SymbolsWithFacts.Contains(symbol);
+
+        public void AddRefAlias(ISymbol alias, ISymbol referent) =>
+            RefAliasReferents[alias] = ResolveStorageSymbol(referent);
+
+        public ISymbol ResolveStorageSymbol(ISymbol symbol)
+        {
+            while (RefAliasReferents.TryGetValue(symbol, out var referent))
+            {
+                symbol = referent;
+            }
+
+            return symbol;
+        }
 
         public bool TryGetLatestFactBefore(
             ISymbol symbol,
@@ -246,6 +262,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             var facts = new ProviderFacts();
             var root = tree.GetRoot();
             var gotoSkippedAssignmentPositions = GetGotoSkippedAssignmentPositions(root);
+            var backwardGotoExecutableBoundaries = GetBackwardGotoExecutableBoundaries(root);
 
             foreach (var node in root.DescendantNodes())
             {
@@ -257,11 +274,36 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     case VariableDeclaratorSyntax
                     {
                         Initializer.Value: RefExpressionSyntax refExpression
-                    }:
+                    } variable:
                         expression = refExpression.Expression;
-                        symbol = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
-                        forceInvalidation = true;
-                        break;
+                        var alias = semanticModel.GetDeclaredSymbol(variable);
+                        var referent = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
+                        if (alias is not null && referent is not null)
+                        {
+                            facts.AddRefAlias(alias, referent);
+                            InvalidateProviderFact(
+                                facts.ResolveStorageSymbol(referent),
+                                expression.SpanStart,
+                                facts);
+                        }
+
+                        continue;
+                    case AssignmentExpressionSyntax deconstruction
+                        when deconstruction.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             deconstruction.Left is TupleExpressionSyntax tuple:
+                        foreach (var target in GetDeconstructionTargets(tuple))
+                        {
+                            var targetSymbol = semanticModel.GetSymbolInfo(Unwrap(target)).Symbol;
+                            if (targetSymbol is not null)
+                            {
+                                InvalidateProviderFact(
+                                    facts.ResolveStorageSymbol(targetSymbol),
+                                    target.SpanStart,
+                                    facts);
+                            }
+                        }
+
+                        continue;
                     case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
                         symbol = semanticModel.GetDeclaredSymbol(variable);
                         expression = initializer;
@@ -287,6 +329,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
+                symbol = facts.ResolveStorageSymbol(symbol);
+
                 if (forceInvalidation)
                 {
                     InvalidateProviderFact(symbol, expression.SpanStart, facts);
@@ -300,7 +344,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     semanticModel,
                     wellKnownTypes,
                     facts,
-                    gotoSkippedAssignmentPositions);
+                    gotoSkippedAssignmentPositions,
+                    backwardGotoExecutableBoundaries);
             }
 
             factsByTree[tree] = facts;
@@ -316,12 +361,16 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
         ProviderFacts facts,
-        ImmutableHashSet<int> gotoSkippedAssignmentPositions)
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions,
+        ImmutableHashSet<SyntaxNode> backwardGotoExecutableBoundaries)
     {
         var isPathStableForConditionalJoin =
             symbol is not IFieldSymbol &&
             symbol is not IPropertySymbol &&
-            IsPathStableForConditionalJoin(expression, gotoSkippedAssignmentPositions) &&
+            IsPathStableForConditionalJoin(
+                expression,
+                gotoSkippedAssignmentPositions,
+                backwardGotoExecutableBoundaries) &&
             IsReferencedProviderFactPathStableForConditionalJoin(
                 expression,
                 position,
@@ -367,8 +416,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
     private static bool IsPathStableForConditionalJoin(
         ExpressionSyntax expression,
-        ImmutableHashSet<int> gotoSkippedAssignmentPositions)
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions,
+        ImmutableHashSet<SyntaxNode> backwardGotoExecutableBoundaries)
     {
+        if (backwardGotoExecutableBoundaries.Contains(GetExecutableBoundary(expression)))
+        {
+            return false;
+        }
+
         if (expression.Parent is not AssignmentExpressionSyntax assignment)
         {
             return true;
@@ -421,12 +476,57 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return builder.ToImmutable();
     }
 
-    private static SyntaxNode? GetExecutableBoundary(SyntaxNode node) =>
+    private static ImmutableHashSet<SyntaxNode> GetBackwardGotoExecutableBoundaries(
+        SyntaxNode root)
+    {
+        var labels = root.DescendantNodes().OfType<LabeledStatementSyntax>().ToArray();
+        var builder = ImmutableHashSet.CreateBuilder<SyntaxNode>();
+        foreach (var gotoStatement in root.DescendantNodes().OfType<GotoStatementSyntax>())
+        {
+            if (gotoStatement.Expression is not IdentifierNameSyntax target)
+            {
+                continue;
+            }
+
+            var boundary = GetExecutableBoundary(gotoStatement);
+            if (labels.Any(candidate =>
+                    candidate.SpanStart < gotoStatement.SpanStart &&
+                    candidate.Identifier.ValueText == target.Identifier.ValueText &&
+                    ReferenceEquals(GetExecutableBoundary(candidate), boundary)))
+            {
+                builder.Add(boundary);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static IEnumerable<ExpressionSyntax> GetDeconstructionTargets(
+        ExpressionSyntax expression)
+    {
+        if (expression is TupleExpressionSyntax tuple)
+        {
+            foreach (var argument in tuple.Arguments)
+            {
+                foreach (var target in GetDeconstructionTargets(argument.Expression))
+                {
+                    yield return target;
+                }
+            }
+
+            yield break;
+        }
+
+        yield return expression;
+    }
+
+    private static SyntaxNode GetExecutableBoundary(SyntaxNode node) =>
         node.AncestorsAndSelf().FirstOrDefault(static ancestor =>
             ancestor is BaseMethodDeclarationSyntax or
                 AccessorDeclarationSyntax or
                 LocalFunctionStatementSyntax or
-                AnonymousFunctionExpressionSyntax);
+                AnonymousFunctionExpressionSyntax) ??
+        node.SyntaxTree.GetRoot();
 
     private static bool IsReferencedProviderFactPathStableForConditionalJoin(
         ExpressionSyntax expression,
