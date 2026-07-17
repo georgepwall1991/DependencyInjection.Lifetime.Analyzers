@@ -761,6 +761,29 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public void ProviderLike_CyclicTypeParameterConstraints_NoCrash()
+    {
+        var first = System.Reflection.DispatchProxy.Create<
+            Microsoft.CodeAnalysis.ITypeParameterSymbol,
+            CyclicTypeParameterProxy>();
+        var second = System.Reflection.DispatchProxy.Create<
+            Microsoft.CodeAnalysis.ITypeParameterSymbol,
+            CyclicTypeParameterProxy>();
+        ((CyclicTypeParameterProxy)(object)first).Constraint = second;
+        ((CyclicTypeParameterProxy)(object)second).Constraint = first;
+
+        var method = typeof(DI021_ConcurrentHandlerSharedStateAnalyzer).GetMethod(
+            "IsProviderLike",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+            binder: null,
+            [typeof(Microsoft.CodeAnalysis.ITypeSymbol)],
+            modifiers: null);
+
+        Assert.NotNull(method);
+        Assert.False((bool)method.Invoke(null, [first])!);
+    }
+
+    [Fact]
     public async Task CapturedScopeNonGenericDirectStaticResolution_NamedArgumentsReordered_ReportsDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
@@ -5250,5 +5273,32 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
             """;
 
         await VerifyNoneAsync(source);
+    }
+
+    private class CyclicTypeParameterProxy : System.Reflection.DispatchProxy
+    {
+        public Microsoft.CodeAnalysis.ITypeSymbol Constraint { get; set; } = null!;
+
+        protected override object? Invoke(
+            System.Reflection.MethodInfo? targetMethod,
+            object?[]? args)
+        {
+            if (targetMethod?.Name == "get_ConstraintTypes")
+            {
+                return System.Collections.Immutable.ImmutableArray.Create(Constraint);
+            }
+
+            if (targetMethod?.Name == "Equals")
+            {
+                return ReferenceEquals(this, args?[0]);
+            }
+
+            if (targetMethod?.Name == "GetHashCode")
+            {
+                return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+            }
+
+            throw new System.NotSupportedException(targetMethod?.Name);
+        }
     }
 }
