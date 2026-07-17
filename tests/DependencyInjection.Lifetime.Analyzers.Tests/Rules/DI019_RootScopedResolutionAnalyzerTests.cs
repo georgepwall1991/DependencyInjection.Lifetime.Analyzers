@@ -2884,6 +2884,43 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task WriteThroughMultiReferentRefAlias_InvalidatesEveryPossibleStorage()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool retarget,
+                    bool chooseProvider)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider first = scope.ServiceProvider;
+                    IServiceProvider second = scope.ServiceProvider;
+                    ref IServiceProvider alias = ref first;
+
+                    if (retarget)
+                    {
+                        alias = ref second;
+                    }
+
+                    alias = root;
+
+                    (chooseProvider ? first : second)
+                        .GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ConditionalProviderAliasAfterCoalesceAssignment_NoDiagnostic()
     {
         var source = Usings + """
