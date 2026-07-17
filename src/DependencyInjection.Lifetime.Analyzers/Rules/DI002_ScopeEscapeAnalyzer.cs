@@ -563,10 +563,17 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                         semanticModel.GetSymbolInfo(assignment.Left).Symbol,
                         parameter))
                 {
-                    return assignment.Right is ObjectCreationExpressionSyntax or
-                            ImplicitObjectCreationExpressionSyntax &&
+                    var isFreshCollection = assignment.Right is ObjectCreationExpressionSyntax or
+                                ImplicitObjectCreationExpressionSyntax &&
                         semanticModel.GetTypeInfo(assignment.Right).Type is { } replacementType &&
                         IsEnumerableLike(replacementType);
+
+                    return isFreshCollection &&
+                        !ParameterReplacementEscapes(
+                            assignment,
+                            call,
+                            parameter,
+                            semanticModel);
                 }
 
                 // Any intervening conditional/nested/ref write can replace the proven-fresh
@@ -581,6 +588,120 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool ParameterReplacementEscapes(
+        AssignmentExpressionSyntax freshAssignment,
+        InvocationExpressionSyntax mutationCall,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        var executableRoot = mutationCall.Ancestors()
+            .FirstOrDefault(ExecutableSyntaxHelper.IsExecutableBoundary);
+        if (executableRoot is null ||
+            !ExecutableSyntaxHelper.TryGetExecutableBody(executableRoot, out var executableBody))
+        {
+            return true;
+        }
+
+        var aliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node.SpanStart <= freshAssignment.SpanStart)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax returnStatement &&
+                returnStatement.SpanStart > mutationCall.SpanStart &&
+                ExpressionRetainsParameterReplacement(
+                    returnStatement.Expression,
+                    parameter,
+                    aliases,
+                    semanticModel))
+            {
+                return true;
+            }
+
+            if (node is AssignmentExpressionSyntax assignment)
+            {
+                var retainsReplacement = ExpressionRetainsParameterReplacement(
+                    assignment.Right,
+                    parameter,
+                    aliases,
+                    semanticModel);
+                if (retainsReplacement &&
+                    AssignmentSinkDefinitelyOutlivesScope(assignment.Left, semanticModel))
+                {
+                    return true;
+                }
+
+                if (semanticModel.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol local)
+                {
+                    if (retainsReplacement)
+                    {
+                        aliases.Add(local);
+                    }
+                    else
+                    {
+                        aliases.Remove(local);
+                    }
+                }
+
+                continue;
+            }
+
+            if (node is LocalDeclarationStatementSyntax localDeclaration)
+            {
+                foreach (var variable in localDeclaration.Declaration.Variables)
+                {
+                    if (semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol local &&
+                        ExpressionRetainsParameterReplacement(
+                            variable.Initializer?.Value,
+                            parameter,
+                            aliases,
+                            semanticModel))
+                    {
+                        aliases.Add(local);
+                    }
+                }
+
+                continue;
+            }
+
+            if (node is ArgumentSyntax argument &&
+                (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                 argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword)) &&
+                ExpressionRetainsParameterReplacement(
+                    argument.Expression,
+                    parameter,
+                    aliases,
+                    semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ExpressionRetainsParameterReplacement(
+        ExpressionSyntax? expression,
+        IParameterSymbol parameter,
+        HashSet<ILocalSymbol> aliases,
+        SemanticModel semanticModel)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        return expression.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Select(identifier => semanticModel.GetSymbolInfo(identifier).Symbol)
+            .Any(symbol =>
+                SymbolEqualityComparer.Default.Equals(symbol, parameter) ||
+                symbol is ILocalSymbol local && aliases.Contains(local));
     }
 
     private static bool StatementMayWriteParameter(
