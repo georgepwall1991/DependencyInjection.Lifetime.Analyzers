@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.22] - 2026-07-17
+
+### Fixed
+
+- **DI019 all-root conditional provider joins** — provider aliases selected by a conditional expression now retain root-provider classification when both result arms are independently proven root providers. Mixed root/scoped or unknown arms stay conservative, preventing the new detection from widening into ambiguous-provider false positives.
+
 ## [2.18.21] - 2026-07-17
 
 ### Fixed
