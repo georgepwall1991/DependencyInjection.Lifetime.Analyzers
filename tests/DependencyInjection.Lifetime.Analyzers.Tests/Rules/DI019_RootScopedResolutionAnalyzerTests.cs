@@ -2086,6 +2086,88 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderAliasAfterDeconstructionWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = root;
+                    var marker = 0;
+                    (candidate, marker) = (scope.ServiceProvider, 1);
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderAliasAfterRefLocalWriteFollowingReclassification_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    ref IServiceProvider alias = ref candidate;
+                    candidate = root;
+                    alias = scope.ServiceProvider;
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderAliasWithBackwardGotoWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = root;
+                    goto Mutate;
+
+                Resolve:
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                    return;
+
+                Mutate:
+                    candidate = scope.ServiceProvider;
+                    goto Resolve;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
     {
         var source = Usings + """
