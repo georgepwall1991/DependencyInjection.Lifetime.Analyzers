@@ -391,6 +391,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             {
                 ISymbol? symbol;
                 ExpressionSyntax expression;
+                int writePosition;
                 var forceInvalidation = false;
                 switch (node)
                 {
@@ -403,7 +404,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         var referents = GetRefReferentSymbols(expression, semanticModel).ToArray();
                         if (alias is not null && referents.Length > 0)
                         {
-                            facts.SetRefAlias(alias, referents, refExpression.SpanStart);
+                            facts.SetRefAlias(alias, referents, refExpression.Span.End);
                         }
 
                         continue;
@@ -413,7 +414,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         InvalidateRefTargetFacts(
                             refConditionalAssignment.Left,
                             semanticModel,
-                            facts);
+                            facts,
+                            refConditionalAssignment.Right.Span.End);
                         continue;
                     case AssignmentExpressionSyntax refAssignment
                         when refAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
@@ -434,14 +436,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                                 facts.SetRefAlias(
                                     refAlias,
                                     refReferents,
-                                    refAssignment.SpanStart);
+                                    refAssignment.Right.Span.End);
                             }
                             else
                             {
                                 facts.AddPossibleRefAliases(
                                     refAlias,
                                     refReferents,
-                                    refAssignment.SpanStart);
+                                    refAssignment.Right.Span.End);
                             }
                         }
 
@@ -471,7 +473,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
                                     InvalidateProviderFact(
                                         storageSymbol,
-                                        target.SpanStart,
+                                        deconstruction.Right.Span.End,
                                         facts);
                                 }
                             }
@@ -481,22 +483,29 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
                         symbol = semanticModel.GetDeclaredSymbol(variable);
                         expression = initializer;
+                        writePosition = initializer.SpanStart;
                         break;
                     case AssignmentExpressionSyntax assignment
                         when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
                         symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
                         expression = assignment.Right;
+                        writePosition = assignment.Right.Span.End;
                         break;
                     case AssignmentExpressionSyntax assignment
                         when assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
                         symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
                         expression = assignment.Right;
+                        writePosition = assignment.Right.Span.End;
                         forceInvalidation = true;
                         break;
                     case ArgumentSyntax argument
                         when argument.RefKindKeyword.Kind() is
                             SyntaxKind.RefKeyword or SyntaxKind.OutKeyword:
-                        InvalidateRefTargetFacts(argument.Expression, semanticModel, facts);
+                        InvalidateRefTargetFacts(
+                            argument.Expression,
+                            semanticModel,
+                            facts,
+                            argument.Parent?.Parent?.Span.End ?? argument.Span.End);
                         continue;
                     default:
                         continue;
@@ -521,14 +530,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
                     if (forceInvalidation)
                     {
-                        InvalidateProviderFact(storageSymbol, expression.SpanStart, facts);
+                        InvalidateProviderFact(storageSymbol, writePosition, facts);
                         continue;
                     }
 
                     AddProviderFact(
                         storageSymbol,
                         expression,
-                        expression.SpanStart,
+                        writePosition,
                         semanticModel,
                         wellKnownTypes,
                         facts,
@@ -546,7 +555,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     private static void InvalidateRefTargetFacts(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
-        ProviderFacts facts)
+        ProviderFacts facts,
+        int writePosition)
     {
         var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         foreach (var referent in GetRefReferentSymbols(expression, semanticModel))
@@ -566,7 +576,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
             }
 
-            InvalidateProviderFact(storageSymbol, expression.SpanStart, facts);
+            InvalidateProviderFact(storageSymbol, writePosition, facts);
         }
     }
 
