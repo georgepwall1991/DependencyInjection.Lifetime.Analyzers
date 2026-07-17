@@ -42,7 +42,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         public List<ProviderFact> Facts { get; }
 
-        public bool TryGetLatestFactBefore(ISymbol symbol, int position, out bool isRootProvider)
+        public bool TryGetLatestFactBefore(
+            ISymbol symbol,
+            int position,
+            out bool isRootProvider,
+            out bool isPathStableForConditionalJoin)
         {
             ProviderFact? latest = null;
             foreach (var fact in Facts)
@@ -62,21 +66,28 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             if (latest is null)
             {
                 isRootProvider = false;
+                isPathStableForConditionalJoin = false;
                 return false;
             }
 
             isRootProvider = latest.Value.IsRootProvider;
+            isPathStableForConditionalJoin = latest.Value.IsPathStableForConditionalJoin;
             return true;
         }
     }
 
     private readonly struct ProviderFact
     {
-        public ProviderFact(ISymbol symbol, int position, bool isRootProvider)
+        public ProviderFact(
+            ISymbol symbol,
+            int position,
+            bool isRootProvider,
+            bool isPathStableForConditionalJoin)
         {
             Symbol = symbol;
             Position = position;
             IsRootProvider = isRootProvider;
+            IsPathStableForConditionalJoin = isPathStableForConditionalJoin;
         }
 
         public ISymbol Symbol { get; }
@@ -84,6 +95,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         public int Position { get; }
 
         public bool IsRootProvider { get; }
+
+        public bool IsPathStableForConditionalJoin { get; }
     }
 
     /// <inheritdoc />
@@ -273,17 +286,53 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         WellKnownTypes wellKnownTypes,
         ProviderFacts facts)
     {
+        var isPathStableForConditionalJoin = IsPathStableForConditionalJoin(expression);
         if (IsScopedProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(symbol, position, isRootProvider: false));
+            facts.Facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: false,
+                isPathStableForConditionalJoin));
             return;
         }
 
         if (IsRootProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(symbol, position, isRootProvider: true));
+            facts.Facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: true,
+                isPathStableForConditionalJoin));
         }
     }
+
+    private static bool IsPathStableForConditionalJoin(ExpressionSyntax expression)
+    {
+        if (expression.Parent is not AssignmentExpressionSyntax assignment)
+        {
+            return true;
+        }
+
+        return !assignment.Ancestors().Any(IsControlFlowDependentProviderWrite);
+    }
+
+    private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
+        ancestor is IfStatementSyntax or
+            SwitchStatementSyntax or
+            SwitchExpressionSyntax or
+            ForStatementSyntax or
+            CommonForEachStatementSyntax or
+            WhileStatementSyntax or
+            DoStatementSyntax or
+            TryStatementSyntax or
+            AnonymousFunctionExpressionSyntax or
+            LocalFunctionStatementSyntax or
+            ConditionalExpressionSyntax ||
+        ancestor is BinaryExpressionSyntax binary &&
+            binary.Kind() is SyntaxKind.LogicalAndExpression or
+                SyntaxKind.LogicalOrExpression or
+                SyntaxKind.CoalesceExpression;
 
     private static ImmutableHashSet<INamedTypeSymbol> GetSingletonImplementationTypes(
         RegistrationCollector registrationCollector)
@@ -568,7 +617,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
         ProviderFacts providerFacts,
-        int position)
+        int position,
+        bool requirePathStableFact = false)
     {
         expression = Unwrap(expression);
 
@@ -579,13 +629,15 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                        semanticModel,
                        wellKnownTypes,
                        providerFacts,
-                       position) &&
+                       position,
+                       requirePathStableFact: true) &&
                    IsRootProviderExpression(
                        conditionalExpression.WhenFalse,
                        semanticModel,
                        wellKnownTypes,
                        providerFacts,
-                       position);
+                       position,
+                       requirePathStableFact: true);
         }
 
         if (expression is InvocationExpressionSyntax invocation &&
@@ -596,8 +648,17 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(symbol, position, out var isRootProvider))
+            providerFacts.TryGetLatestFactBefore(
+                symbol,
+                position,
+                out var isRootProvider,
+                out var isPathStableForConditionalJoin))
         {
+            if (requirePathStableFact && !isPathStableForConditionalJoin)
+            {
+                return false;
+            }
+
             return isRootProvider;
         }
 
@@ -760,7 +821,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(symbol, position, out var isRootProvider))
+            providerFacts.TryGetLatestFactBefore(
+                symbol,
+                position,
+                out var isRootProvider,
+                out _))
         {
             return !isRootProvider;
         }
