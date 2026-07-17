@@ -1907,6 +1907,38 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderAliasWithDeferredQueryWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            using System.Linq;
+
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    var query =
+                        from item in new[] { 1 }
+                        let ignored = (candidate = root)
+                        select item;
+
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
     {
         var source = Usings + """
