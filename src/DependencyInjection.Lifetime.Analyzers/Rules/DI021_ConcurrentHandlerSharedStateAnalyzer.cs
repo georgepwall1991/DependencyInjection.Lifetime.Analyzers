@@ -2367,25 +2367,29 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             if (operation is not IInvocationOperation invocation ||
                 invocation.TargetMethod.Name is not
                     ("GetService" or "GetRequiredService" or "GetKeyedService" or "GetRequiredKeyedService") ||
-                invocation.TargetMethod.TypeArguments.Length != 1)
+                !TryGetCapturedScopeResolvedType(context.Compilation, invocation, out var resolvedType))
             {
                 continue;
             }
 
-            var resolvedType = invocation.TargetMethod.TypeArguments[0];
             var catalogName = MatchNonThreadSafeCatalog(resolvedType);
             if (catalogName is null)
             {
                 continue;
             }
 
-            var receiver = invocation.Instance ?? invocation.Arguments.FirstOrDefault()?.Value;
+            var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
+            var receiver = invocation.Instance ??
+                (IsFrameworkServiceResolutionExtension(sourceMethod)
+                    ? invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Value
+                    : null) ??
+                invocation.Arguments.FirstOrDefault()?.Value;
             if (receiver is null)
             {
                 continue;
             }
 
-            var origin = ResolveProviderOrigin(Unwrap(receiver));
+            var origin = ResolveProviderOrigin(receiver);
             if (origin is null || !IsProviderLike(GetSymbolType(origin)))
             {
                 continue;
@@ -2427,12 +2431,131 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
     }
 
+    private static bool TryGetCapturedScopeResolvedType(
+        Compilation compilation,
+        IInvocationOperation invocation,
+        out ITypeSymbol resolvedType)
+    {
+        if (invocation.TargetMethod.TypeArguments.Length == 1)
+        {
+            resolvedType = invocation.TargetMethod.TypeArguments[0];
+            return true;
+        }
+
+        var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
+        if (sourceMethod.Name is not ("GetService" or "GetRequiredService") ||
+            !IsSupportedNonGenericServiceResolution(sourceMethod, compilation))
+        {
+            resolvedType = null!;
+            return false;
+        }
+
+        var systemType = compilation.GetTypeByMetadataName("System.Type");
+        var serviceTypeArgument = systemType is null
+            ? null
+            : invocation.Arguments.FirstOrDefault(argument =>
+                SymbolEqualityComparer.Default.Equals(argument.Parameter?.Type, systemType));
+        if (serviceTypeArgument is null ||
+            !TryGetLiteralTypeOperand(serviceTypeArgument.Value, out resolvedType))
+        {
+            resolvedType = null!;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetLiteralTypeOperand(
+        IOperation operation,
+        out ITypeSymbol typeOperand)
+    {
+        var current = operation;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when conversion.OperatorMethod is null && conversion.Conversion.IsIdentity:
+                    current = conversion.Operand;
+                    continue;
+                case ITypeOfOperation typeOfOperation:
+                    typeOperand = typeOfOperation.TypeOperand;
+                    return true;
+                default:
+                    typeOperand = null!;
+                    return false;
+            }
+        }
+    }
+
+    private static bool IsSupportedNonGenericServiceResolution(
+        IMethodSymbol sourceMethod,
+        Compilation compilation)
+    {
+        if (sourceMethod.IsGenericMethod)
+        {
+            return false;
+        }
+
+        if (sourceMethod.IsExtensionMethod)
+        {
+            return IsFrameworkServiceResolutionExtension(sourceMethod);
+        }
+
+        var interfaceType = compilation.GetTypeByMetadataName("System.IServiceProvider");
+        if (interfaceType is null)
+        {
+            return false;
+        }
+
+        foreach (var interfaceMethod in interfaceType.GetMembers(sourceMethod.Name).OfType<IMethodSymbol>())
+        {
+            if (SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.OriginalDefinition,
+                    interfaceMethod.OriginalDefinition))
+            {
+                return true;
+            }
+
+            var implementation = sourceMethod.ContainingType.FindImplementationForInterfaceMember(interfaceMethod);
+            if (implementation is IMethodSymbol implementationMethod &&
+                SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.OriginalDefinition,
+                    implementationMethod.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsFrameworkServiceResolutionExtension(IMethodSymbol sourceMethod)
+    {
+        if (!sourceMethod.IsExtensionMethod)
+        {
+            return false;
+        }
+
+        var expectedTypeName = sourceMethod.Name is "GetKeyedService" or "GetRequiredKeyedService"
+            ? "ServiceProviderKeyedServiceExtensions"
+            : "ServiceProviderServiceExtensions";
+        return sourceMethod.ContainingType.Name == expectedTypeName &&
+               sourceMethod.ContainingType.ContainingNamespace.ToDisplayString() ==
+               "Microsoft.Extensions.DependencyInjection" &&
+               sourceMethod.ContainingAssembly.Name ==
+               "Microsoft.Extensions.DependencyInjection.Abstractions";
+    }
+
     private static ISymbol? ResolveProviderOrigin(IOperation receiver)
     {
         var current = receiver;
         while (true)
         {
-            current = Unwrap(current);
+            current = UnwrapProviderReceiver(current);
             if (current is IPropertyReferenceOperation { Property.Name: "ServiceProvider" } providerProperty &&
                 providerProperty.Instance is not null)
             {
@@ -2449,6 +2572,33 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             };
         }
     }
+
+    private static IOperation UnwrapProviderReceiver(IOperation operation)
+    {
+        var current = operation;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when conversion.OperatorMethod is null &&
+                         (conversion.Conversion.IsIdentity ||
+                          conversion.Conversion.IsReference ||
+                          IsBuiltInBoxingConversion(conversion)):
+                    current = conversion.Operand;
+                    continue;
+                default:
+                    return current;
+            }
+        }
+    }
+
+    private static bool IsBuiltInBoxingConversion(IConversionOperation conversion) =>
+        conversion.Operand.Type is { IsReferenceType: false } &&
+        conversion.Type is { IsReferenceType: true };
 
     /// <summary>
     /// True when the handler returns Task/ValueTask (including generic forms). A non-async
@@ -3101,11 +3251,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         };
     }
 
-    private static bool IsProviderLike(ITypeSymbol? type)
+    private static bool IsProviderLike(ITypeSymbol? type) =>
+        IsProviderLike(type, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+
+    private static bool IsProviderLike(ITypeSymbol? type, HashSet<ISymbol> visited)
     {
-        if (type is null)
+        if (type is null || !visited.Add(type))
         {
             return false;
+        }
+
+        if (type is ITypeParameterSymbol typeParameter)
+        {
+            return typeParameter.ConstraintTypes.Any(constraint => IsProviderLike(constraint, visited));
         }
 
         var ns = type.ContainingNamespace?.ToDisplayString();

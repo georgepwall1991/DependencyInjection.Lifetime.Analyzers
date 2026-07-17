@@ -599,6 +599,436 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedScopeNonGenericResolution_LongLivedScopeResolvedInsideHandler_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_scope.ServiceProvider.GetRequiredService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericGetService_LongLivedScopeResolvedInsideHandler_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_scope.ServiceProvider.GetService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedConcreteProviderNonGenericGetService_RenamedParameter_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public sealed class CustomProvider : IServiceProvider
+            {
+                public object GetService(Type requestedType) => new AppDbContext();
+            }
+
+            public class Worker
+            {
+                private readonly CustomProvider _provider;
+
+                public Worker(CustomProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_provider.GetService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedStructProviderGenericResolution_BoxingConversion_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public readonly struct StructProvider : IServiceProvider
+            {
+                private readonly IServiceProvider _inner;
+
+                public StructProvider(IServiceProvider inner)
+                {
+                    _inner = inner;
+                }
+
+                public object GetService(Type serviceType) => _inner.GetService(serviceType);
+            }
+
+            public class Worker
+            {
+                private readonly StructProvider _provider;
+
+                public Worker(StructProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = {|DI021:_provider.GetRequiredService<AppDbContext>()|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedConstrainedProviderGenericResolution_BoxingConversion_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker<TProvider>
+                where TProvider : IServiceProvider
+            {
+                private readonly TProvider _provider;
+
+                public Worker(TProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = {|DI021:_provider.GetRequiredService<AppDbContext>()|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public void ProviderLike_CyclicTypeParameterConstraints_NoCrash()
+    {
+        var first = System.Reflection.DispatchProxy.Create<
+            Microsoft.CodeAnalysis.ITypeParameterSymbol,
+            CyclicTypeParameterProxy>();
+        var second = System.Reflection.DispatchProxy.Create<
+            Microsoft.CodeAnalysis.ITypeParameterSymbol,
+            CyclicTypeParameterProxy>();
+        ((CyclicTypeParameterProxy)(object)first).Constraint = second;
+        ((CyclicTypeParameterProxy)(object)second).Constraint = first;
+
+        var method = typeof(DI021_ConcurrentHandlerSharedStateAnalyzer).GetMethod(
+            "IsProviderLike",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+            binder: null,
+            [typeof(Microsoft.CodeAnalysis.ITypeSymbol)],
+            modifiers: null);
+
+        Assert.NotNull(method);
+        Assert.False((bool)method.Invoke(null, [first])!);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericDirectStaticResolution_NamedArgumentsReordered_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:ServiceProviderServiceExtensions.GetRequiredService(
+                            serviceType: typeof(AppDbContext),
+                            provider: _scope.ServiceProvider)|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_RuntimeType_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor, Type serviceType)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = _scope.ServiceProvider.GetRequiredService(serviceType);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_UserDefinedTypeConversion_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public readonly struct RedirectedType
+            {
+                private readonly Type _type;
+
+                private RedirectedType(Type type)
+                {
+                    _type = type;
+                }
+
+                public static explicit operator RedirectedType(Type type) => new RedirectedType(typeof(string));
+                public static implicit operator Type(RedirectedType redirected) => redirected._type;
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = _scope.ServiceProvider.GetRequiredService(
+                            (Type)(RedirectedType)typeof(AppDbContext));
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeGenericResolution_UserDefinedStaticHelperWithReorderedArguments_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public static class CustomProviderHelpers
+            {
+                public static object GetRequiredKeyedService<T>(IServiceProvider provider, int marker) => new object();
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = CustomProviderHelpers.GetRequiredKeyedService<AppDbContext>(
+                            marker: 0,
+                            provider: _scope.ServiceProvider);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedProviderNonGenericResolution_UserDefinedReceiverConversion_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public sealed class FreshProvider : IServiceProvider
+            {
+                public object GetService(Type serviceType) => new AppDbContext();
+            }
+
+            public sealed class ProviderWrapper : IServiceProvider
+            {
+                public object GetService(Type serviceType) => new AppDbContext();
+
+                public static explicit operator FreshProvider(ProviderWrapper wrapper) => new FreshProvider();
+            }
+
+            public class Worker
+            {
+                private readonly ProviderWrapper _provider;
+
+                public Worker(ProviderWrapper provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext)((FreshProvider)_provider).GetService(typeof(AppDbContext));
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_UserDefinedStaticHelper_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public static class CustomProviderExtensions
+            {
+                public static object GetRequiredService(IServiceProvider provider, Type serviceType) => new object();
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = CustomProviderExtensions.GetRequiredService(
+                            _scope.ServiceProvider,
+                            typeof(AppDbContext));
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task HandlerLocalScopeNonGenericResolution_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var db = (AppDbContext)scope.ServiceProvider.GetRequiredService(typeof(AppDbContext));
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedOuterScopeLocal_ResolvedInsideParallelBody_ReportsDiagnostic()
     {
         var source = BaseUsings + EfCoreStubs + """
@@ -4843,5 +5273,32 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
             """;
 
         await VerifyNoneAsync(source);
+    }
+
+    private class CyclicTypeParameterProxy : System.Reflection.DispatchProxy
+    {
+        public Microsoft.CodeAnalysis.ITypeSymbol Constraint { get; set; } = null!;
+
+        protected override object? Invoke(
+            System.Reflection.MethodInfo? targetMethod,
+            object?[]? args)
+        {
+            if (targetMethod?.Name == "get_ConstraintTypes")
+            {
+                return System.Collections.Immutable.ImmutableArray.Create(Constraint);
+            }
+
+            if (targetMethod?.Name == "Equals")
+            {
+                return ReferenceEquals(this, args?[0]);
+            }
+
+            if (targetMethod?.Name == "GetHashCode")
+            {
+                return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+            }
+
+            throw new System.NotSupportedException(targetMethod?.Name);
+        }
     }
 }
