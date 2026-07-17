@@ -228,14 +228,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             var facts = new ProviderFacts();
             var root = tree.GetRoot();
 
-            foreach (var variable in root.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+            foreach (var node in root.DescendantNodes())
             {
-                if (variable.Initializer?.Value is not { } initializer)
+                ISymbol? symbol;
+                ExpressionSyntax expression;
+                switch (node)
                 {
-                    continue;
+                    case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
+                        symbol = semanticModel.GetDeclaredSymbol(variable);
+                        expression = initializer;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                        symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+                        expression = assignment.Right;
+                        break;
+                    default:
+                        continue;
                 }
 
-                var symbol = semanticModel.GetDeclaredSymbol(variable);
                 if (symbol is null)
                 {
                     continue;
@@ -243,30 +254,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
                 AddProviderFact(
                     symbol,
-                    initializer,
-                    initializer.SpanStart,
-                    semanticModel,
-                    wellKnownTypes,
-                    facts);
-            }
-
-            foreach (var assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
-            {
-                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
-                {
-                    continue;
-                }
-
-                var symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
-                if (symbol is null)
-                {
-                    continue;
-                }
-
-                AddProviderFact(
-                    symbol,
-                    assignment.Right,
-                    assignment.Right.SpanStart,
+                    expression,
+                    expression.SpanStart,
                     semanticModel,
                     wellKnownTypes,
                     facts);
