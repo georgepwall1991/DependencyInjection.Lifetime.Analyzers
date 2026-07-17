@@ -427,6 +427,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         {
                             if (IsPathStableForConditionalJoin(
                                     refAssignment.Right,
+                                    refAlias,
                                     gotoSkippedAssignmentPositions,
                                     backwardGotoExecutableBoundaries))
                             {
@@ -584,6 +585,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             symbol is not IPropertySymbol &&
             IsPathStableForConditionalJoin(
                 expression,
+                symbol,
                 gotoSkippedAssignmentPositions,
                 backwardGotoExecutableBoundaries) &&
             IsReferencedProviderFactPathStableForConditionalJoin(
@@ -631,6 +633,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
     private static bool IsPathStableForConditionalJoin(
         ExpressionSyntax expression,
+        ISymbol writtenSymbol,
         ImmutableHashSet<int> gotoSkippedAssignmentPositions,
         ImmutableHashSet<SyntaxNode> backwardGotoExecutableBoundaries)
     {
@@ -645,7 +648,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return !gotoSkippedAssignmentPositions.Contains(assignment.SpanStart) &&
-               !assignment.Ancestors().Any(IsControlFlowDependentProviderWrite);
+               !assignment.Ancestors().Any(ancestor =>
+                   IsControlFlowDependentProviderWrite(ancestor) &&
+                   !IsDeferredBoundaryOwnedBySymbol(ancestor, writtenSymbol));
     }
 
     private static ImmutableHashSet<int> GetGotoSkippedAssignmentPositions(SyntaxNode root)
@@ -816,6 +821,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (IsDeclaredWithin(writtenSymbol, ancestor))
+            {
+                continue;
+            }
+
             if (!earliestPosition.HasValue || ancestor.SpanStart < earliestPosition.Value)
             {
                 earliestPosition = ancestor.SpanStart;
@@ -829,6 +839,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         symbol.DeclaringSyntaxReferences.Any(reference =>
             ReferenceEquals(reference.SyntaxTree, boundary.SyntaxTree) &&
             boundary.Span.Contains(reference.Span));
+
+    private static bool IsDeferredBoundaryOwnedBySymbol(
+        SyntaxNode boundary,
+        ISymbol symbol) =>
+        (boundary is LocalFunctionStatementSyntax or
+            AnonymousFunctionExpressionSyntax or
+            QueryExpressionSyntax) &&
+        IsDeclaredWithin(symbol, boundary);
 
     private static IEnumerable<ISymbol> GetRefReferentSymbols(
         ExpressionSyntax expression,
