@@ -553,28 +553,58 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             var statementIndex = block.Statements.IndexOf(currentStatement);
             for (var index = statementIndex - 1; index >= 0; index--)
             {
-                if (block.Statements[index] is not ExpressionStatementSyntax
+                var statement = block.Statements[index];
+                if (statement is ExpressionStatementSyntax
                     {
                         Expression: AssignmentExpressionSyntax assignment,
-                    } ||
-                    !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                    !SymbolEqualityComparer.Default.Equals(
+                    } &&
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    SymbolEqualityComparer.Default.Equals(
                         semanticModel.GetSymbolInfo(assignment.Left).Symbol,
                         parameter))
                 {
-                    continue;
+                    return assignment.Right is ObjectCreationExpressionSyntax or
+                            ImplicitObjectCreationExpressionSyntax &&
+                        semanticModel.GetTypeInfo(assignment.Right).Type is { } replacementType &&
+                        IsEnumerableLike(replacementType);
                 }
 
-                return assignment.Right is ObjectCreationExpressionSyntax or
-                        ImplicitObjectCreationExpressionSyntax &&
-                    semanticModel.GetTypeInfo(assignment.Right).Type is { } replacementType &&
-                    IsEnumerableLike(replacementType);
+                // Any intervening conditional/nested/ref write can replace the proven-fresh
+                // value on a path to the mutation, so caller-owned storage may be reachable.
+                if (StatementMayWriteParameter(statement, parameter, semanticModel))
+                {
+                    return false;
+                }
             }
 
             currentStatement = block.FirstAncestorOrSelf<StatementSyntax>();
         }
 
         return false;
+    }
+
+    private static bool StatementMayWriteParameter(
+        StatementSyntax statement,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        if (statement.DescendantNodesAndSelf()
+            .OfType<AssignmentExpressionSyntax>()
+            .Any(assignment => SymbolEqualityComparer.Default.Equals(
+                semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                parameter)))
+        {
+            return true;
+        }
+
+        return statement.DescendantNodesAndSelf()
+            .OfType<ArgumentSyntax>()
+            .Any(argument =>
+                (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                 argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword)) &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(argument.Expression).Symbol,
+                    parameter));
     }
 
     /// <summary>The nearest conditional access whose WhenNotNull contains the given node.</summary>
