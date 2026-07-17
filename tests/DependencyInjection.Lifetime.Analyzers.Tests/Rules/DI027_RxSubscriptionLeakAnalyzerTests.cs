@@ -426,28 +426,32 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     [Fact]
     public async Task TokenStoredInFieldAndDisposedInAnotherPartialDeclaration_Silent()
     {
-        var source = Prelude + SingletonTickerTransientHandler + """
-            public partial class TickHandler : IDisposable
-            {
-                private readonly ITicker _ticker;
-                private readonly IDisposable _subscription;
-
-                public TickHandler(ITicker ticker)
+        var sources = new[]
+        {
+            ("TickHandler.cs", Prelude + SingletonTickerTransientHandler + """
+                public partial class TickHandler : IDisposable
                 {
-                    _ticker = ticker;
-                    _subscription = _ticker.Subscribe(OnTick);
+                    private readonly ITicker _ticker;
+                    private readonly IDisposable _subscription;
+
+                    public TickHandler(ITicker ticker)
+                    {
+                        _ticker = ticker;
+                        _subscription = _ticker.Subscribe(OnTick);
+                    }
+
+                    private void OnTick(int value) { }
                 }
+                """),
+            ("TickHandler.Dispose.cs", """
+                public partial class TickHandler
+                {
+                    public void Dispose() => _subscription.Dispose();
+                }
+                """)
+        };
 
-                private void OnTick(int value) { }
-            }
-
-            public partial class TickHandler
-            {
-                public void Dispose() => _subscription.Dispose();
-            }
-            """;
-
-        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(sources);
     }
 
     [Fact]
