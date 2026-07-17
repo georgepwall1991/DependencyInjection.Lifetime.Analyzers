@@ -648,9 +648,27 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return !gotoSkippedAssignmentPositions.Contains(assignment.SpanStart) &&
-               !assignment.Ancestors().Any(ancestor =>
-                   IsControlFlowDependentProviderWrite(ancestor) &&
-                   !IsDeferredBoundaryOwnedBySymbol(ancestor, writtenSymbol));
+               IsPathStableWithinOwningDeferredBoundary(assignment, writtenSymbol);
+    }
+
+    private static bool IsPathStableWithinOwningDeferredBoundary(
+        AssignmentExpressionSyntax assignment,
+        ISymbol writtenSymbol)
+    {
+        foreach (var ancestor in assignment.Ancestors())
+        {
+            if (IsDeferredBoundaryOwnedBySymbol(ancestor, writtenSymbol))
+            {
+                return true;
+            }
+
+            if (IsControlFlowDependentProviderWrite(ancestor))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static ImmutableHashSet<int> GetGotoSkippedAssignmentPositions(SyntaxNode root)
