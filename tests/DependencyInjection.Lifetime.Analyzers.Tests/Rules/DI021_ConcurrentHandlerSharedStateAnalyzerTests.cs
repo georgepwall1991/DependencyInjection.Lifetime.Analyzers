@@ -659,6 +659,39 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedConcreteProviderNonGenericGetService_RenamedParameter_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public sealed class CustomProvider : IServiceProvider
+            {
+                public object GetService(Type requestedType) => new AppDbContext();
+            }
+
+            public class Worker
+            {
+                private readonly CustomProvider _provider;
+
+                public Worker(CustomProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_provider.GetService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedScopeNonGenericDirectStaticResolution_NamedArgumentsReordered_ReportsDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
@@ -710,6 +743,49 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
                     processor.ProcessMessageAsync += async args =>
                     {
                         var service = _scope.ServiceProvider.GetRequiredService(serviceType);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_UserDefinedTypeConversion_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public readonly struct RedirectedType
+            {
+                private readonly Type _type;
+
+                private RedirectedType(Type type)
+                {
+                    _type = type;
+                }
+
+                public static explicit operator RedirectedType(Type type) => new RedirectedType(typeof(string));
+                public static implicit operator Type(RedirectedType redirected) => redirected._type;
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = _scope.ServiceProvider.GetRequiredService(
+                            (Type)(RedirectedType)typeof(AppDbContext));
                         await Task.CompletedTask;
                     };
                 }
