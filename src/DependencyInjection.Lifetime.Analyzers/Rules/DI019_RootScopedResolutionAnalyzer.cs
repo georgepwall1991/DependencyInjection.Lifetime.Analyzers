@@ -276,6 +276,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         ProviderFacts facts)
     {
         var isPathStableForConditionalJoin =
+            symbol is not IFieldSymbol &&
+            symbol is not IPropertySymbol &&
             IsPathStableForConditionalJoin(expression) &&
             IsReferencedProviderFactPathStableForConditionalJoin(
                 expression,
