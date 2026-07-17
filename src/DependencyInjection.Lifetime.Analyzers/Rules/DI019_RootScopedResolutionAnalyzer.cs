@@ -387,7 +387,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             var gotoSkippedAssignmentPositions = GetGotoSkippedAssignmentPositions(root);
             var backwardGotoExecutableBoundaries = GetBackwardGotoExecutableBoundaries(root);
 
-            foreach (var node in root.DescendantNodes())
+            foreach (var node in root.DescendantNodes()
+                         .Where(IsProviderFactNode)
+                         .OrderBy(GetProviderFactProcessingPosition)
+                         .ThenByDescending(node => node.SpanStart))
             {
                 ISymbol? symbol;
                 ExpressionSyntax expression;
@@ -483,7 +486,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
                         symbol = semanticModel.GetDeclaredSymbol(variable);
                         expression = initializer;
-                        writePosition = initializer.SpanStart;
+                        writePosition = initializer.Span.End;
                         break;
                     case AssignmentExpressionSyntax assignment
                         when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
@@ -551,6 +554,21 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         return factsByTree;
     }
+
+    private static bool IsProviderFactNode(SyntaxNode node) =>
+        node is VariableDeclaratorSyntax { Initializer.Value: not null } or
+            AssignmentExpressionSyntax ||
+        node is ArgumentSyntax argument &&
+        argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword;
+
+    private static int GetProviderFactProcessingPosition(SyntaxNode node) =>
+        node switch
+        {
+            VariableDeclaratorSyntax { Initializer.Value: { } initializer } => initializer.Span.End,
+            AssignmentExpressionSyntax assignment => assignment.Right.Span.End,
+            ArgumentSyntax argument => argument.Parent?.Parent?.Span.End ?? argument.Span.End,
+            _ => node.SpanStart,
+        };
 
     private static void InvalidateRefTargetFacts(
         ExpressionSyntax expression,
