@@ -2378,15 +2378,18 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
+            var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
             var receiver = invocation.Instance ??
-                invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Value ??
+                (IsFrameworkServiceResolutionExtension(sourceMethod)
+                    ? invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Value
+                    : null) ??
                 invocation.Arguments.FirstOrDefault()?.Value;
             if (receiver is null)
             {
                 continue;
             }
 
-            var origin = ResolveProviderOrigin(Unwrap(receiver));
+            var origin = ResolveProviderOrigin(receiver);
             if (origin is null || !IsProviderLike(GetSymbolType(origin)))
             {
                 continue;
@@ -2499,11 +2502,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         if (sourceMethod.IsExtensionMethod)
         {
-            return sourceMethod.ContainingType.Name == "ServiceProviderServiceExtensions" &&
-                   sourceMethod.ContainingType.ContainingNamespace.ToDisplayString() ==
-                   "Microsoft.Extensions.DependencyInjection" &&
-                   sourceMethod.ContainingAssembly.Name ==
-                   "Microsoft.Extensions.DependencyInjection.Abstractions";
+            return IsFrameworkServiceResolutionExtension(sourceMethod);
         }
 
         var interfaceType = compilation.GetTypeByMetadataName("System.IServiceProvider");
@@ -2534,12 +2533,29 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         return false;
     }
 
+    private static bool IsFrameworkServiceResolutionExtension(IMethodSymbol sourceMethod)
+    {
+        if (!sourceMethod.IsExtensionMethod)
+        {
+            return false;
+        }
+
+        var expectedTypeName = sourceMethod.Name is "GetKeyedService" or "GetRequiredKeyedService"
+            ? "ServiceProviderKeyedServiceExtensions"
+            : "ServiceProviderServiceExtensions";
+        return sourceMethod.ContainingType.Name == expectedTypeName &&
+               sourceMethod.ContainingType.ContainingNamespace.ToDisplayString() ==
+               "Microsoft.Extensions.DependencyInjection" &&
+               sourceMethod.ContainingAssembly.Name ==
+               "Microsoft.Extensions.DependencyInjection.Abstractions";
+    }
+
     private static ISymbol? ResolveProviderOrigin(IOperation receiver)
     {
         var current = receiver;
         while (true)
         {
-            current = Unwrap(current);
+            current = UnwrapProviderReceiver(current);
             if (current is IPropertyReferenceOperation { Property.Name: "ServiceProvider" } providerProperty &&
                 providerProperty.Instance is not null)
             {
@@ -2554,6 +2570,27 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 IParameterReferenceOperation parameter => parameter.Parameter,
                 _ => null
             };
+        }
+    }
+
+    private static IOperation UnwrapProviderReceiver(IOperation operation)
+    {
+        var current = operation;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when conversion.OperatorMethod is null &&
+                         (conversion.Conversion.IsIdentity || conversion.Conversion.IsReference):
+                    current = conversion.Operand;
+                    continue;
+                default:
+                    return current;
+            }
         }
     }
 
