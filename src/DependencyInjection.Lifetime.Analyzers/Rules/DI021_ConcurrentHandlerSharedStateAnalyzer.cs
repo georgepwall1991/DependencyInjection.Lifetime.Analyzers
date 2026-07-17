@@ -2447,17 +2447,45 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             return false;
         }
 
-        var serviceTypeArgument = invocation.Arguments.FirstOrDefault(argument =>
-            argument.Parameter?.Name is "serviceType" or "type");
+        var systemType = compilation.GetTypeByMetadataName("System.Type");
+        var serviceTypeArgument = systemType is null
+            ? null
+            : invocation.Arguments.FirstOrDefault(argument =>
+                SymbolEqualityComparer.Default.Equals(argument.Parameter?.Type, systemType));
         if (serviceTypeArgument is null ||
-            Unwrap(serviceTypeArgument.Value) is not ITypeOfOperation typeOfOperation)
+            !TryGetLiteralTypeOperand(serviceTypeArgument.Value, out resolvedType))
         {
             resolvedType = null!;
             return false;
         }
 
-        resolvedType = typeOfOperation.TypeOperand;
         return true;
+    }
+
+    private static bool TryGetLiteralTypeOperand(
+        IOperation operation,
+        out ITypeSymbol typeOperand)
+    {
+        var current = operation;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when conversion.OperatorMethod is null && conversion.Conversion.IsIdentity:
+                    current = conversion.Operand;
+                    continue;
+                case ITypeOfOperation typeOfOperation:
+                    typeOperand = typeOfOperation.TypeOperand;
+                    return true;
+                default:
+                    typeOperand = null!;
+                    return false;
+            }
+        }
     }
 
     private static bool IsSupportedNonGenericServiceResolution(
