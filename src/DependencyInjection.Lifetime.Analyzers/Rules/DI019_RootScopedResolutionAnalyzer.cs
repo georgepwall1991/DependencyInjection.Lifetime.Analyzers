@@ -342,6 +342,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             TryStatementSyntax or
             AnonymousFunctionExpressionSyntax or
             LocalFunctionStatementSyntax or
+            QueryExpressionSyntax or
             ConditionalExpressionSyntax ||
         ancestor is BinaryExpressionSyntax binary &&
             binary.Kind() is SyntaxKind.LogicalAndExpression or
