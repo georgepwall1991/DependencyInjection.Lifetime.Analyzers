@@ -4371,6 +4371,138 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredService_WithHostLifetimeDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, MyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithHostLifetimeDependencyAndStrictMode_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton<IMyService, MyService>()|};
+                }
+            }
+            """;
+
+        var editorConfig = """
+            root = true
+
+            [*.cs]
+            dotnet_code_quality.DI015.assume_framework_services_registered = false
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            editorConfig,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IHostLifetime"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithSameNamedHostLifetimeDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace MyCompany.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(MyCompany.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton<IMyService, MyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IHostLifetime"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithKeyedHostLifetimeDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public interface IMyService { }
+            public class MyService : IMyService
+            {
+                public MyService(
+                    [FromKeyedServices("blue")] Microsoft.Extensions.Hosting.IHostLifetime lifetime) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddSingleton<IMyService, MyService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.UnresolvableDependency)
+                .WithLocation(0)
+                .WithArguments("IMyService", "IHostLifetime (key: blue)"));
+    }
+
+    [Fact]
     public async Task RegisteredService_WithDependencyRegisteredInInvokedWrapperExtension_NoDiagnostic()
     {
         var source = Usings + """
