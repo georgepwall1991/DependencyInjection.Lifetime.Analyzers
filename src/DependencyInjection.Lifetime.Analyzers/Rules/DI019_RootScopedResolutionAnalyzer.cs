@@ -39,17 +39,17 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         {
             Facts = [];
             SymbolsWithFacts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            SymbolsWithDeferredWrites = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            RefAliasReferents = new Dictionary<ISymbol, ISymbol>(SymbolEqualityComparer.Default);
+            EarliestDeferredWritePositions = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
+            RefAliasReferents = new Dictionary<ISymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
         }
 
         public List<ProviderFact> Facts { get; }
 
         private HashSet<ISymbol> SymbolsWithFacts { get; }
 
-        private HashSet<ISymbol> SymbolsWithDeferredWrites { get; }
+        private Dictionary<ISymbol, int> EarliestDeferredWritePositions { get; }
 
-        private Dictionary<ISymbol, ISymbol> RefAliasReferents { get; }
+        private Dictionary<ISymbol, HashSet<ISymbol>> RefAliasReferents { get; }
 
         public void Add(ProviderFact fact)
         {
@@ -59,19 +59,59 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         public bool HasFact(ISymbol symbol) => SymbolsWithFacts.Contains(symbol);
 
-        public void MarkDeferredWrite(ISymbol symbol) => SymbolsWithDeferredWrites.Add(symbol);
-
-        public void AddRefAlias(ISymbol alias, ISymbol referent) =>
-            RefAliasReferents[alias] = ResolveStorageSymbol(referent);
-
-        public ISymbol ResolveStorageSymbol(ISymbol symbol)
+        public void MarkDeferredWrite(ISymbol symbol, int position)
         {
-            while (RefAliasReferents.TryGetValue(symbol, out var referent))
+            if (!EarliestDeferredWritePositions.TryGetValue(symbol, out var existingPosition) ||
+                position < existingPosition)
             {
-                symbol = referent;
+                EarliestDeferredWritePositions[symbol] = position;
+            }
+        }
+
+        public void SetRefAlias(ISymbol alias, ISymbol referent) =>
+            RefAliasReferents[alias] = ResolveStorageSymbols(referent);
+
+        public void AddPossibleRefAlias(ISymbol alias, ISymbol referent)
+        {
+            var possibleReferents = ResolveStorageSymbols(alias);
+            possibleReferents.UnionWith(ResolveStorageSymbols(referent));
+            RefAliasReferents[alias] = possibleReferents;
+        }
+
+        public HashSet<ISymbol> ResolveStorageSymbols(ISymbol symbol)
+        {
+            var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var pending = new Stack<ISymbol>();
+            pending.Push(symbol);
+
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                if (!visited.Add(current))
+                {
+                    continue;
+                }
+
+                if (RefAliasReferents.TryGetValue(current, out var referents))
+                {
+                    foreach (var referent in referents)
+                    {
+                        pending.Push(referent);
+                    }
+                }
+                else
+                {
+                    storageSymbols.Add(current);
+                }
             }
 
-            return symbol;
+            if (storageSymbols.Count == 0)
+            {
+                storageSymbols.Add(symbol);
+            }
+
+            return storageSymbols;
         }
 
         public bool TryGetLatestFactBefore(
@@ -112,7 +152,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             isRootProvider = latest.Value.IsRootProvider.Value;
             isPathStableForConditionalJoin =
                 latest.Value.IsPathStableForConditionalJoin &&
-                !SymbolsWithDeferredWrites.Contains(symbol);
+                (!EarliestDeferredWritePositions.TryGetValue(symbol, out var deferredPosition) ||
+                 deferredPosition >= position);
             return true;
         }
     }
@@ -287,17 +328,22 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         var referent = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
                         if (alias is not null && referent is not null)
                         {
-                            facts.AddRefAlias(alias, referent);
-                            var storageSymbol = facts.ResolveStorageSymbol(referent);
-                            if (IsDeferredProviderWrite(expression))
+                            facts.SetRefAlias(alias, referent);
+                            var deferredWritePosition = GetDeferredWriteReachabilityPosition(expression);
+                            foreach (var storageSymbol in facts.ResolveStorageSymbols(alias))
                             {
-                                facts.MarkDeferredWrite(storageSymbol);
-                            }
+                                if (deferredWritePosition.HasValue)
+                                {
+                                    facts.MarkDeferredWrite(
+                                        storageSymbol,
+                                        deferredWritePosition.Value);
+                                }
 
-                            InvalidateProviderFact(
-                                storageSymbol,
-                                expression.SpanStart,
-                                facts);
+                                InvalidateProviderFact(
+                                    storageSymbol,
+                                    expression.SpanStart,
+                                    facts);
+                            }
                         }
 
                         continue;
@@ -310,17 +356,34 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                             .Symbol;
                         if (refAlias is not null && refReferent is not null)
                         {
-                            facts.AddRefAlias(refAlias, refReferent);
-                            var refStorageSymbol = facts.ResolveStorageSymbol(refReferent);
-                            if (IsDeferredProviderWrite(refAssignmentExpression.Expression))
+                            if (IsPathStableForConditionalJoin(
+                                    refAssignment.Right,
+                                    gotoSkippedAssignmentPositions,
+                                    backwardGotoExecutableBoundaries))
                             {
-                                facts.MarkDeferredWrite(refStorageSymbol);
+                                facts.SetRefAlias(refAlias, refReferent);
+                            }
+                            else
+                            {
+                                facts.AddPossibleRefAlias(refAlias, refReferent);
                             }
 
-                            InvalidateProviderFact(
-                                refStorageSymbol,
-                                refAssignmentExpression.Expression.SpanStart,
-                                facts);
+                            var deferredWritePosition =
+                                GetDeferredWriteReachabilityPosition(refAssignmentExpression.Expression);
+                            foreach (var storageSymbol in facts.ResolveStorageSymbols(refAlias))
+                            {
+                                if (deferredWritePosition.HasValue)
+                                {
+                                    facts.MarkDeferredWrite(
+                                        storageSymbol,
+                                        deferredWritePosition.Value);
+                                }
+
+                                InvalidateProviderFact(
+                                    storageSymbol,
+                                    refAssignmentExpression.Expression.SpanStart,
+                                    facts);
+                            }
                         }
 
                         continue;
@@ -332,16 +395,22 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                             var targetSymbol = semanticModel.GetSymbolInfo(Unwrap(target)).Symbol;
                             if (targetSymbol is not null)
                             {
-                                targetSymbol = facts.ResolveStorageSymbol(targetSymbol);
-                                if (IsDeferredProviderWrite(target))
+                                var deferredWritePosition =
+                                    GetDeferredWriteReachabilityPosition(target);
+                                foreach (var storageSymbol in facts.ResolveStorageSymbols(targetSymbol))
                                 {
-                                    facts.MarkDeferredWrite(targetSymbol);
-                                }
+                                    if (deferredWritePosition.HasValue)
+                                    {
+                                        facts.MarkDeferredWrite(
+                                            storageSymbol,
+                                            deferredWritePosition.Value);
+                                    }
 
-                                InvalidateProviderFact(
-                                    targetSymbol,
-                                    target.SpanStart,
-                                    facts);
+                                    InvalidateProviderFact(
+                                        storageSymbol,
+                                        target.SpanStart,
+                                        facts);
+                                }
                             }
                         }
 
@@ -354,6 +423,12 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
                         symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
                         expression = assignment.Right;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                        symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+                        expression = assignment.Right;
+                        forceInvalidation = true;
                         break;
                     case ArgumentSyntax argument
                         when argument.RefKindKeyword.Kind() is
@@ -371,27 +446,30 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                symbol = facts.ResolveStorageSymbol(symbol);
-                if (IsDeferredProviderWrite(expression))
+                var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
+                foreach (var storageSymbol in facts.ResolveStorageSymbols(symbol))
                 {
-                    facts.MarkDeferredWrite(symbol);
-                }
+                    if (deferredPosition.HasValue)
+                    {
+                        facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
+                    }
 
-                if (forceInvalidation)
-                {
-                    InvalidateProviderFact(symbol, expression.SpanStart, facts);
-                    continue;
-                }
+                    if (forceInvalidation)
+                    {
+                        InvalidateProviderFact(storageSymbol, expression.SpanStart, facts);
+                        continue;
+                    }
 
-                AddProviderFact(
-                    symbol,
-                    expression,
-                    expression.SpanStart,
-                    semanticModel,
-                    wellKnownTypes,
-                    facts,
-                    gotoSkippedAssignmentPositions,
-                    backwardGotoExecutableBoundaries);
+                    AddProviderFact(
+                        storageSymbol,
+                        expression,
+                        expression.SpanStart,
+                        semanticModel,
+                        wellKnownTypes,
+                        facts,
+                        gotoSkippedAssignmentPositions,
+                        backwardGotoExecutableBoundaries);
+                }
             }
 
             factsByTree[tree] = facts;
@@ -591,11 +669,30 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                isPathStableForConditionalJoin;
     }
 
-    private static bool IsDeferredProviderWrite(SyntaxNode node) =>
-        node.AncestorsAndSelf().Any(static ancestor =>
-            ancestor is AnonymousFunctionExpressionSyntax or
-                LocalFunctionStatementSyntax or
-                QueryExpressionSyntax);
+    private static int? GetDeferredWriteReachabilityPosition(SyntaxNode node)
+    {
+        int? earliestPosition = null;
+        foreach (var ancestor in node.AncestorsAndSelf())
+        {
+            if (ancestor is LocalFunctionStatementSyntax)
+            {
+                return 0;
+            }
+
+            if (ancestor is not AnonymousFunctionExpressionSyntax and
+                not QueryExpressionSyntax)
+            {
+                continue;
+            }
+
+            if (!earliestPosition.HasValue || ancestor.SpanStart < earliestPosition.Value)
+            {
+                earliestPosition = ancestor.SpanStart;
+            }
+        }
+
+        return earliestPosition;
+    }
 
     private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
         ancestor is IfStatementSyntax or
