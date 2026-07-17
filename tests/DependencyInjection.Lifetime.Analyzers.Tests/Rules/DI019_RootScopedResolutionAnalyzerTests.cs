@@ -2023,6 +2023,69 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderAliasAfterRefLocalMutation_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                private static void Replace(
+                    ref IServiceProvider provider,
+                    IServiceProvider replacement) => provider = replacement;
+
+                public void Configure(IServiceCollection services, bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = root;
+                    ref IServiceProvider alias = ref candidate;
+                    Replace(ref alias, scope.ServiceProvider);
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderAliasWithGotoSkippedRootWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool skipRootWrite,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    if (skipRootWrite)
+                    {
+                        goto Resolve;
+                    }
+
+                    candidate = root;
+
+                Resolve:
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
     {
         var source = Usings + """
