@@ -453,12 +453,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                             var targetSymbol = semanticModel.GetSymbolInfo(Unwrap(target)).Symbol;
                             if (targetSymbol is not null)
                             {
-                                var deferredWritePosition =
-                                    GetDeferredWriteReachabilityPosition(target);
                                 foreach (var storageSymbol in facts.ResolveStorageSymbols(
                                              targetSymbol,
                                              target.SpanStart))
                                 {
+                                    var deferredWritePosition =
+                                        GetDeferredWriteReachabilityPosition(
+                                            target,
+                                            storageSymbol);
                                     if (deferredWritePosition.HasValue)
                                     {
                                         facts.MarkDeferredWrite(
@@ -504,11 +506,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
                 foreach (var storageSymbol in facts.ResolveStorageSymbols(
                              symbol,
                              expression.SpanStart))
                 {
+                    var deferredPosition = GetDeferredWriteReachabilityPosition(
+                        expression,
+                        storageSymbol);
                     if (deferredPosition.HasValue)
                     {
                         facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
@@ -551,9 +555,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 expression.SpanStart));
         }
 
-        var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
         foreach (var storageSymbol in storageSymbols)
         {
+            var deferredPosition = GetDeferredWriteReachabilityPosition(
+                expression,
+                storageSymbol);
             if (deferredPosition.HasValue)
             {
                 facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
@@ -787,14 +793,21 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return commonRootProvider.HasValue;
     }
 
-    private static int? GetDeferredWriteReachabilityPosition(SyntaxNode node)
+    private static int? GetDeferredWriteReachabilityPosition(
+        SyntaxNode node,
+        ISymbol writtenSymbol)
     {
         int? earliestPosition = null;
         foreach (var ancestor in node.AncestorsAndSelf())
         {
-            if (ancestor is LocalFunctionStatementSyntax)
+            if (ancestor is LocalFunctionStatementSyntax localFunction)
             {
-                return 0;
+                if (!IsDeclaredWithin(writtenSymbol, localFunction))
+                {
+                    return 0;
+                }
+
+                continue;
             }
 
             if (ancestor is not AnonymousFunctionExpressionSyntax and
@@ -811,6 +824,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         return earliestPosition;
     }
+
+    private static bool IsDeclaredWithin(ISymbol symbol, SyntaxNode boundary) =>
+        symbol.DeclaringSyntaxReferences.Any(reference =>
+            ReferenceEquals(reference.SyntaxTree, boundary.SyntaxTree) &&
+            boundary.Span.Contains(reference.Span));
 
     private static IEnumerable<ISymbol> GetRefReferentSymbols(
         ExpressionSyntax expression,
