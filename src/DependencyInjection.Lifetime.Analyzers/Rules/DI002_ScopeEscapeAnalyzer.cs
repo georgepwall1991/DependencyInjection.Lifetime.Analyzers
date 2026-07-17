@@ -221,12 +221,12 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             // _cache.Add(scope.ServiceProvider.GetRequiredService<T>()) — the resolution is an
-            // argument to a mutation method on a field/property-held container that outlives
-            // the scope.
+            // argument to a mutation method on a field/property-held container or caller-owned
+            // collection parameter that outlives the scope.
             if (consumption.Parent is ArgumentSyntax argumentShape &&
                 argumentShape.Parent is ArgumentListSyntax argumentList &&
                 argumentList.Parent is InvocationExpressionSyntax mutationInvocation &&
-                TryGetFieldCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
+                TryGetEscapingCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
             {
                 ReportDiagnostic(context, invocation, directContainerName, reportedSpans);
             }
@@ -388,9 +388,10 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             // _cache.Add(service) / _cache.Insert(0, service) — a tracked service or capturing
-            // delegate handed to a mutation method on a field/property-held container.
+            // delegate handed to a mutation method on a field/property-held container or
+            // caller-owned collection parameter.
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out var containerName))
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out var containerName))
             {
                 foreach (var argument in mutationCall.ArgumentList.Arguments)
                 {
@@ -444,7 +445,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     /// the scope. Local containers stay quiet: they live and die with the scope unless they
     /// escape through one of the other sinks.
     /// </summary>
-    private static bool TryGetFieldCollectionMutation(
+    private static bool TryGetEscapingCollectionMutation(
         InvocationExpressionSyntax call,
         SemanticModel semanticModel,
         out string containerName)
@@ -513,7 +514,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         var receiver = semanticModel.GetSymbolInfo(receiverExpression).Symbol;
-        if (receiver is IFieldSymbol or IPropertySymbol)
+        if (receiver is IFieldSymbol or IPropertySymbol or IParameterSymbol)
         {
             containerName = receiver.Name;
             return true;
@@ -1851,7 +1852,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out _) &&
                 mutationCall.ArgumentList.Arguments.Any(argument =>
                     ExpressionRetainsEscapingHolderValue(
                         argument.Expression,
@@ -2002,7 +2003,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out _) &&
                 mutationCall.ArgumentList.Arguments.Any(argument =>
                     ExpressionRetainsCurrentLocalValue(
                         argument.Expression,
