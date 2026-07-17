@@ -70,7 +70,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            isRootProvider = latest.Value.IsRootProvider;
+            if (!latest.Value.IsRootProvider.HasValue)
+            {
+                isRootProvider = false;
+                isPathStableForConditionalJoin = false;
+                return false;
+            }
+
+            isRootProvider = latest.Value.IsRootProvider.Value;
             isPathStableForConditionalJoin = latest.Value.IsPathStableForConditionalJoin;
             return true;
         }
@@ -81,7 +88,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         public ProviderFact(
             ISymbol symbol,
             int position,
-            bool isRootProvider,
+            bool? isRootProvider,
             bool isPathStableForConditionalJoin)
         {
             Symbol = symbol;
@@ -94,7 +101,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         public int Position { get; }
 
-        public bool IsRootProvider { get; }
+        public bool? IsRootProvider { get; }
 
         public bool IsPathStableForConditionalJoin { get; }
     }
@@ -301,7 +308,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 position,
                 isRootProvider: true,
                 isPathStableForConditionalJoin));
+            return;
         }
+
+        facts.Facts.Add(new ProviderFact(
+            symbol,
+            position,
+            isRootProvider: null,
+            isPathStableForConditionalJoin: false));
     }
 
     private static bool IsPathStableForConditionalJoin(ExpressionSyntax expression)
