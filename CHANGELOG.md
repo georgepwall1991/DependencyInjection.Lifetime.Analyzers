@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **DI019 all-root conditional provider joins** — provider aliases selected by a conditional expression now retain root-provider classification when both result arms are independently proven root providers through path-stable declarations or straight-line writes. Provider declarations and assignments are collected in source order, path stability propagates through copied aliases, and field/property facts never qualify because source order cannot prove cross-method execution. Branch-, loop-, switch-, exception-, deferred-, and short-circuit-dependent writes do not qualify; mixed root/scoped or unknown arms stay conservative.
+- **DI019 all-root conditional provider joins** — provider aliases selected by a conditional expression now retain root-provider classification when both result arms are independently proven root providers through path-stable declarations or straight-line writes. Provider declarations and assignments are collected in source order, path stability propagates through copied aliases, and field/property facts never qualify because source order cannot prove cross-method execution. Branch-, loop-, switch-, exception-, lambda/local-function-, LINQ-query-, and short-circuit-dependent writes do not qualify; mixed root/scoped or unknown arms stay conservative.
 
 ## [2.18.21] - 2026-07-17
 
