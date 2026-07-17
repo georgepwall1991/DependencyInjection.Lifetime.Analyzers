@@ -796,6 +796,82 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedScopeGenericResolution_UserDefinedStaticHelperWithReorderedArguments_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public static class CustomProviderHelpers
+            {
+                public static object GetRequiredKeyedService<T>(IServiceProvider provider, int marker) => new object();
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = CustomProviderHelpers.GetRequiredKeyedService<AppDbContext>(
+                            marker: 0,
+                            provider: _scope.ServiceProvider);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedProviderNonGenericResolution_UserDefinedReceiverConversion_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public sealed class FreshProvider : IServiceProvider
+            {
+                public object GetService(Type serviceType) => new AppDbContext();
+            }
+
+            public sealed class ProviderWrapper : IServiceProvider
+            {
+                public object GetService(Type serviceType) => new AppDbContext();
+
+                public static explicit operator FreshProvider(ProviderWrapper wrapper) => new FreshProvider();
+            }
+
+            public class Worker
+            {
+                private readonly ProviderWrapper _provider;
+
+                public Worker(ProviderWrapper provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext)((FreshProvider)_provider).GetService(typeof(AppDbContext));
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedScopeNonGenericResolution_UserDefinedStaticHelper_NoDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
