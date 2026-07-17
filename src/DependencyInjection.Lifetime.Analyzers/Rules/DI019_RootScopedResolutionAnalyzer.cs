@@ -250,6 +250,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             {
                 ISymbol? symbol;
                 ExpressionSyntax expression;
+                var forceInvalidation = false;
                 switch (node)
                 {
                     case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
@@ -261,12 +262,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
                         expression = assignment.Right;
                         break;
+                    case ArgumentSyntax argument
+                        when argument.RefKindKeyword.Kind() is
+                            SyntaxKind.RefKeyword or SyntaxKind.OutKeyword:
+                        expression = argument.Expression;
+                        symbol = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
+                        forceInvalidation = true;
+                        break;
                     default:
                         continue;
                 }
 
                 if (symbol is null)
                 {
+                    continue;
+                }
+
+                if (forceInvalidation)
+                {
+                    InvalidateProviderFact(symbol, expression.SpanStart, facts);
                     continue;
                 }
 
@@ -322,6 +336,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        InvalidateProviderFact(symbol, position, facts);
+    }
+
+    private static void InvalidateProviderFact(
+        ISymbol symbol,
+        int position,
+        ProviderFacts facts)
+    {
         if (facts.HasFact(symbol))
         {
             facts.Add(new ProviderFact(
