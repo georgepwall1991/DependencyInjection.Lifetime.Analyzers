@@ -38,9 +38,20 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         public ProviderFacts()
         {
             Facts = [];
+            SymbolsWithFacts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         }
 
         public List<ProviderFact> Facts { get; }
+
+        private HashSet<ISymbol> SymbolsWithFacts { get; }
+
+        public void Add(ProviderFact fact)
+        {
+            Facts.Add(fact);
+            SymbolsWithFacts.Add(fact.Symbol);
+        }
+
+        public bool HasFact(ISymbol symbol) => SymbolsWithFacts.Contains(symbol);
 
         public bool TryGetLatestFactBefore(
             ISymbol symbol,
@@ -293,7 +304,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 facts);
         if (IsScopedProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(
+            facts.Add(new ProviderFact(
                 symbol,
                 position,
                 isRootProvider: false,
@@ -303,7 +314,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         if (IsRootProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(
+            facts.Add(new ProviderFact(
                 symbol,
                 position,
                 isRootProvider: true,
@@ -311,11 +322,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        facts.Facts.Add(new ProviderFact(
-            symbol,
-            position,
-            isRootProvider: null,
-            isPathStableForConditionalJoin: false));
+        if (facts.HasFact(symbol))
+        {
+            facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: null,
+                isPathStableForConditionalJoin: false));
+        }
     }
 
     private static bool IsPathStableForConditionalJoin(ExpressionSyntax expression)
