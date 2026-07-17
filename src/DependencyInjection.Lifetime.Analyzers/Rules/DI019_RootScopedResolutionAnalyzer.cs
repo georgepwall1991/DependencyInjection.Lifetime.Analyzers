@@ -671,12 +671,45 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         expression = Unwrap(expression);
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         return symbol is null ||
-               !providerFacts.TryGetLatestFactBefore(
+               !TryGetProviderFactBefore(
+                   providerFacts,
                    symbol,
                    position,
                    out _,
                    out var isPathStableForConditionalJoin) ||
                isPathStableForConditionalJoin;
+    }
+
+    private static bool TryGetProviderFactBefore(
+        ProviderFacts providerFacts,
+        ISymbol symbol,
+        int position,
+        out bool isRootProvider,
+        out bool isPathStableForConditionalJoin)
+    {
+        bool? commonRootProvider = null;
+        isPathStableForConditionalJoin = true;
+        foreach (var storageSymbol in providerFacts.ResolveStorageSymbols(symbol))
+        {
+            if (!providerFacts.TryGetLatestFactBefore(
+                    storageSymbol,
+                    position,
+                    out var storageIsRootProvider,
+                    out var storageIsPathStableForConditionalJoin) ||
+                commonRootProvider.HasValue &&
+                commonRootProvider.Value != storageIsRootProvider)
+            {
+                isRootProvider = false;
+                isPathStableForConditionalJoin = false;
+                return false;
+            }
+
+            commonRootProvider = storageIsRootProvider;
+            isPathStableForConditionalJoin &= storageIsPathStableForConditionalJoin;
+        }
+
+        isRootProvider = commonRootProvider.GetValueOrDefault();
+        return commonRootProvider.HasValue;
     }
 
     private static int? GetDeferredWriteReachabilityPosition(SyntaxNode node)
@@ -1077,7 +1110,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(
+            TryGetProviderFactBefore(
+                providerFacts,
                 symbol,
                 position,
                 out var isRootProvider,
@@ -1250,7 +1284,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(
+            TryGetProviderFactBefore(
+                providerFacts,
                 symbol,
                 position,
                 out var isRootProvider,
