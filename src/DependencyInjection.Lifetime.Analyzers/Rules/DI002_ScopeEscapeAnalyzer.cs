@@ -441,9 +441,9 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         ImmutableHashSet.Create("Add", "Insert", "Enqueue", "Push", "TryAdd");
 
     /// <summary>
-    /// Matches mutation calls on containers held by fields or properties — storage that outlives
-    /// the scope. Local containers stay quiet: they live and die with the scope unless they
-    /// escape through one of the other sinks.
+    /// Matches mutation calls on containers held by fields, properties, or caller-owned
+    /// parameters — storage that outlives the scope. Local containers and parameters definitely
+    /// replaced with fresh local collections stay quiet unless they escape through another sink.
     /// </summary>
     private static bool TryGetEscapingCollectionMutation(
         InvocationExpressionSyntax call,
@@ -514,10 +514,64 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         var receiver = semanticModel.GetSymbolInfo(receiverExpression).Symbol;
+        if (receiver is IParameterSymbol parameter &&
+            ParameterDefinitelyReassignedToFreshCollectionBefore(call, parameter, semanticModel))
+        {
+            return false;
+        }
+
         if (receiver is IFieldSymbol or IPropertySymbol or IParameterSymbol)
         {
             containerName = receiver.Name;
             return true;
+        }
+
+        return false;
+    }
+
+    private static bool ParameterDefinitelyReassignedToFreshCollectionBefore(
+        InvocationExpressionSyntax call,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        // Replacing a ref/out parameter updates caller-visible storage, so even a fresh
+        // collection assigned here can escape the scope through the parameter itself.
+        if (parameter.RefKind is not RefKind.None)
+        {
+            return false;
+        }
+
+        var currentStatement = call.FirstAncestorOrSelf<StatementSyntax>();
+        while (currentStatement is not null)
+        {
+            if (currentStatement.Parent is not BlockSyntax block)
+            {
+                currentStatement = currentStatement.Parent?.FirstAncestorOrSelf<StatementSyntax>();
+                continue;
+            }
+
+            var statementIndex = block.Statements.IndexOf(currentStatement);
+            for (var index = statementIndex - 1; index >= 0; index--)
+            {
+                if (block.Statements[index] is not ExpressionStatementSyntax
+                    {
+                        Expression: AssignmentExpressionSyntax assignment,
+                    } ||
+                    !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+                    !SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                        parameter))
+                {
+                    continue;
+                }
+
+                return assignment.Right is ObjectCreationExpressionSyntax or
+                        ImplicitObjectCreationExpressionSyntax &&
+                    semanticModel.GetTypeInfo(assignment.Right).Type is { } replacementType &&
+                    IsEnumerableLike(replacementType);
+            }
+
+            currentStatement = block.FirstAncestorOrSelf<StatementSyntax>();
         }
 
         return false;
