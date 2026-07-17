@@ -38,11 +38,149 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         public ProviderFacts()
         {
             Facts = [];
+            SymbolsWithFacts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            EarliestDeferredWritePositions = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
+            RefAliasFacts = new Dictionary<ISymbol, List<RefAliasFact>>(SymbolEqualityComparer.Default);
         }
 
         public List<ProviderFact> Facts { get; }
 
-        public bool TryGetLatestFactBefore(ISymbol symbol, int position, out bool isRootProvider)
+        private HashSet<ISymbol> SymbolsWithFacts { get; }
+
+        private Dictionary<ISymbol, int> EarliestDeferredWritePositions { get; }
+
+        private Dictionary<ISymbol, List<RefAliasFact>> RefAliasFacts { get; }
+
+        public void Add(ProviderFact fact)
+        {
+            Facts.Add(fact);
+            SymbolsWithFacts.Add(fact.Symbol);
+        }
+
+        public bool HasFact(ISymbol symbol) => SymbolsWithFacts.Contains(symbol);
+
+        public void MarkDeferredWrite(ISymbol symbol, int position)
+        {
+            if (!EarliestDeferredWritePositions.TryGetValue(symbol, out var existingPosition) ||
+                position < existingPosition)
+            {
+                EarliestDeferredWritePositions[symbol] = position;
+            }
+        }
+
+        public void SetRefAlias(
+            ISymbol alias,
+            IEnumerable<ISymbol> referents,
+            int position)
+        {
+            var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            foreach (var referent in referents)
+            {
+                storageSymbols.UnionWith(ResolveStorageSymbols(referent, position));
+            }
+
+            AddRefAliasFact(alias, position, storageSymbols);
+        }
+
+        public void AddPossibleRefAliases(
+            ISymbol alias,
+            IEnumerable<ISymbol> referents,
+            int position)
+        {
+            var possibleReferents = ResolveStorageSymbols(alias, position);
+            foreach (var referent in referents)
+            {
+                possibleReferents.UnionWith(ResolveStorageSymbols(referent, position));
+            }
+
+            AddRefAliasFact(alias, position, possibleReferents);
+        }
+
+        public HashSet<ISymbol> ResolveStorageSymbols(ISymbol symbol, int position)
+        {
+            var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var pending = new Stack<ISymbol>();
+            pending.Push(symbol);
+
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                if (!visited.Add(current))
+                {
+                    continue;
+                }
+
+                if (TryGetLatestRefAliasFactBefore(current, position, out var referents))
+                {
+                    foreach (var referent in referents)
+                    {
+                        pending.Push(referent);
+                    }
+                }
+                else
+                {
+                    storageSymbols.Add(current);
+                }
+            }
+
+            if (storageSymbols.Count == 0)
+            {
+                storageSymbols.Add(symbol);
+            }
+
+            return storageSymbols;
+        }
+
+        private void AddRefAliasFact(
+            ISymbol alias,
+            int position,
+            HashSet<ISymbol> referents)
+        {
+            if (!RefAliasFacts.TryGetValue(alias, out var aliasFacts))
+            {
+                aliasFacts = [];
+                RefAliasFacts[alias] = aliasFacts;
+            }
+
+            aliasFacts.Add(new RefAliasFact(position, referents));
+        }
+
+        private bool TryGetLatestRefAliasFactBefore(
+            ISymbol alias,
+            int position,
+            out HashSet<ISymbol> referents)
+        {
+            RefAliasFact? latest = null;
+            if (RefAliasFacts.TryGetValue(alias, out var aliasFacts))
+            {
+                foreach (var aliasFact in aliasFacts)
+                {
+                    if (aliasFact.Position >= position ||
+                        latest is not null && aliasFact.Position <= latest.Value.Position)
+                    {
+                        continue;
+                    }
+
+                    latest = aliasFact;
+                }
+            }
+
+            if (latest is null)
+            {
+                referents = [];
+                return false;
+            }
+
+            referents = latest.Value.Referents;
+            return true;
+        }
+
+        public bool TryGetLatestFactBefore(
+            ISymbol symbol,
+            int position,
+            out bool isRootProvider,
+            out bool isPathStableForConditionalJoin)
         {
             ProviderFact? latest = null;
             foreach (var fact in Facts)
@@ -62,28 +200,60 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             if (latest is null)
             {
                 isRootProvider = false;
+                isPathStableForConditionalJoin = false;
                 return false;
             }
 
-            isRootProvider = latest.Value.IsRootProvider;
+            if (!latest.Value.IsRootProvider.HasValue)
+            {
+                isRootProvider = false;
+                isPathStableForConditionalJoin = false;
+                return false;
+            }
+
+            isRootProvider = latest.Value.IsRootProvider.Value;
+            isPathStableForConditionalJoin =
+                latest.Value.IsPathStableForConditionalJoin &&
+                (!EarliestDeferredWritePositions.TryGetValue(symbol, out var deferredPosition) ||
+                 deferredPosition >= position);
             return true;
         }
     }
 
+    private readonly struct RefAliasFact
+    {
+        public RefAliasFact(int position, HashSet<ISymbol> referents)
+        {
+            Position = position;
+            Referents = referents;
+        }
+
+        public int Position { get; }
+
+        public HashSet<ISymbol> Referents { get; }
+    }
+
     private readonly struct ProviderFact
     {
-        public ProviderFact(ISymbol symbol, int position, bool isRootProvider)
+        public ProviderFact(
+            ISymbol symbol,
+            int position,
+            bool? isRootProvider,
+            bool isPathStableForConditionalJoin)
         {
             Symbol = symbol;
             Position = position;
             IsRootProvider = isRootProvider;
+            IsPathStableForConditionalJoin = isPathStableForConditionalJoin;
         }
 
         public ISymbol Symbol { get; }
 
         public int Position { get; }
 
-        public bool IsRootProvider { get; }
+        public bool? IsRootProvider { get; }
+
+        public bool IsPathStableForConditionalJoin { get; }
     }
 
     /// <inheritdoc />
@@ -214,49 +384,175 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             #pragma warning restore RS1030
             var facts = new ProviderFacts();
             var root = tree.GetRoot();
+            var gotoSkippedAssignmentPositions = GetGotoSkippedAssignmentPositions(root);
+            var backwardGotoExecutableBoundaries = GetBackwardGotoExecutableBoundaries(root);
 
-            foreach (var variable in root.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+            foreach (var node in root.DescendantNodes()
+                         .Where(IsProviderFactNode)
+                         .OrderBy(GetProviderFactProcessingPosition)
+                         .ThenByDescending(node => node.SpanStart))
             {
-                if (variable.Initializer?.Value is not { } initializer)
+                ISymbol? symbol;
+                ExpressionSyntax expression;
+                int writePosition;
+                var forceInvalidation = false;
+                switch (node)
                 {
-                    continue;
+                    case VariableDeclaratorSyntax
+                    {
+                        Initializer.Value: RefExpressionSyntax refExpression
+                    } variable:
+                        expression = refExpression.Expression;
+                        var alias = semanticModel.GetDeclaredSymbol(variable);
+                        var referents = GetRefReferentSymbols(expression, semanticModel).ToArray();
+                        if (alias is not null && referents.Length > 0)
+                        {
+                            facts.SetRefAlias(alias, referents, refExpression.Span.End);
+                        }
+
+                        continue;
+                    case AssignmentExpressionSyntax refConditionalAssignment
+                        when refConditionalAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             Unwrap(refConditionalAssignment.Left) is ConditionalExpressionSyntax:
+                        InvalidateRefTargetFacts(
+                            refConditionalAssignment.Left,
+                            semanticModel,
+                            facts,
+                            refConditionalAssignment.Right.Span.End);
+                        continue;
+                    case AssignmentExpressionSyntax refAssignment
+                        when refAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             refAssignment.Right is RefExpressionSyntax refAssignmentExpression:
+                        var refAlias = semanticModel.GetSymbolInfo(refAssignment.Left).Symbol;
+                        var refReferents = GetRefReferentSymbols(
+                                refAssignmentExpression.Expression,
+                                semanticModel)
+                            .ToArray();
+                        if (refAlias is not null && refReferents.Length > 0)
+                        {
+                            if (IsPathStableForConditionalJoin(
+                                    refAssignment.Right,
+                                    refAlias,
+                                    gotoSkippedAssignmentPositions,
+                                    backwardGotoExecutableBoundaries))
+                            {
+                                facts.SetRefAlias(
+                                    refAlias,
+                                    refReferents,
+                                    refAssignment.Right.Span.End);
+                            }
+                            else
+                            {
+                                facts.AddPossibleRefAliases(
+                                    refAlias,
+                                    refReferents,
+                                    refAssignment.Right.Span.End);
+                            }
+                        }
+
+                        continue;
+                    case AssignmentExpressionSyntax deconstruction
+                        when deconstruction.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             deconstruction.Left is TupleExpressionSyntax tuple:
+                        foreach (var target in GetDeconstructionTargets(tuple))
+                        {
+                            var targetSymbol = semanticModel.GetSymbolInfo(Unwrap(target)).Symbol;
+                            if (targetSymbol is not null)
+                            {
+                                foreach (var storageSymbol in facts.ResolveStorageSymbols(
+                                             targetSymbol,
+                                             target.SpanStart))
+                                {
+                                    var deferredWritePosition =
+                                        GetDeferredWriteReachabilityPosition(
+                                            target,
+                                            storageSymbol);
+                                    if (deferredWritePosition.HasValue)
+                                    {
+                                        facts.MarkDeferredWrite(
+                                            storageSymbol,
+                                            deferredWritePosition.Value);
+                                    }
+
+                                    InvalidateProviderFact(
+                                        storageSymbol,
+                                        deconstruction.Right.Span.End,
+                                        facts);
+                                }
+                            }
+                        }
+
+                        continue;
+                    case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
+                        symbol = semanticModel.GetDeclaredSymbol(variable);
+                        expression = initializer;
+                        writePosition = initializer.Span.End;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                        symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+                        expression = assignment.Right;
+                        writePosition = assignment.Right.Span.End;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                        symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
+                        expression = assignment.Right;
+                        writePosition = assignment.Right.Span.End;
+                        forceInvalidation = true;
+                        break;
+                    case ArgumentSyntax argument
+                        when argument.RefKindKeyword.Kind() is
+                            SyntaxKind.RefKeyword or SyntaxKind.OutKeyword:
+                        InvalidateRefTargetFacts(
+                            argument.Expression,
+                            semanticModel,
+                            facts,
+                            argument.Parent?.Parent?.Span.End ?? argument.Span.End);
+                        continue;
+                    default:
+                        continue;
                 }
 
-                var symbol = semanticModel.GetDeclaredSymbol(variable);
                 if (symbol is null)
                 {
                     continue;
                 }
 
-                AddProviderFact(
-                    symbol,
-                    initializer,
-                    initializer.SpanStart,
-                    semanticModel,
-                    wellKnownTypes,
-                    facts);
-            }
+                var storageSymbols = facts.ResolveStorageSymbols(
+                        symbol,
+                        expression.SpanStart)
+                    .ToArray();
+                var isAmbiguousRefWrite =
+                    node is AssignmentExpressionSyntax &&
+                    storageSymbols.Length > 1;
 
-            foreach (var assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
-            {
-                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                foreach (var storageSymbol in storageSymbols)
                 {
-                    continue;
-                }
+                    var deferredPosition = GetDeferredWriteReachabilityPosition(
+                        expression,
+                        storageSymbol);
+                    if (deferredPosition.HasValue)
+                    {
+                        facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
+                    }
 
-                var symbol = semanticModel.GetSymbolInfo(assignment.Left).Symbol;
-                if (symbol is null)
-                {
-                    continue;
-                }
+                    if (forceInvalidation || isAmbiguousRefWrite)
+                    {
+                        InvalidateProviderFact(storageSymbol, writePosition, facts);
+                        continue;
+                    }
 
-                AddProviderFact(
-                    symbol,
-                    assignment.Right,
-                    assignment.Right.SpanStart,
-                    semanticModel,
-                    wellKnownTypes,
-                    facts);
+                    AddProviderFact(
+                        storageSymbol,
+                        expression,
+                        writePosition,
+                        semanticModel,
+                        wellKnownTypes,
+                        facts,
+                        gotoSkippedAssignmentPositions,
+                        backwardGotoExecutableBoundaries);
+                }
             }
 
             factsByTree[tree] = facts;
@@ -265,25 +561,403 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return factsByTree;
     }
 
+    private static bool IsProviderFactNode(SyntaxNode node) =>
+        node is VariableDeclaratorSyntax { Initializer.Value: not null } or
+            AssignmentExpressionSyntax ||
+        node is ArgumentSyntax argument &&
+        argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword;
+
+    private static int GetProviderFactProcessingPosition(SyntaxNode node) =>
+        node switch
+        {
+            VariableDeclaratorSyntax { Initializer.Value: { } initializer } => initializer.Span.End,
+            AssignmentExpressionSyntax assignment => assignment.Right.Span.End,
+            ArgumentSyntax argument => argument.Parent?.Parent?.Span.End ?? argument.Span.End,
+            _ => node.SpanStart,
+        };
+
+    private static void InvalidateRefTargetFacts(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        ProviderFacts facts,
+        int writePosition)
+    {
+        var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var referent in GetRefReferentSymbols(expression, semanticModel))
+        {
+            storageSymbols.UnionWith(facts.ResolveStorageSymbols(
+                referent,
+                expression.SpanStart));
+        }
+
+        foreach (var storageSymbol in storageSymbols)
+        {
+            var deferredPosition = GetDeferredWriteReachabilityPosition(
+                expression,
+                storageSymbol);
+            if (deferredPosition.HasValue)
+            {
+                facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
+            }
+
+            InvalidateProviderFact(storageSymbol, writePosition, facts);
+        }
+    }
+
     private static void AddProviderFact(
         ISymbol symbol,
         ExpressionSyntax expression,
         int position,
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
-        ProviderFacts facts)
+        ProviderFacts facts,
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions,
+        ImmutableHashSet<SyntaxNode> backwardGotoExecutableBoundaries)
     {
+        var isPathStableForConditionalJoin =
+            symbol is not IFieldSymbol &&
+            symbol is not IPropertySymbol &&
+            IsPathStableForConditionalJoin(
+                expression,
+                symbol,
+                gotoSkippedAssignmentPositions,
+                backwardGotoExecutableBoundaries) &&
+            IsReferencedProviderFactPathStableForConditionalJoin(
+                expression,
+                position,
+                semanticModel,
+                facts);
         if (IsScopedProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(symbol, position, isRootProvider: false));
+            facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: false,
+                isPathStableForConditionalJoin));
             return;
         }
 
         if (IsRootProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
-            facts.Facts.Add(new ProviderFact(symbol, position, isRootProvider: true));
+            facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: true,
+                isPathStableForConditionalJoin));
+            return;
+        }
+
+        InvalidateProviderFact(symbol, position, facts);
+    }
+
+    private static void InvalidateProviderFact(
+        ISymbol symbol,
+        int position,
+        ProviderFacts facts)
+    {
+        if (facts.HasFact(symbol))
+        {
+            facts.Add(new ProviderFact(
+                symbol,
+                position,
+                isRootProvider: null,
+                isPathStableForConditionalJoin: false));
         }
     }
+
+    private static bool IsPathStableForConditionalJoin(
+        ExpressionSyntax expression,
+        ISymbol writtenSymbol,
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions,
+        ImmutableHashSet<SyntaxNode> backwardGotoExecutableBoundaries)
+    {
+        if (backwardGotoExecutableBoundaries.Contains(GetExecutableBoundary(expression)))
+        {
+            return false;
+        }
+
+        if (expression.Parent is not AssignmentExpressionSyntax assignment)
+        {
+            return true;
+        }
+
+        return !gotoSkippedAssignmentPositions.Contains(assignment.SpanStart) &&
+               IsPathStableWithinOwningDeferredBoundary(assignment, writtenSymbol);
+    }
+
+    private static bool IsPathStableWithinOwningDeferredBoundary(
+        AssignmentExpressionSyntax assignment,
+        ISymbol writtenSymbol)
+    {
+        foreach (var ancestor in assignment.Ancestors())
+        {
+            if (IsDeferredBoundaryOwnedBySymbol(ancestor, writtenSymbol))
+            {
+                return true;
+            }
+
+            if (IsControlFlowDependentProviderWrite(ancestor))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static ImmutableHashSet<int> GetGotoSkippedAssignmentPositions(SyntaxNode root)
+    {
+        var labels = root.DescendantNodes().OfType<LabeledStatementSyntax>().ToArray();
+        if (labels.Length == 0)
+        {
+            return ImmutableHashSet<int>.Empty;
+        }
+
+        var assignments = root.DescendantNodes().OfType<AssignmentExpressionSyntax>().ToArray();
+        var builder = ImmutableHashSet.CreateBuilder<int>();
+        foreach (var gotoStatement in root.DescendantNodes().OfType<GotoStatementSyntax>())
+        {
+            if (gotoStatement.Expression is not IdentifierNameSyntax target)
+            {
+                continue;
+            }
+
+            var label = labels.FirstOrDefault(candidate =>
+                candidate.Identifier.ValueText == target.Identifier.ValueText &&
+                ReferenceEquals(
+                    GetExecutableBoundary(candidate),
+                    GetExecutableBoundary(gotoStatement)));
+            if (label is null || label.SpanStart <= gotoStatement.Span.End)
+            {
+                continue;
+            }
+
+            foreach (var assignment in assignments)
+            {
+                if (assignment.SpanStart >= gotoStatement.Span.End &&
+                    assignment.Span.End <= label.SpanStart &&
+                    ReferenceEquals(
+                        GetExecutableBoundary(assignment),
+                        GetExecutableBoundary(gotoStatement)))
+                {
+                    builder.Add(assignment.SpanStart);
+                }
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static ImmutableHashSet<SyntaxNode> GetBackwardGotoExecutableBoundaries(
+        SyntaxNode root)
+    {
+        var labels = root.DescendantNodes().OfType<LabeledStatementSyntax>().ToArray();
+        var builder = ImmutableHashSet.CreateBuilder<SyntaxNode>();
+        foreach (var gotoStatement in root.DescendantNodes().OfType<GotoStatementSyntax>())
+        {
+            if (gotoStatement.Expression is not IdentifierNameSyntax target)
+            {
+                continue;
+            }
+
+            var boundary = GetExecutableBoundary(gotoStatement);
+            if (labels.Any(candidate =>
+                    candidate.SpanStart < gotoStatement.SpanStart &&
+                    candidate.Identifier.ValueText == target.Identifier.ValueText &&
+                    ReferenceEquals(GetExecutableBoundary(candidate), boundary)))
+            {
+                builder.Add(boundary);
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static IEnumerable<ExpressionSyntax> GetDeconstructionTargets(
+        ExpressionSyntax expression)
+    {
+        if (expression is TupleExpressionSyntax tuple)
+        {
+            foreach (var argument in tuple.Arguments)
+            {
+                foreach (var target in GetDeconstructionTargets(argument.Expression))
+                {
+                    yield return target;
+                }
+            }
+
+            yield break;
+        }
+
+        yield return expression;
+    }
+
+    private static SyntaxNode GetExecutableBoundary(SyntaxNode node) =>
+        node.AncestorsAndSelf().FirstOrDefault(static ancestor =>
+            ancestor is BaseMethodDeclarationSyntax or
+                AccessorDeclarationSyntax or
+                LocalFunctionStatementSyntax or
+                AnonymousFunctionExpressionSyntax) ??
+        node.SyntaxTree.GetRoot();
+
+    private static bool IsReferencedProviderFactPathStableForConditionalJoin(
+        ExpressionSyntax expression,
+        int position,
+        SemanticModel semanticModel,
+        ProviderFacts providerFacts)
+    {
+        expression = Unwrap(expression);
+        var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
+        return symbol is null ||
+               !TryGetProviderFactBefore(
+                   providerFacts,
+                   symbol,
+                   position,
+                   out _,
+                   out var isPathStableForConditionalJoin) ||
+               isPathStableForConditionalJoin;
+    }
+
+    private static bool TryGetProviderFactBefore(
+        ProviderFacts providerFacts,
+        ISymbol symbol,
+        int position,
+        out bool isRootProvider,
+        out bool isPathStableForConditionalJoin)
+    {
+        bool? commonRootProvider = null;
+        isPathStableForConditionalJoin = true;
+        foreach (var storageSymbol in providerFacts.ResolveStorageSymbols(symbol, position))
+        {
+            if (!providerFacts.TryGetLatestFactBefore(
+                    storageSymbol,
+                    position,
+                    out var storageIsRootProvider,
+                    out var storageIsPathStableForConditionalJoin) ||
+                commonRootProvider.HasValue &&
+                commonRootProvider.Value != storageIsRootProvider)
+            {
+                isRootProvider = false;
+                isPathStableForConditionalJoin = false;
+                return false;
+            }
+
+            commonRootProvider = storageIsRootProvider;
+            isPathStableForConditionalJoin &= storageIsPathStableForConditionalJoin;
+        }
+
+        isRootProvider = commonRootProvider.GetValueOrDefault();
+        return commonRootProvider.HasValue;
+    }
+
+    private static int? GetDeferredWriteReachabilityPosition(
+        SyntaxNode node,
+        ISymbol writtenSymbol)
+    {
+        int? earliestPosition = null;
+        foreach (var ancestor in node.AncestorsAndSelf())
+        {
+            if (ancestor is LocalFunctionStatementSyntax localFunction)
+            {
+                if (!IsDeclaredWithin(writtenSymbol, localFunction))
+                {
+                    return 0;
+                }
+
+                continue;
+            }
+
+            if (ancestor is not AnonymousFunctionExpressionSyntax and
+                not QueryExpressionSyntax)
+            {
+                continue;
+            }
+
+            if (IsDeclaredWithin(writtenSymbol, ancestor))
+            {
+                continue;
+            }
+
+            if (!earliestPosition.HasValue || ancestor.SpanStart < earliestPosition.Value)
+            {
+                earliestPosition = ancestor.SpanStart;
+            }
+        }
+
+        return earliestPosition;
+    }
+
+    private static bool IsDeclaredWithin(ISymbol symbol, SyntaxNode boundary) =>
+        symbol.DeclaringSyntaxReferences.Any(reference =>
+            ReferenceEquals(reference.SyntaxTree, boundary.SyntaxTree) &&
+            boundary.Span.Contains(reference.Span));
+
+    private static bool IsDeferredBoundaryOwnedBySymbol(
+        SyntaxNode boundary,
+        ISymbol symbol) =>
+        (boundary is LocalFunctionStatementSyntax or
+            AnonymousFunctionExpressionSyntax or
+            QueryExpressionSyntax) &&
+        IsDeclaredWithin(symbol, boundary);
+
+    private static IEnumerable<ISymbol> GetRefReferentSymbols(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        expression = Unwrap(expression);
+        if (expression is RefExpressionSyntax refExpression)
+        {
+            foreach (var symbol in GetRefReferentSymbols(refExpression.Expression, semanticModel))
+            {
+                yield return symbol;
+            }
+
+            yield break;
+        }
+
+        if (expression is ConditionalExpressionSyntax conditionalExpression)
+        {
+            foreach (var symbol in GetRefReferentSymbols(
+                         conditionalExpression.WhenTrue,
+                         semanticModel))
+            {
+                yield return symbol;
+            }
+
+            foreach (var symbol in GetRefReferentSymbols(
+                         conditionalExpression.WhenFalse,
+                         semanticModel))
+            {
+                yield return symbol;
+            }
+
+            yield break;
+        }
+
+        var referent = semanticModel.GetSymbolInfo(expression).Symbol;
+        if (referent is not null)
+        {
+            yield return referent;
+        }
+    }
+
+    private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
+        ancestor is IfStatementSyntax or
+            SwitchStatementSyntax or
+            SwitchExpressionSyntax or
+            ForStatementSyntax or
+            CommonForEachStatementSyntax or
+            WhileStatementSyntax or
+            DoStatementSyntax or
+            TryStatementSyntax or
+            AnonymousFunctionExpressionSyntax or
+            LocalFunctionStatementSyntax or
+            QueryExpressionSyntax or
+            ConditionalExpressionSyntax ||
+        ancestor is BinaryExpressionSyntax binary &&
+            binary.Kind() is SyntaxKind.LogicalAndExpression or
+                SyntaxKind.LogicalOrExpression or
+                SyntaxKind.CoalesceExpression;
 
     private static ImmutableHashSet<INamedTypeSymbol> GetSingletonImplementationTypes(
         RegistrationCollector registrationCollector)
@@ -568,9 +1242,28 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
         ProviderFacts providerFacts,
-        int position)
+        int position,
+        bool requirePathStableFact = false)
     {
         expression = Unwrap(expression);
+
+        if (expression is ConditionalExpressionSyntax conditionalExpression)
+        {
+            return IsRootProviderExpression(
+                       conditionalExpression.WhenTrue,
+                       semanticModel,
+                       wellKnownTypes,
+                       providerFacts,
+                       position,
+                       requirePathStableFact: true) &&
+                   IsRootProviderExpression(
+                       conditionalExpression.WhenFalse,
+                       semanticModel,
+                       wellKnownTypes,
+                       providerFacts,
+                       position,
+                       requirePathStableFact: true);
+        }
 
         if (expression is InvocationExpressionSyntax invocation &&
             IsBuildServiceProviderInvocation(invocation, semanticModel))
@@ -580,8 +1273,18 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(symbol, position, out var isRootProvider))
+            TryGetProviderFactBefore(
+                providerFacts,
+                symbol,
+                position,
+                out var isRootProvider,
+                out var isPathStableForConditionalJoin))
         {
+            if (requirePathStableFact && !isPathStableForConditionalJoin)
+            {
+                return false;
+            }
+
             return isRootProvider;
         }
 
@@ -744,7 +1447,12 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
         if (symbol is not null &&
-            providerFacts.TryGetLatestFactBefore(symbol, position, out var isRootProvider))
+            TryGetProviderFactBefore(
+                providerFacts,
+                symbol,
+                position,
+                out var isRootProvider,
+                out _))
         {
             return !isRootProvider;
         }

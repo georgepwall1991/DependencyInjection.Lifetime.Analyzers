@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.22] - 2026-07-17
+
+### Fixed
+
+- **DI019 all-root conditional provider joins** — provider aliases selected by a conditional expression now retain root-provider classification when both result arms are independently proven root providers through path-stable declarations or straight-line writes. Provider declarations and assignments are collected in source order, path stability propagates through copied aliases, later unclassified, deconstruction, coalescing-assignment, and `ref`/`out` writes invalidate older provider facts. Write facts become visible only after their right-hand side, initializer, or argument evaluation completes, and nested mutation events are processed before an enclosing write, so resolutions and alias copies observe the provider state that exists at that runtime point. Merely binding or retargeting a ref local preserves the referents' facts; source-positioned mappings ensure each actual later write and read follows only the referents active at that point, and reads classify the alias only when every possible storage agrees. A value write through a multi-referent ref alias invalidates every possible storage instead of falsely treating the write as definite for all referents. Conditional retargets, ref-conditional lvalues, and by-reference conditional arguments retain every possible referent. Forward or backward `goto` edges cannot make path-dependent facts stable. Field/property facts never qualify because source order cannot prove cross-method execution. Branch-, loop-, switch-, exception-, and short-circuit-dependent writes do not qualify. Deferred lambda and LINQ-query hazards become active from their creation point and survive later lexical assignments only for captured outer storage; local-function hazards likewise remain executable-wide for captured storage because the function is callable before its declaration. Locals and parameters owned by a deferred boundary retain ordinary path stability for declarations and straight-line writes, and control flow outside that owning boundary does not alter the write path executed inside it. Mixed root/scoped or unknown arms stay conservative.
+
 ## [2.18.21] - 2026-07-17
 
 ### Fixed
