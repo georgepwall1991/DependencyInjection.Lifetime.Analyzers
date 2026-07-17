@@ -40,7 +40,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             Facts = [];
             SymbolsWithFacts = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             EarliestDeferredWritePositions = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
-            RefAliasReferents = new Dictionary<ISymbol, HashSet<ISymbol>>(SymbolEqualityComparer.Default);
+            RefAliasFacts = new Dictionary<ISymbol, List<RefAliasFact>>(SymbolEqualityComparer.Default);
         }
 
         public List<ProviderFact> Facts { get; }
@@ -49,7 +49,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         private Dictionary<ISymbol, int> EarliestDeferredWritePositions { get; }
 
-        private Dictionary<ISymbol, HashSet<ISymbol>> RefAliasReferents { get; }
+        private Dictionary<ISymbol, List<RefAliasFact>> RefAliasFacts { get; }
 
         public void Add(ProviderFact fact)
         {
@@ -68,29 +68,35 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        public void SetRefAlias(ISymbol alias, IEnumerable<ISymbol> referents)
+        public void SetRefAlias(
+            ISymbol alias,
+            IEnumerable<ISymbol> referents,
+            int position)
         {
             var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             foreach (var referent in referents)
             {
-                storageSymbols.UnionWith(ResolveStorageSymbols(referent));
+                storageSymbols.UnionWith(ResolveStorageSymbols(referent, position));
             }
 
-            RefAliasReferents[alias] = storageSymbols;
+            AddRefAliasFact(alias, position, storageSymbols);
         }
 
-        public void AddPossibleRefAliases(ISymbol alias, IEnumerable<ISymbol> referents)
+        public void AddPossibleRefAliases(
+            ISymbol alias,
+            IEnumerable<ISymbol> referents,
+            int position)
         {
-            var possibleReferents = ResolveStorageSymbols(alias);
+            var possibleReferents = ResolveStorageSymbols(alias, position);
             foreach (var referent in referents)
             {
-                possibleReferents.UnionWith(ResolveStorageSymbols(referent));
+                possibleReferents.UnionWith(ResolveStorageSymbols(referent, position));
             }
 
-            RefAliasReferents[alias] = possibleReferents;
+            AddRefAliasFact(alias, position, possibleReferents);
         }
 
-        public HashSet<ISymbol> ResolveStorageSymbols(ISymbol symbol)
+        public HashSet<ISymbol> ResolveStorageSymbols(ISymbol symbol, int position)
         {
             var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
@@ -105,7 +111,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                if (RefAliasReferents.TryGetValue(current, out var referents))
+                if (TryGetLatestRefAliasFactBefore(current, position, out var referents))
                 {
                     foreach (var referent in referents)
                     {
@@ -124,6 +130,50 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             }
 
             return storageSymbols;
+        }
+
+        private void AddRefAliasFact(
+            ISymbol alias,
+            int position,
+            HashSet<ISymbol> referents)
+        {
+            if (!RefAliasFacts.TryGetValue(alias, out var aliasFacts))
+            {
+                aliasFacts = [];
+                RefAliasFacts[alias] = aliasFacts;
+            }
+
+            aliasFacts.Add(new RefAliasFact(position, referents));
+        }
+
+        private bool TryGetLatestRefAliasFactBefore(
+            ISymbol alias,
+            int position,
+            out HashSet<ISymbol> referents)
+        {
+            RefAliasFact? latest = null;
+            if (RefAliasFacts.TryGetValue(alias, out var aliasFacts))
+            {
+                foreach (var aliasFact in aliasFacts)
+                {
+                    if (aliasFact.Position >= position ||
+                        latest is not null && aliasFact.Position <= latest.Value.Position)
+                    {
+                        continue;
+                    }
+
+                    latest = aliasFact;
+                }
+            }
+
+            if (latest is null)
+            {
+                referents = [];
+                return false;
+            }
+
+            referents = latest.Value.Referents;
+            return true;
         }
 
         public bool TryGetLatestFactBefore(
@@ -168,6 +218,19 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                  deferredPosition >= position);
             return true;
         }
+    }
+
+    private readonly struct RefAliasFact
+    {
+        public RefAliasFact(int position, HashSet<ISymbol> referents)
+        {
+            Position = position;
+            Referents = referents;
+        }
+
+        public int Position { get; }
+
+        public HashSet<ISymbol> Referents { get; }
     }
 
     private readonly struct ProviderFact
@@ -340,7 +403,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         var referents = GetRefReferentSymbols(expression, semanticModel).ToArray();
                         if (alias is not null && referents.Length > 0)
                         {
-                            facts.SetRefAlias(alias, referents);
+                            facts.SetRefAlias(alias, referents, refExpression.SpanStart);
                         }
 
                         continue;
@@ -367,11 +430,17 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                                     gotoSkippedAssignmentPositions,
                                     backwardGotoExecutableBoundaries))
                             {
-                                facts.SetRefAlias(refAlias, refReferents);
+                                facts.SetRefAlias(
+                                    refAlias,
+                                    refReferents,
+                                    refAssignment.SpanStart);
                             }
                             else
                             {
-                                facts.AddPossibleRefAliases(refAlias, refReferents);
+                                facts.AddPossibleRefAliases(
+                                    refAlias,
+                                    refReferents,
+                                    refAssignment.SpanStart);
                             }
                         }
 
@@ -386,7 +455,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                             {
                                 var deferredWritePosition =
                                     GetDeferredWriteReachabilityPosition(target);
-                                foreach (var storageSymbol in facts.ResolveStorageSymbols(targetSymbol))
+                                foreach (var storageSymbol in facts.ResolveStorageSymbols(
+                                             targetSymbol,
+                                             target.SpanStart))
                                 {
                                     if (deferredWritePosition.HasValue)
                                     {
@@ -434,7 +505,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 }
 
                 var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
-                foreach (var storageSymbol in facts.ResolveStorageSymbols(symbol))
+                foreach (var storageSymbol in facts.ResolveStorageSymbols(
+                             symbol,
+                             expression.SpanStart))
                 {
                     if (deferredPosition.HasValue)
                     {
@@ -473,7 +546,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         foreach (var referent in GetRefReferentSymbols(expression, semanticModel))
         {
-            storageSymbols.UnionWith(facts.ResolveStorageSymbols(referent));
+            storageSymbols.UnionWith(facts.ResolveStorageSymbols(
+                referent,
+                expression.SpanStart));
         }
 
         var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
@@ -689,7 +764,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     {
         bool? commonRootProvider = null;
         isPathStableForConditionalJoin = true;
-        foreach (var storageSymbol in providerFacts.ResolveStorageSymbols(symbol))
+        foreach (var storageSymbol in providerFacts.ResolveStorageSymbols(symbol, position))
         {
             if (!providerFacts.TryGetLatestFactBefore(
                     storageSymbol,
