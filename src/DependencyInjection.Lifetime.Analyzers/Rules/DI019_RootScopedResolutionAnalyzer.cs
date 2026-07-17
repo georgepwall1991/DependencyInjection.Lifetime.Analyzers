@@ -572,6 +572,22 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
     {
         expression = Unwrap(expression);
 
+        if (expression is ConditionalExpressionSyntax conditionalExpression)
+        {
+            return IsRootProviderExpression(
+                       conditionalExpression.WhenTrue,
+                       semanticModel,
+                       wellKnownTypes,
+                       providerFacts,
+                       position) &&
+                   IsRootProviderExpression(
+                       conditionalExpression.WhenFalse,
+                       semanticModel,
+                       wellKnownTypes,
+                       providerFacts,
+                       position);
+        }
+
         if (expression is InvocationExpressionSyntax invocation &&
             IsBuildServiceProviderInvocation(invocation, semanticModel))
         {
