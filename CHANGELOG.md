@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **DI002 caller-owned collection parameters** — scoped services now report when passed directly or through a tracked local to a mutating collection method on a parameter such as `destination.Add(service)`. The existing semantic guards still require a real enumerable receiver and a void/bool/int mutator result. Ordinary by-value parameters definitely replaced with fresh local collections stay quiet; intervening conditional, nested, or `ref`/`out` writes preserve the diagnostic, and `ref`/`out` parameter replacements still report because the replacement is caller-visible. Local collections remain quiet because they do not outlive the scope.
+- **DI002 caller-owned collection parameters** — scoped services now report when passed directly or through a tracked local to a mutating collection method on a parameter such as `destination.Add(service)`. The existing semantic guards still require a real enumerable receiver and a void/bool/int mutator result. Ordinary by-value parameters definitely replaced with fresh local collections stay quiet only while the replacement remains local; field/property storage, later returns, direct local aliases, intervening conditional/nested/`ref`/`out` writes, and caller-visible `ref`/`out` parameter replacements preserve the diagnostic. Local collections remain quiet because they do not outlive the scope.
 
 ## [2.18.24] - 2026-07-17
 
