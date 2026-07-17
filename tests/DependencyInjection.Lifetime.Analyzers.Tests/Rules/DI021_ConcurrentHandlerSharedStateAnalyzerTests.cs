@@ -599,6 +599,192 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedScopeNonGenericResolution_LongLivedScopeResolvedInsideHandler_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_scope.ServiceProvider.GetRequiredService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericGetService_LongLivedScopeResolvedInsideHandler_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:_scope.ServiceProvider.GetService(typeof(AppDbContext))|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericDirectStaticResolution_NamedArgumentsReordered_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = (AppDbContext){|DI021:ServiceProviderServiceExtensions.GetRequiredService(
+                            serviceType: typeof(AppDbContext),
+                            provider: _scope.ServiceProvider)|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_RuntimeType_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor, Type serviceType)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = _scope.ServiceProvider.GetRequiredService(serviceType);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedScopeNonGenericResolution_UserDefinedStaticHelper_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public static class CustomProviderExtensions
+            {
+                public static object GetRequiredService(IServiceProvider provider, Type serviceType) => new object();
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = CustomProviderExtensions.GetRequiredService(
+                            _scope.ServiceProvider,
+                            typeof(AppDbContext));
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task HandlerLocalScopeNonGenericResolution_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var db = (AppDbContext)scope.ServiceProvider.GetRequiredService(typeof(AppDbContext));
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedOuterScopeLocal_ResolvedInsideParallelBody_ReportsDiagnostic()
     {
         var source = BaseUsings + EfCoreStubs + """
