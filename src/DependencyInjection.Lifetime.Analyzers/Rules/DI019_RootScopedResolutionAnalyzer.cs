@@ -341,23 +341,16 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         if (alias is not null && referents.Length > 0)
                         {
                             facts.SetRefAlias(alias, referents);
-                            var deferredWritePosition = GetDeferredWriteReachabilityPosition(expression);
-                            foreach (var storageSymbol in facts.ResolveStorageSymbols(alias))
-                            {
-                                if (deferredWritePosition.HasValue)
-                                {
-                                    facts.MarkDeferredWrite(
-                                        storageSymbol,
-                                        deferredWritePosition.Value);
-                                }
-
-                                InvalidateProviderFact(
-                                    storageSymbol,
-                                    expression.SpanStart,
-                                    facts);
-                            }
                         }
 
+                        continue;
+                    case AssignmentExpressionSyntax refConditionalAssignment
+                        when refConditionalAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             Unwrap(refConditionalAssignment.Left) is ConditionalExpressionSyntax:
+                        InvalidateRefTargetFacts(
+                            refConditionalAssignment.Left,
+                            semanticModel,
+                            facts);
                         continue;
                     case AssignmentExpressionSyntax refAssignment
                         when refAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
@@ -446,7 +439,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     case ArgumentSyntax argument
                         when argument.RefKindKeyword.Kind() is
                             SyntaxKind.RefKeyword or SyntaxKind.OutKeyword:
-                        InvalidateRefArgumentFacts(argument, semanticModel, facts);
+                        InvalidateRefTargetFacts(argument.Expression, semanticModel, facts);
                         continue;
                     default:
                         continue;
@@ -489,12 +482,11 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         return factsByTree;
     }
 
-    private static void InvalidateRefArgumentFacts(
-        ArgumentSyntax argument,
+    private static void InvalidateRefTargetFacts(
+        ExpressionSyntax expression,
         SemanticModel semanticModel,
         ProviderFacts facts)
     {
-        var expression = argument.Expression;
         var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         foreach (var referent in GetRefReferentSymbols(expression, semanticModel))
         {
