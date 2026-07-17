@@ -3251,16 +3251,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         };
     }
 
-    private static bool IsProviderLike(ITypeSymbol? type)
+    private static bool IsProviderLike(ITypeSymbol? type) =>
+        IsProviderLike(type, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+
+    private static bool IsProviderLike(ITypeSymbol? type, HashSet<ISymbol> visited)
     {
-        if (type is null)
+        if (type is null || !visited.Add(type))
         {
             return false;
         }
 
         if (type is ITypeParameterSymbol typeParameter)
         {
-            return typeParameter.ConstraintTypes.Any(IsProviderLike);
+            return typeParameter.ConstraintTypes.Any(constraint => IsProviderLike(constraint, visited));
         }
 
         var ns = type.ContainingNamespace?.ToDisplayString();
