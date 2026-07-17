@@ -692,6 +692,75 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedStructProviderGenericResolution_BoxingConversion_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public readonly struct StructProvider : IServiceProvider
+            {
+                private readonly IServiceProvider _inner;
+
+                public StructProvider(IServiceProvider inner)
+                {
+                    _inner = inner;
+                }
+
+                public object GetService(Type serviceType) => _inner.GetService(serviceType);
+            }
+
+            public class Worker
+            {
+                private readonly StructProvider _provider;
+
+                public Worker(StructProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = {|DI021:_provider.GetRequiredService<AppDbContext>()|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task CapturedConstrainedProviderGenericResolution_BoxingConversion_ReportsDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public class Worker<TProvider>
+                where TProvider : IServiceProvider
+            {
+                private readonly TProvider _provider;
+
+                public Worker(TProvider provider)
+                {
+                    _provider = provider;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var db = {|DI021:_provider.GetRequiredService<AppDbContext>()|};
+                        db.Add(args);
+                        await db.SaveChangesAsync();
+                    };
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedScopeNonGenericDirectStaticResolution_NamedArgumentsReordered_ReportsDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
