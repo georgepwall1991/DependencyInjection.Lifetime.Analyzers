@@ -289,6 +289,28 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
+    public async Task TokenStoredInOtherwiseUnusedField_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+                private readonly IDisposable _subscription;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    _subscription = [|_ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task MultiCallback_StaticOnNextCapturingOnError_Reports()
     {
         var source = Prelude + SingletonTickerTransientHandler + """
@@ -378,18 +400,101 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
-    public async Task TokenStoredInField_Silent()
+    public async Task TokenStoredInFieldAndDisposedLater_Silent()
     {
         var source = Prelude + SingletonTickerTransientHandler + """
-            public class TickHandler
+            public class TickHandler : IDisposable
             {
                 private readonly ITicker _ticker;
-                private IDisposable _subscription;
+                private readonly IDisposable _subscription;
 
                 public TickHandler(ITicker ticker)
                 {
                     _ticker = ticker;
                     _subscription = _ticker.Subscribe(OnTick);
+                }
+
+                public void Dispose() => _subscription.Dispose();
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TokenStoredInFieldAndDisposedInAnotherPartialDeclaration_Silent()
+    {
+        var sources = new[]
+        {
+            ("TickHandler.cs", Prelude + SingletonTickerTransientHandler + """
+                public partial class TickHandler : IDisposable
+                {
+                    private readonly ITicker _ticker;
+                    private readonly IDisposable _subscription;
+
+                    public TickHandler(ITicker ticker)
+                    {
+                        _ticker = ticker;
+                        _subscription = _ticker.Subscribe(OnTick);
+                    }
+
+                    private void OnTick(int value) { }
+                }
+                """),
+            ("TickHandler.Dispose.cs", """
+                public partial class TickHandler
+                {
+                    public void Dispose() => _subscription.Dispose();
+                }
+                """)
+        };
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(sources);
+    }
+
+    [Fact]
+    public async Task TokenStoredInInheritedFieldAndDisposedBySubscriber_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public abstract class TickHandlerBase
+            {
+                protected IDisposable _subscription;
+            }
+
+            public class TickHandler : TickHandlerBase, IDisposable
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    _subscription = _ticker.Subscribe(OnTick);
+                }
+
+                public void Dispose() => _subscription.Dispose();
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task TokenStoredInPublicField_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+                public IDisposable Subscription;
+
+                public TickHandler(ITicker ticker)
+                {
+                    _ticker = ticker;
+                    Subscription = _ticker.Subscribe(OnTick);
                 }
 
                 private void OnTick(int value) { }

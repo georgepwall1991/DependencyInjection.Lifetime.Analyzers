@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.23] - 2026-07-17
+
+### Fixed
+
+- **DI027 otherwise-unused private subscription fields** — a `Subscribe(...)` token assigned directly to a private field declared on the subscriber now reports when that field has no other symbol-bound reference across any partial declaration. Any later disposal, return, argument pass, reassignment, or other field access remains conservative and silent; inherited and externally accessible fields also stay silent because handling outside the subscriber cannot be ruled out.
+
 ## [2.18.22] - 2026-07-17
 
 ### Fixed

@@ -258,11 +258,13 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
 
     /// <summary>
     /// Proves the subscription token is discarded: an ignored expression statement, a discard
-    /// assignment (<c>_ = obs.Subscribe(...)</c>), or a local variable initialized with the
-    /// Subscribe result that is never referenced again in the enclosing body (and is not a
-    /// <c>using</c> declaration). Anything that touches the token later — a <c>.Dispose()</c>, a
-    /// return, an argument, a field store, a <c>using</c> — stays silent because the token may be
-    /// disposed on a path the analyzer does not model.
+    /// assignment (<c>_ = obs.Subscribe(...)</c>), a local variable initialized with the Subscribe
+    /// result that is never referenced again in the enclosing body (and is not a <c>using</c>
+    /// declaration), or a private field declared on the subscriber and assigned the token but never
+    /// referenced anywhere else across the containing type's partial declarations. Anything that
+    /// touches the token later — a <c>.Dispose()</c>, a return, an argument, another field access, or
+    /// a <c>using</c> — stays silent because the token may be disposed on a path the analyzer does
+    /// not model.
     /// </summary>
     private static bool TokenIsLeaked(
         InvocationExpressionSyntax invocation,
@@ -290,7 +292,69 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        if (TokenIsStoredInOtherwiseUnusedField(node, parent, semanticModel, cancellationToken))
+        {
+            return true;
+        }
+
         return TokenIsUnreferencedLocal(node, parent, semanticModel, cancellationToken);
+    }
+
+    private static bool TokenIsStoredInOtherwiseUnusedField(
+        ExpressionSyntax node,
+        SyntaxNode? parent,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (parent is not AssignmentExpressionSyntax assignment ||
+            !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+            assignment.Right != node ||
+            semanticModel.GetSymbolInfo(assignment.Left, cancellationToken).Symbol is not IFieldSymbol field ||
+            field.DeclaredAccessibility != Accessibility.Private)
+        {
+            return false;
+        }
+
+        var containingType = GetEnclosingNamedType(assignment, semanticModel, cancellationToken);
+        if (!SymbolEqualityComparer.Default.Equals(field.ContainingType, containingType))
+        {
+            return false;
+        }
+
+        foreach (var typeReference in field.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            {
+                return false;
+            }
+
+            var typeModel = FactoryAnalysis.GetSemanticModelForNode(typeDeclaration, semanticModel);
+            if (typeModel is null)
+            {
+                return false;
+            }
+
+            foreach (var identifier in typeDeclaration.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                if (identifier.Identifier.ValueText != field.Name ||
+                    !SymbolEqualityComparer.Default.Equals(
+                        typeModel.GetSymbolInfo(identifier, cancellationToken).Symbol,
+                        field))
+                {
+                    continue;
+                }
+
+                var isAssignmentTarget = identifier.SyntaxTree == assignment.SyntaxTree &&
+                    identifier.SpanStart >= assignment.Left.SpanStart &&
+                    identifier.Span.End <= assignment.Left.Span.End;
+                if (!isAssignmentTarget)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static bool TokenIsUnreferencedLocal(
