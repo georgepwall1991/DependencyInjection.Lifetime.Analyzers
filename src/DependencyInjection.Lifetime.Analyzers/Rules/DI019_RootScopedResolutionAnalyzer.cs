@@ -245,6 +245,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             #pragma warning restore RS1030
             var facts = new ProviderFacts();
             var root = tree.GetRoot();
+            var gotoSkippedAssignmentPositions = GetGotoSkippedAssignmentPositions(root);
 
             foreach (var node in root.DescendantNodes())
             {
@@ -253,6 +254,14 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 var forceInvalidation = false;
                 switch (node)
                 {
+                    case VariableDeclaratorSyntax
+                    {
+                        Initializer.Value: RefExpressionSyntax refExpression
+                    }:
+                        expression = refExpression.Expression;
+                        symbol = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
+                        forceInvalidation = true;
+                        break;
                     case VariableDeclaratorSyntax { Initializer.Value: { } initializer } variable:
                         symbol = semanticModel.GetDeclaredSymbol(variable);
                         expression = initializer;
@@ -290,7 +299,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     expression.SpanStart,
                     semanticModel,
                     wellKnownTypes,
-                    facts);
+                    facts,
+                    gotoSkippedAssignmentPositions);
             }
 
             factsByTree[tree] = facts;
@@ -305,12 +315,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         int position,
         SemanticModel semanticModel,
         WellKnownTypes wellKnownTypes,
-        ProviderFacts facts)
+        ProviderFacts facts,
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions)
     {
         var isPathStableForConditionalJoin =
             symbol is not IFieldSymbol &&
             symbol is not IPropertySymbol &&
-            IsPathStableForConditionalJoin(expression) &&
+            IsPathStableForConditionalJoin(expression, gotoSkippedAssignmentPositions) &&
             IsReferencedProviderFactPathStableForConditionalJoin(
                 expression,
                 position,
@@ -354,15 +365,68 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool IsPathStableForConditionalJoin(ExpressionSyntax expression)
+    private static bool IsPathStableForConditionalJoin(
+        ExpressionSyntax expression,
+        ImmutableHashSet<int> gotoSkippedAssignmentPositions)
     {
         if (expression.Parent is not AssignmentExpressionSyntax assignment)
         {
             return true;
         }
 
-        return !assignment.Ancestors().Any(IsControlFlowDependentProviderWrite);
+        return !gotoSkippedAssignmentPositions.Contains(assignment.SpanStart) &&
+               !assignment.Ancestors().Any(IsControlFlowDependentProviderWrite);
     }
+
+    private static ImmutableHashSet<int> GetGotoSkippedAssignmentPositions(SyntaxNode root)
+    {
+        var labels = root.DescendantNodes().OfType<LabeledStatementSyntax>().ToArray();
+        if (labels.Length == 0)
+        {
+            return ImmutableHashSet<int>.Empty;
+        }
+
+        var assignments = root.DescendantNodes().OfType<AssignmentExpressionSyntax>().ToArray();
+        var builder = ImmutableHashSet.CreateBuilder<int>();
+        foreach (var gotoStatement in root.DescendantNodes().OfType<GotoStatementSyntax>())
+        {
+            if (gotoStatement.Expression is not IdentifierNameSyntax target)
+            {
+                continue;
+            }
+
+            var label = labels.FirstOrDefault(candidate =>
+                candidate.Identifier.ValueText == target.Identifier.ValueText &&
+                ReferenceEquals(
+                    GetExecutableBoundary(candidate),
+                    GetExecutableBoundary(gotoStatement)));
+            if (label is null || label.SpanStart <= gotoStatement.Span.End)
+            {
+                continue;
+            }
+
+            foreach (var assignment in assignments)
+            {
+                if (assignment.SpanStart >= gotoStatement.Span.End &&
+                    assignment.Span.End <= label.SpanStart &&
+                    ReferenceEquals(
+                        GetExecutableBoundary(assignment),
+                        GetExecutableBoundary(gotoStatement)))
+                {
+                    builder.Add(assignment.SpanStart);
+                }
+            }
+        }
+
+        return builder.ToImmutable();
+    }
+
+    private static SyntaxNode? GetExecutableBoundary(SyntaxNode node) =>
+        node.AncestorsAndSelf().FirstOrDefault(static ancestor =>
+            ancestor is BaseMethodDeclarationSyntax or
+                AccessorDeclarationSyntax or
+                LocalFunctionStatementSyntax or
+                AnonymousFunctionExpressionSyntax);
 
     private static bool IsReferencedProviderFactPathStableForConditionalJoin(
         ExpressionSyntax expression,
