@@ -68,13 +68,25 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        public void SetRefAlias(ISymbol alias, ISymbol referent) =>
-            RefAliasReferents[alias] = ResolveStorageSymbols(referent);
+        public void SetRefAlias(ISymbol alias, IEnumerable<ISymbol> referents)
+        {
+            var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            foreach (var referent in referents)
+            {
+                storageSymbols.UnionWith(ResolveStorageSymbols(referent));
+            }
 
-        public void AddPossibleRefAlias(ISymbol alias, ISymbol referent)
+            RefAliasReferents[alias] = storageSymbols;
+        }
+
+        public void AddPossibleRefAliases(ISymbol alias, IEnumerable<ISymbol> referents)
         {
             var possibleReferents = ResolveStorageSymbols(alias);
-            possibleReferents.UnionWith(ResolveStorageSymbols(referent));
+            foreach (var referent in referents)
+            {
+                possibleReferents.UnionWith(ResolveStorageSymbols(referent));
+            }
+
             RefAliasReferents[alias] = possibleReferents;
         }
 
@@ -325,10 +337,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     } variable:
                         expression = refExpression.Expression;
                         var alias = semanticModel.GetDeclaredSymbol(variable);
-                        var referent = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
-                        if (alias is not null && referent is not null)
+                        var referents = GetRefReferentSymbols(expression, semanticModel).ToArray();
+                        if (alias is not null && referents.Length > 0)
                         {
-                            facts.SetRefAlias(alias, referent);
+                            facts.SetRefAlias(alias, referents);
                             var deferredWritePosition = GetDeferredWriteReachabilityPosition(expression);
                             foreach (var storageSymbol in facts.ResolveStorageSymbols(alias))
                             {
@@ -351,21 +363,22 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         when refAssignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
                              refAssignment.Right is RefExpressionSyntax refAssignmentExpression:
                         var refAlias = semanticModel.GetSymbolInfo(refAssignment.Left).Symbol;
-                        var refReferent = semanticModel
-                            .GetSymbolInfo(Unwrap(refAssignmentExpression.Expression))
-                            .Symbol;
-                        if (refAlias is not null && refReferent is not null)
+                        var refReferents = GetRefReferentSymbols(
+                                refAssignmentExpression.Expression,
+                                semanticModel)
+                            .ToArray();
+                        if (refAlias is not null && refReferents.Length > 0)
                         {
                             if (IsPathStableForConditionalJoin(
                                     refAssignment.Right,
                                     gotoSkippedAssignmentPositions,
                                     backwardGotoExecutableBoundaries))
                             {
-                                facts.SetRefAlias(refAlias, refReferent);
+                                facts.SetRefAlias(refAlias, refReferents);
                             }
                             else
                             {
-                                facts.AddPossibleRefAlias(refAlias, refReferent);
+                                facts.AddPossibleRefAliases(refAlias, refReferents);
                             }
 
                             var deferredWritePosition =
@@ -692,6 +705,47 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return earliestPosition;
+    }
+
+    private static IEnumerable<ISymbol> GetRefReferentSymbols(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        expression = Unwrap(expression);
+        if (expression is RefExpressionSyntax refExpression)
+        {
+            foreach (var symbol in GetRefReferentSymbols(refExpression.Expression, semanticModel))
+            {
+                yield return symbol;
+            }
+
+            yield break;
+        }
+
+        if (expression is ConditionalExpressionSyntax conditionalExpression)
+        {
+            foreach (var symbol in GetRefReferentSymbols(
+                         conditionalExpression.WhenTrue,
+                         semanticModel))
+            {
+                yield return symbol;
+            }
+
+            foreach (var symbol in GetRefReferentSymbols(
+                         conditionalExpression.WhenFalse,
+                         semanticModel))
+            {
+                yield return symbol;
+            }
+
+            yield break;
+        }
+
+        var referent = semanticModel.GetSymbolInfo(expression).Symbol;
+        if (referent is not null)
+        {
+            yield return referent;
+        }
     }
 
     private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
