@@ -286,7 +286,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         WellKnownTypes wellKnownTypes,
         ProviderFacts facts)
     {
-        var isPathStableForConditionalJoin = IsPathStableForConditionalJoin(expression);
+        var isPathStableForConditionalJoin =
+            IsPathStableForConditionalJoin(expression) &&
+            IsReferencedProviderFactPathStableForConditionalJoin(
+                expression,
+                position,
+                semanticModel,
+                facts);
         if (IsScopedProviderExpression(expression, semanticModel, wellKnownTypes, facts, position))
         {
             facts.Facts.Add(new ProviderFact(
@@ -315,6 +321,23 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return !assignment.Ancestors().Any(IsControlFlowDependentProviderWrite);
+    }
+
+    private static bool IsReferencedProviderFactPathStableForConditionalJoin(
+        ExpressionSyntax expression,
+        int position,
+        SemanticModel semanticModel,
+        ProviderFacts providerFacts)
+    {
+        expression = Unwrap(expression);
+        var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
+        return symbol is null ||
+               !providerFacts.TryGetLatestFactBefore(
+                   symbol,
+                   position,
+                   out _,
+                   out var isPathStableForConditionalJoin) ||
+               isPathStableForConditionalJoin;
     }
 
     private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
