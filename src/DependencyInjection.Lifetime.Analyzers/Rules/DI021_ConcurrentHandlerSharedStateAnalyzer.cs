@@ -2585,7 +2585,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                     continue;
                 case IConversionOperation conversion
                     when conversion.OperatorMethod is null &&
-                         (conversion.Conversion.IsIdentity || conversion.Conversion.IsReference):
+                         (conversion.Conversion.IsIdentity ||
+                          conversion.Conversion.IsReference ||
+                          IsBuiltInBoxingConversion(conversion)):
                     current = conversion.Operand;
                     continue;
                 default:
@@ -2593,6 +2595,10 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
         }
     }
+
+    private static bool IsBuiltInBoxingConversion(IConversionOperation conversion) =>
+        conversion.Operand.Type is { IsReferenceType: false } &&
+        conversion.Type is { IsReferenceType: true };
 
     /// <summary>
     /// True when the handler returns Task/ValueTask (including generic forms). A non-async
@@ -3250,6 +3256,11 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         if (type is null)
         {
             return false;
+        }
+
+        if (type is ITypeParameterSymbol typeParameter)
+        {
+            return typeParameter.ConstraintTypes.Any(IsProviderLike);
         }
 
         var ns = type.ContainingNamespace?.ToDisplayString();
