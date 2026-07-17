@@ -2498,6 +2498,109 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderLocalFunctionLocalAfterRootWrite_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseProvider)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+
+                    void Resolve()
+                    {
+                        IServiceProvider provider = scope.ServiceProvider;
+                        provider = root;
+                        {|#0:(chooseProvider ? provider : root).GetRequiredService<IScopedService>()|};
+                    }
+
+                    Resolve();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ConditionalProviderLambdaLocal_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseProvider)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+
+                    Action resolve = () =>
+                    {
+                        IServiceProvider provider = root;
+                        {|#0:(chooseProvider ? provider : root).GetRequiredService<IScopedService>()|};
+                    };
+
+                    resolve();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
+    public async Task ConditionalProviderLambdaLocalAfterRootWrite_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseProvider)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+
+                    Action resolve = () =>
+                    {
+                        IServiceProvider provider = scope.ServiceProvider;
+                        provider = root;
+                        {|#0:(chooseProvider ? provider : root).GetRequiredService<IScopedService>()|};
+                    };
+
+                    resolve();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Fact]
     public async Task ConditionalProviderAliasAfterCoalesceAssignment_NoDiagnostic()
     {
         var source = Usings + """
