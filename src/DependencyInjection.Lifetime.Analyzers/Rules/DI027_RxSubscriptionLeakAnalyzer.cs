@@ -328,9 +328,11 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            var typeModel = typeDeclaration.SyntaxTree == semanticModel.SyntaxTree
-                ? semanticModel
-                : semanticModel.Compilation.GetSemanticModel(typeDeclaration.SyntaxTree);
+            var typeModel = FactoryAnalysis.GetSemanticModelForNode(typeDeclaration, semanticModel);
+            if (typeModel is null)
+            {
+                return false;
+            }
 
             foreach (var identifier in typeDeclaration.DescendantNodes().OfType<IdentifierNameSyntax>())
             {
