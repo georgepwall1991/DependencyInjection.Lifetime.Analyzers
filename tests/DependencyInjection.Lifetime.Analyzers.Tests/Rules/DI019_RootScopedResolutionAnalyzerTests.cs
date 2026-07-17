@@ -1939,6 +1939,34 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderAliasAfterUnknownWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                private static IServiceProvider GetProvider(IServiceProvider provider) => provider;
+
+                public void Configure(
+                    IServiceCollection services,
+                    IServiceProvider unknownProvider,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    IServiceProvider candidate = root;
+                    candidate = GetProvider(unknownProvider);
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
     {
         var source = Usings + """
