@@ -446,10 +446,8 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     case ArgumentSyntax argument
                         when argument.RefKindKeyword.Kind() is
                             SyntaxKind.RefKeyword or SyntaxKind.OutKeyword:
-                        expression = argument.Expression;
-                        symbol = semanticModel.GetSymbolInfo(Unwrap(expression)).Symbol;
-                        forceInvalidation = true;
-                        break;
+                        InvalidateRefArgumentFacts(argument, semanticModel, facts);
+                        continue;
                     default:
                         continue;
                 }
@@ -489,6 +487,30 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         return factsByTree;
+    }
+
+    private static void InvalidateRefArgumentFacts(
+        ArgumentSyntax argument,
+        SemanticModel semanticModel,
+        ProviderFacts facts)
+    {
+        var expression = argument.Expression;
+        var storageSymbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var referent in GetRefReferentSymbols(expression, semanticModel))
+        {
+            storageSymbols.UnionWith(facts.ResolveStorageSymbols(referent));
+        }
+
+        var deferredPosition = GetDeferredWriteReachabilityPosition(expression);
+        foreach (var storageSymbol in storageSymbols)
+        {
+            if (deferredPosition.HasValue)
+            {
+                facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
+            }
+
+            InvalidateProviderFact(storageSymbol, expression.SpanStart, facts);
+        }
     }
 
     private static void AddProviderFact(
