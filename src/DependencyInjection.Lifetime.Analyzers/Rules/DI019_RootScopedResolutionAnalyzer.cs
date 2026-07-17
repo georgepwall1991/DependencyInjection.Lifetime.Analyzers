@@ -519,9 +519,15 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                foreach (var storageSymbol in facts.ResolveStorageSymbols(
-                             symbol,
-                             expression.SpanStart))
+                var storageSymbols = facts.ResolveStorageSymbols(
+                        symbol,
+                        expression.SpanStart)
+                    .ToArray();
+                var isAmbiguousRefWrite =
+                    node is AssignmentExpressionSyntax &&
+                    storageSymbols.Length > 1;
+
+                foreach (var storageSymbol in storageSymbols)
                 {
                     var deferredPosition = GetDeferredWriteReachabilityPosition(
                         expression,
@@ -531,7 +537,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                         facts.MarkDeferredWrite(storageSymbol, deferredPosition.Value);
                     }
 
-                    if (forceInvalidation)
+                    if (forceInvalidation || isAmbiguousRefWrite)
                     {
                         InvalidateProviderFact(storageSymbol, writePosition, facts);
                         continue;
