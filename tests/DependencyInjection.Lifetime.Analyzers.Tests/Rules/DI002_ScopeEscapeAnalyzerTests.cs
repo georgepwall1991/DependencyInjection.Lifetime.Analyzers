@@ -998,6 +998,53 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     [Fact]
+    public async Task ScopedService_AddedAfterConditionalCollectionParameterReassignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(
+                    ICollection<IMyService> destination,
+                    ICollection<IMyService> replacement,
+                    bool useReplacement)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    destination = new List<IMyService>();
+                    if (useReplacement)
+                    {
+                        destination = replacement;
+                    }
+
+                    destination.Add({|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ScopedService_FieldDictionaryIndexerAssignment_ReportsDiagnostic()
     {
         var source = Usings + """
