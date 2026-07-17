@@ -1841,6 +1841,72 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ConditionalProviderFieldWithCrossMethodRootWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                private IServiceProvider _provider = null!;
+
+                public void SetScoped(IServiceScope scope)
+                {
+                    _provider = scope.ServiceProvider;
+                }
+
+                public void SetRoot(IServiceCollection services)
+                {
+                    _provider = services.BuildServiceProvider();
+                }
+
+                public void Resolve(IServiceCollection services, bool chooseField)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    (chooseField ? _provider : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderPropertyWithCrossMethodRootWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                private IServiceProvider Provider { get; set; } = null!;
+
+                public void SetScoped(IServiceScope scope)
+                {
+                    Provider = scope.ServiceProvider;
+                }
+
+                public void SetRoot(IServiceCollection services)
+                {
+                    Provider = services.BuildServiceProvider();
+                }
+
+                public void Resolve(IServiceCollection services, bool chooseProperty)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    (chooseProperty ? Provider : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ProviderAlias_ReassignedFromRootToCoalescedScoped_NoDiagnostic()
     {
         var source = Usings + """
