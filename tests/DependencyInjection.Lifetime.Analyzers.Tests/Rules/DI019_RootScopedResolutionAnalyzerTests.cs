@@ -2823,6 +2823,67 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task RefMutationInRightHandSideBeforeAliasClassification_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = root;
+                    IServiceProvider alias = root;
+
+                    alias = Mutate(ref candidate, scope.ServiceProvider)
+                        ? candidate
+                        : candidate;
+
+                    alias.GetRequiredService<IScopedService>();
+                }
+
+                private static bool Mutate(
+                    ref IServiceProvider candidate,
+                    IServiceProvider replacement)
+                {
+                    candidate = replacement;
+                    return true;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ResolutionThroughFieldDuringItsInitializer_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                private static IServiceProvider? Candidate =
+                    Candidate?.GetRequiredService<IScopedService>() is null
+                        ? new ServiceCollection().BuildServiceProvider()
+                        : new ServiceCollection().BuildServiceProvider();
+
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ConditionalProviderAliasAfterCoalesceAssignment_NoDiagnostic()
     {
         var source = Usings + """
