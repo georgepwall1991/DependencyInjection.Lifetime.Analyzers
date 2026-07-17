@@ -2367,19 +2367,20 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             if (operation is not IInvocationOperation invocation ||
                 invocation.TargetMethod.Name is not
                     ("GetService" or "GetRequiredService" or "GetKeyedService" or "GetRequiredKeyedService") ||
-                invocation.TargetMethod.TypeArguments.Length != 1)
+                !TryGetCapturedScopeResolvedType(context.Compilation, invocation, out var resolvedType))
             {
                 continue;
             }
 
-            var resolvedType = invocation.TargetMethod.TypeArguments[0];
             var catalogName = MatchNonThreadSafeCatalog(resolvedType);
             if (catalogName is null)
             {
                 continue;
             }
 
-            var receiver = invocation.Instance ?? invocation.Arguments.FirstOrDefault()?.Value;
+            var receiver = invocation.Instance ??
+                invocation.Arguments.FirstOrDefault(argument => argument.Parameter?.Ordinal == 0)?.Value ??
+                invocation.Arguments.FirstOrDefault()?.Value;
             if (receiver is null)
             {
                 continue;
@@ -2425,6 +2426,84 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 captureSite: origin.DeclaringSyntaxReferences.FirstOrDefault(),
                 uses: new List<SyntaxNode> { invocation.Syntax });
         }
+    }
+
+    private static bool TryGetCapturedScopeResolvedType(
+        Compilation compilation,
+        IInvocationOperation invocation,
+        out ITypeSymbol resolvedType)
+    {
+        if (invocation.TargetMethod.TypeArguments.Length == 1)
+        {
+            resolvedType = invocation.TargetMethod.TypeArguments[0];
+            return true;
+        }
+
+        var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
+        if (sourceMethod.Name is not ("GetService" or "GetRequiredService") ||
+            !IsSupportedNonGenericServiceResolution(sourceMethod, compilation))
+        {
+            resolvedType = null!;
+            return false;
+        }
+
+        var serviceTypeArgument = invocation.Arguments.FirstOrDefault(argument =>
+            argument.Parameter?.Name is "serviceType" or "type");
+        if (serviceTypeArgument is null ||
+            Unwrap(serviceTypeArgument.Value) is not ITypeOfOperation typeOfOperation)
+        {
+            resolvedType = null!;
+            return false;
+        }
+
+        resolvedType = typeOfOperation.TypeOperand;
+        return true;
+    }
+
+    private static bool IsSupportedNonGenericServiceResolution(
+        IMethodSymbol sourceMethod,
+        Compilation compilation)
+    {
+        if (sourceMethod.IsGenericMethod)
+        {
+            return false;
+        }
+
+        if (sourceMethod.IsExtensionMethod)
+        {
+            return sourceMethod.ContainingType.Name == "ServiceProviderServiceExtensions" &&
+                   sourceMethod.ContainingType.ContainingNamespace.ToDisplayString() ==
+                   "Microsoft.Extensions.DependencyInjection" &&
+                   sourceMethod.ContainingAssembly.Name ==
+                   "Microsoft.Extensions.DependencyInjection.Abstractions";
+        }
+
+        var interfaceType = compilation.GetTypeByMetadataName("System.IServiceProvider");
+        if (interfaceType is null)
+        {
+            return false;
+        }
+
+        foreach (var interfaceMethod in interfaceType.GetMembers(sourceMethod.Name).OfType<IMethodSymbol>())
+        {
+            if (SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.OriginalDefinition,
+                    interfaceMethod.OriginalDefinition))
+            {
+                return true;
+            }
+
+            var implementation = sourceMethod.ContainingType.FindImplementationForInterfaceMember(interfaceMethod);
+            if (implementation is IMethodSymbol implementationMethod &&
+                SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.OriginalDefinition,
+                    implementationMethod.OriginalDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ISymbol? ResolveProviderOrigin(IOperation receiver)
