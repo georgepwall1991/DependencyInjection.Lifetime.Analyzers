@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **DI015 Generic Host lifetime service fidelity** — `Microsoft.Extensions.Hosting.IHostLifetime`, which the Generic Host registers as a singleton, now participates in the default framework-services assumption alongside `IHostApplicationLifetime`. Strict mode, same-named user types, and keyed requests still report; the shared dependency-resolution engine now preserves the key when consulting framework lifetime classification instead of silently treating keyed framework requests as ambient.
+- **DI015 Generic Host lifetime service fidelity** — `Microsoft.Extensions.Hosting.IHostLifetime`, which the Generic Host registers as a singleton, now participates in the default framework-services assumption alongside `IHostApplicationLifetime`. Strict mode, same-named user types, and keyed requests still report; shared dependency analysis now preserves the key and lets explicit registrations override ambient framework lifetimes, so scoped `IHostLifetime` replacements remain visible to DI019 and DI020.
 
 ## [2.18.20] - 2026-07-17
 
