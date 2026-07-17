@@ -961,6 +961,42 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task LocalRootProviderResolvingTransientWithScopedHostLifetimeOverride_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class ScopedHostLifetime : Microsoft.Extensions.Hosting.IHostLifetime { }
+            public interface IJobRunner { }
+            public sealed class JobRunner : IJobRunner
+            {
+                public JobRunner(Microsoft.Extensions.Hosting.IHostLifetime hostLifetime) { }
+            }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<Microsoft.Extensions.Hosting.IHostLifetime, ScopedHostLifetime>();
+                    services.AddTransient<IJobRunner, JobRunner>();
+                    var provider = services.BuildServiceProvider();
+                    {|#0:provider.GetRequiredService<IJobRunner>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IJobRunner", "IJobRunner -> IHostLifetime"));
+    }
+
+    [Fact]
     public async Task StaticGetRequiredServiceFromLocalRootProvider_ReportsDiagnostic()
     {
         var source = Usings + """

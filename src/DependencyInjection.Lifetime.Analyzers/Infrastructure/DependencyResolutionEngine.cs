@@ -233,15 +233,16 @@ internal sealed class DependencyResolutionEngine
                     continue;
                 }
 
+                var serviceKey = GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
                 if (ShouldSkipDependencyCheck(
                         parameter.Type,
                         parameter,
+                        serviceKey.IsKeyed,
                         assumeFrameworkServicesRegistered))
                 {
                     continue;
                 }
 
-                var serviceKey = GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
                 if (serviceKey.IsUnknown)
                 {
                     return ResolutionResult.Resolvable(ResolutionConfidence.Unknown);
@@ -301,7 +302,11 @@ internal sealed class DependencyResolutionEngine
         Dictionary<ServiceLookupKey, ResolutionResult> resolutionCache,
         HashSet<ServiceLookupKey> resolutionPath)
     {
-        if (ShouldSkipDependencyCheck(request.Type, parameter: null, assumeFrameworkServicesRegistered))
+        if (ShouldSkipDependencyCheck(
+                request.Type,
+                parameter: null,
+                request.IsKeyed,
+                assumeFrameworkServicesRegistered))
         {
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
         }
@@ -468,6 +473,7 @@ internal sealed class DependencyResolutionEngine
     private bool ShouldSkipDependencyCheck(
         ITypeSymbol dependencyType,
         IParameterSymbol? parameter,
+        bool isKeyed,
         bool assumeFrameworkServicesRegistered)
     {
         if (parameter?.HasExplicitDefaultValue == true)
@@ -493,7 +499,7 @@ internal sealed class DependencyResolutionEngine
             return true;
         }
 
-        return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType);
+        return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType, isKeyed);
     }
 
     private static bool IsContainerProvidedDependency(ITypeSymbol dependencyType)
@@ -508,7 +514,7 @@ internal sealed class DependencyResolutionEngine
                namedType.ContainingNamespace.ToDisplayString() == "System.Collections.Generic";
     }
 
-    private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType)
+    private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType, bool isKeyed)
     {
         if (IsExplicitFrameworkRegistrationRequired(dependencyType))
         {
@@ -517,7 +523,7 @@ internal sealed class DependencyResolutionEngine
 
         return _knownLifetimeClassifier.TryGetLifetime(
             dependencyType,
-            isKeyed: false,
+            isKeyed,
             out _);
     }
 

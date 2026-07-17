@@ -240,6 +240,64 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
     }
 
     [Fact]
+    public async Task Middleware_KeyedScopedHostLifetimeOverride_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                [AttributeUsage(AttributeTargets.Parameter)]
+                public class FromKeyedServicesAttribute : Attribute
+                {
+                    public object Key { get; }
+                    public FromKeyedServicesAttribute(object key) { Key = key; }
+                }
+
+                public static class ServiceCollectionServiceExtensions
+                {
+                    public static IServiceCollection AddKeyedScoped<TService, TImplementation>(this IServiceCollection services, object? serviceKey)
+                        where TService : class where TImplementation : class, TService => services;
+                }
+            }
+
+            namespace Microsoft.Extensions.Hosting
+            {
+                public interface IHostLifetime { }
+            }
+
+            public sealed class ScopedHostLifetime : Microsoft.Extensions.Hosting.IHostLifetime { }
+
+            public sealed class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(
+                    RequestDelegate next,
+                    [FromKeyedServices("blue")] Microsoft.Extensions.Hosting.IHostLifetime [|hostLifetime|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<Microsoft.Extensions.Hosting.IHostLifetime, ScopedHostLifetime>("blue");
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    app.UseMiddleware<MyMiddleware>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task Middleware_KeyedDependency_DifferentKeyRegisteredSingleton_NoDiagnostic()
     {
         // The keyed lookup must match the parameter's key: the scoped registration uses another
