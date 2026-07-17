@@ -373,23 +373,6 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                             {
                                 facts.AddPossibleRefAliases(refAlias, refReferents);
                             }
-
-                            var deferredWritePosition =
-                                GetDeferredWriteReachabilityPosition(refAssignmentExpression.Expression);
-                            foreach (var storageSymbol in facts.ResolveStorageSymbols(refAlias))
-                            {
-                                if (deferredWritePosition.HasValue)
-                                {
-                                    facts.MarkDeferredWrite(
-                                        storageSymbol,
-                                        deferredWritePosition.Value);
-                                }
-
-                                InvalidateProviderFact(
-                                    storageSymbol,
-                                    refAssignmentExpression.Expression.SpanStart,
-                                    facts);
-                            }
                         }
 
                         continue;
