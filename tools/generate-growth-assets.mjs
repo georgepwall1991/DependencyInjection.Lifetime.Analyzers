@@ -2079,7 +2079,7 @@ function buildBaseUrl(repositoryUrl) {
 }
 
 function toGitHubUrl(repositoryUrl, relativePath) {
-  return `${repositoryUrl}/blob/master/${relativePath.replace(/\\/g, "/")}`;
+  return `${repositoryUrl}/blob/main/${relativePath.replace(/\\/g, "/")}`;
 }
 
 function replaceBetweenMarkers(text, startMarker, endMarker, replacement) {
