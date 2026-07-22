@@ -221,12 +221,12 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             // _cache.Add(scope.ServiceProvider.GetRequiredService<T>()) — the resolution is an
-            // argument to a mutation method on a field/property-held container that outlives
-            // the scope.
+            // argument to a mutation method on a field/property-held container or caller-owned
+            // collection parameter that outlives the scope.
             if (consumption.Parent is ArgumentSyntax argumentShape &&
                 argumentShape.Parent is ArgumentListSyntax argumentList &&
                 argumentList.Parent is InvocationExpressionSyntax mutationInvocation &&
-                TryGetFieldCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
+                TryGetEscapingCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
             {
                 ReportDiagnostic(context, invocation, directContainerName, reportedSpans);
             }
@@ -388,9 +388,10 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             // _cache.Add(service) / _cache.Insert(0, service) — a tracked service or capturing
-            // delegate handed to a mutation method on a field/property-held container.
+            // delegate handed to a mutation method on a field/property-held container or
+            // caller-owned collection parameter.
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out var containerName))
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out var containerName))
             {
                 foreach (var argument in mutationCall.ArgumentList.Arguments)
                 {
@@ -440,11 +441,11 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         ImmutableHashSet.Create("Add", "Insert", "Enqueue", "Push", "TryAdd");
 
     /// <summary>
-    /// Matches mutation calls on containers held by fields or properties — storage that outlives
-    /// the scope. Local containers stay quiet: they live and die with the scope unless they
-    /// escape through one of the other sinks.
+    /// Matches mutation calls on containers held by fields, properties, or caller-owned
+    /// parameters — storage that outlives the scope. Local containers and parameters definitely
+    /// replaced with fresh local collections stay quiet unless they escape through another sink.
     /// </summary>
-    private static bool TryGetFieldCollectionMutation(
+    private static bool TryGetEscapingCollectionMutation(
         InvocationExpressionSyntax call,
         SemanticModel semanticModel,
         out string containerName)
@@ -513,13 +514,218 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         var receiver = semanticModel.GetSymbolInfo(receiverExpression).Symbol;
-        if (receiver is IFieldSymbol or IPropertySymbol)
+        if (receiver is IParameterSymbol parameter &&
+            ParameterDefinitelyReassignedToFreshCollectionBefore(call, parameter, semanticModel))
+        {
+            return false;
+        }
+
+        if (receiver is IFieldSymbol or IPropertySymbol or IParameterSymbol)
         {
             containerName = receiver.Name;
             return true;
         }
 
         return false;
+    }
+
+    private static bool ParameterDefinitelyReassignedToFreshCollectionBefore(
+        InvocationExpressionSyntax call,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        // Replacing a ref/out parameter updates caller-visible storage, so even a fresh
+        // collection assigned here can escape the scope through the parameter itself.
+        if (parameter.RefKind is not RefKind.None)
+        {
+            return false;
+        }
+
+        var currentStatement = call.FirstAncestorOrSelf<StatementSyntax>();
+        while (currentStatement is not null)
+        {
+            if (currentStatement.Parent is not BlockSyntax block)
+            {
+                currentStatement = currentStatement.Parent?.FirstAncestorOrSelf<StatementSyntax>();
+                continue;
+            }
+
+            var statementIndex = block.Statements.IndexOf(currentStatement);
+            for (var index = statementIndex - 1; index >= 0; index--)
+            {
+                var statement = block.Statements[index];
+                if (statement is ExpressionStatementSyntax
+                    {
+                        Expression: AssignmentExpressionSyntax assignment,
+                    } &&
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                        parameter))
+                {
+                    var isFreshCollection = assignment.Right is ObjectCreationExpressionSyntax or
+                                ImplicitObjectCreationExpressionSyntax &&
+                        semanticModel.GetTypeInfo(assignment.Right).Type is { } replacementType &&
+                        IsEnumerableLike(replacementType);
+
+                    return isFreshCollection &&
+                        !ParameterReplacementEscapes(
+                            assignment,
+                            call,
+                            parameter,
+                            semanticModel);
+                }
+
+                // Any intervening conditional/nested/ref write can replace the proven-fresh
+                // value on a path to the mutation, so caller-owned storage may be reachable.
+                if (StatementMayWriteParameter(statement, parameter, semanticModel))
+                {
+                    return false;
+                }
+            }
+
+            currentStatement = block.FirstAncestorOrSelf<StatementSyntax>();
+        }
+
+        return false;
+    }
+
+    private static bool ParameterReplacementEscapes(
+        AssignmentExpressionSyntax freshAssignment,
+        InvocationExpressionSyntax mutationCall,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        var executableRoot = mutationCall.Ancestors()
+            .FirstOrDefault(ExecutableSyntaxHelper.IsExecutableBoundary);
+        if (executableRoot is null ||
+            !ExecutableSyntaxHelper.TryGetExecutableBody(executableRoot, out var executableBody))
+        {
+            return true;
+        }
+
+        var aliases = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        {
+            if (node.SpanStart <= freshAssignment.SpanStart)
+            {
+                continue;
+            }
+
+            if (node is ReturnStatementSyntax returnStatement &&
+                returnStatement.SpanStart > mutationCall.SpanStart &&
+                ExpressionRetainsParameterReplacement(
+                    returnStatement.Expression,
+                    parameter,
+                    aliases,
+                    semanticModel))
+            {
+                return true;
+            }
+
+            if (node is AssignmentExpressionSyntax assignment)
+            {
+                var retainsReplacement = ExpressionRetainsParameterReplacement(
+                    assignment.Right,
+                    parameter,
+                    aliases,
+                    semanticModel);
+                if (retainsReplacement &&
+                    AssignmentSinkDefinitelyOutlivesScope(assignment.Left, semanticModel))
+                {
+                    return true;
+                }
+
+                if (semanticModel.GetSymbolInfo(assignment.Left).Symbol is ILocalSymbol local)
+                {
+                    if (retainsReplacement)
+                    {
+                        aliases.Add(local);
+                    }
+                    else
+                    {
+                        aliases.Remove(local);
+                    }
+                }
+
+                continue;
+            }
+
+            if (node is LocalDeclarationStatementSyntax localDeclaration)
+            {
+                foreach (var variable in localDeclaration.Declaration.Variables)
+                {
+                    if (semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol local &&
+                        ExpressionRetainsParameterReplacement(
+                            variable.Initializer?.Value,
+                            parameter,
+                            aliases,
+                            semanticModel))
+                    {
+                        aliases.Add(local);
+                    }
+                }
+
+                continue;
+            }
+
+            if (node is ArgumentSyntax argument &&
+                (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                 argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword)) &&
+                ExpressionRetainsParameterReplacement(
+                    argument.Expression,
+                    parameter,
+                    aliases,
+                    semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ExpressionRetainsParameterReplacement(
+        ExpressionSyntax? expression,
+        IParameterSymbol parameter,
+        HashSet<ILocalSymbol> aliases,
+        SemanticModel semanticModel)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        return expression.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Select(identifier => semanticModel.GetSymbolInfo(identifier).Symbol)
+            .Any(symbol =>
+                SymbolEqualityComparer.Default.Equals(symbol, parameter) ||
+                symbol is ILocalSymbol local && aliases.Contains(local));
+    }
+
+    private static bool StatementMayWriteParameter(
+        StatementSyntax statement,
+        IParameterSymbol parameter,
+        SemanticModel semanticModel)
+    {
+        if (statement.DescendantNodesAndSelf()
+            .OfType<AssignmentExpressionSyntax>()
+            .Any(assignment => SymbolEqualityComparer.Default.Equals(
+                semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                parameter)))
+        {
+            return true;
+        }
+
+        return statement.DescendantNodesAndSelf()
+            .OfType<ArgumentSyntax>()
+            .Any(argument =>
+                (argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                 argument.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword)) &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(argument.Expression).Symbol,
+                    parameter));
     }
 
     /// <summary>The nearest conditional access whose WhenNotNull contains the given node.</summary>
@@ -1851,7 +2057,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out _) &&
                 mutationCall.ArgumentList.Arguments.Any(argument =>
                     ExpressionRetainsEscapingHolderValue(
                         argument.Expression,
@@ -2002,7 +2208,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             }
 
             if (node is InvocationExpressionSyntax mutationCall &&
-                TryGetFieldCollectionMutation(mutationCall, semanticModel, out _) &&
+                TryGetEscapingCollectionMutation(mutationCall, semanticModel, out _) &&
                 mutationCall.ArgumentList.Arguments.Any(argument =>
                     ExpressionRetainsCurrentLocalValue(
                         argument.Expression,
