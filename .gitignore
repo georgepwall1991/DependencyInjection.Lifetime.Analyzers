@@ -180,3 +180,8 @@ pr_diff.txt
 # Transient agent worktrees
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Local build/pack output and scratch dumps
+artifacts/
+build_output.txt
+pr_diff.txt
