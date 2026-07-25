@@ -241,7 +241,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                 semanticModel,
                 cancellationToken,
                 out var mechanism,
-                out var anchor,
+                out var anchors,
                 out var mechanismDisplay
             )
         )
@@ -271,41 +271,47 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var (receiverKind, receiverRoot, receiverSegments, publisherType) =
-            EventReceiverClassification.ClassifyReceiverExpression(
-                anchor,
-                containingType,
-                semanticModel,
-                cancellationToken
-            );
-
-        if (receiverKind == EventReceiverKind.Unknown)
-        {
-            return;
-        }
-
         var statement = invocation.FirstAncestorOrSelf<StatementSyntax>();
         var dedupSpan = statement?.Span ?? invocation.Span;
 
-        records.Add(
-            new RegistrationRecord(
-                mechanism,
-                containingType,
-                receiverKind,
-                receiverRoot,
-                receiverSegments,
-                publisherType,
-                mechanismDisplay,
-                anchor.ToString(),
-                invocation.GetLocation(),
-                new TextSpanKey(
-                    invocation.SyntaxTree.FilePath,
-                    dedupSpan.Start,
-                    dedupSpan.End,
-                    containingType
+        // One record per candidate source. Only linking produces more than one, and there each token
+        // is independently capable of rooting the creator; statement-level dedup then collapses them
+        // to a single diagnostic whichever one proves long-lived.
+        foreach (var anchor in anchors)
+        {
+            var (receiverKind, receiverRoot, receiverSegments, publisherType) =
+                EventReceiverClassification.ClassifyReceiverExpression(
+                    anchor,
+                    containingType,
+                    semanticModel,
+                    cancellationToken
+                );
+
+            if (receiverKind == EventReceiverKind.Unknown)
+            {
+                continue;
+            }
+
+            records.Add(
+                new RegistrationRecord(
+                    mechanism,
+                    containingType,
+                    receiverKind,
+                    receiverRoot,
+                    receiverSegments,
+                    publisherType,
+                    mechanismDisplay,
+                    anchor.ToString(),
+                    invocation.GetLocation(),
+                    new TextSpanKey(
+                        invocation.SyntaxTree.FilePath,
+                        dedupSpan.Start,
+                        dedupSpan.End,
+                        containingType
+                    )
                 )
-            )
-        );
+            );
+        }
     }
 
     private static bool TryIdentifyMechanism(
@@ -315,12 +321,12 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken,
         out RegistrationMechanism mechanism,
-        out ExpressionSyntax anchor,
+        out ImmutableArray<ExpressionSyntax> anchors,
         out string mechanismDisplay
     )
     {
         mechanism = default;
-        anchor = null!;
+        anchors = ImmutableArray<ExpressionSyntax>.Empty;
         mechanismDisplay = string.Empty;
 
         var original = method.ReducedFrom ?? method;
@@ -333,11 +339,12 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                 // of the single invocation inside the producer lambda.
                 if (wellKnownTypes.IsChangeTokenStaticHelper(original.ContainingType))
                 {
-                    if (!TryGetChangeTokenProducerAnchor(invocation, out anchor))
+                    if (!TryGetChangeTokenProducerAnchor(invocation, out var producerAnchor))
                     {
                         return false;
                     }
 
+                    anchors = ImmutableArray.Create(producerAnchor);
                     mechanism = RegistrationMechanism.ChangeTokenOnChange;
                     mechanismDisplay = "ChangeToken.OnChange";
                     return true;
@@ -359,7 +366,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                         return false;
                     }
 
-                    anchor = monitorExpression;
+                    anchors = ImmutableArray.Create(monitorExpression);
                     mechanism = RegistrationMechanism.OptionsMonitorOnChange;
                     mechanismDisplay = "IOptionsMonitor<T>.OnChange";
                     return true;
@@ -391,7 +398,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     return false;
                 }
 
-                anchor = producerAccess.Expression;
+                anchors = ImmutableArray.Create(producerAccess.Expression);
                 mechanism = RegistrationMechanism.RegisterChangeCallback;
                 mechanismDisplay = "IChangeToken.RegisterChangeCallback";
                 return true;
@@ -413,7 +420,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     return false;
                 }
 
-                anchor = tokenAccess.Expression;
+                anchors = ImmutableArray.Create(tokenAccess.Expression);
                 mechanism = RegistrationMechanism.CancellationTokenRegister;
                 mechanismDisplay = $"CancellationToken.{name}";
                 return true;
@@ -428,6 +435,11 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
 
                 // Linking registers a callback on every token it links; one provably long-lived
                 // token is enough to root the creator.
+                // Every token argument is a candidate anchor. Collecting all of them rather than
+                // the first keeps the verdict independent of argument order -- whichever token proves
+                // longest-lived decides -- and statement-level dedup collapses the rest into one
+                // diagnostic.
+                var tokenAnchors = ImmutableArray.CreateBuilder<ExpressionSyntax>();
                 foreach (var argument in invocation.ArgumentList.Arguments)
                 {
                     var argumentType = semanticModel
@@ -435,14 +447,19 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                         .Type;
                     if (wellKnownTypes.IsCancellationToken(argumentType))
                     {
-                        anchor = argument.Expression;
-                        mechanism = RegistrationMechanism.LinkedTokenSource;
-                        mechanismDisplay = "CancellationTokenSource.CreateLinkedTokenSource";
-                        return true;
+                        tokenAnchors.Add(argument.Expression);
                     }
                 }
 
-                return false;
+                if (tokenAnchors.Count == 0)
+                {
+                    return false;
+                }
+
+                anchors = tokenAnchors.ToImmutable();
+                mechanism = RegistrationMechanism.LinkedTokenSource;
+                mechanismDisplay = "CancellationTokenSource.CreateLinkedTokenSource";
+                return true;
             }
 
             default:
@@ -617,6 +634,21 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     or InvocationExpressionSyntax
         )
         {
+            // `token.Register(OnStop).Dispose();` disposes the registration in the same expression.
+            // Without this the promotion below would classify the whole statement as discarded and
+            // the rule would warn on one of the remediations it recommends.
+            if (
+                parent is MemberAccessExpressionSyntax disposalAccess
+                && disposalAccess.Expression == node
+                && disposalAccess.Name.Identifier.ValueText
+                    is "Dispose"
+                        or "DisposeAsync"
+                        or "Unregister"
+            )
+            {
+                return false;
+            }
+
             if (parent is ExpressionSyntax parentExpression)
             {
                 node = parentExpression;

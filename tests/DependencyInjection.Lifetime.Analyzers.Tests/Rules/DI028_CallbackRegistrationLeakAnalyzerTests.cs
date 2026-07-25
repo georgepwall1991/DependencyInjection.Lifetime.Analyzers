@@ -1133,6 +1133,59 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
         await VerifySilentAsync(source);
     }
 
+    [Fact]
+    public async Task RegistrationDisposedInSameChainedCall_Silent()
+    {
+        // The chain promotion that lets CreateLinkedTokenSource(...).Token.Register(H) resolve must not
+        // then classify an immediate disposal as a discard -- that would warn on a remediation.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    public Worker(IHostApplicationLifetime lifetime)
+                    {
+                        lifetime.ApplicationStopping.Register(OnStopping).Dispose();
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSource_LongLivedTokenNotFirstArgument_Reports()
+    {
+        // Linking registers on every token, so the verdict must not depend on argument order.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    public Worker(IHostApplicationLifetime lifetime, CancellationToken requestToken)
+                    {
+                        [|CancellationTokenSource.CreateLinkedTokenSource(requestToken, lifetime.ApplicationStopping)|];
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Cross-rule non-duplication
     // ----------------------------------------------------------------

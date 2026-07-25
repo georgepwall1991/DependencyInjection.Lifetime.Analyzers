@@ -1071,6 +1071,102 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
+    public async Task LocalClientReturnedLater_Silent()
+    {
+        // A local that is handed on escapes exactly like `return new HttpClient()`, which is silent.
+        // Judging from the declaration alone would report the two spellings inconsistently.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddScoped<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    public HttpClient Create()
+                    {
+                        var http = new HttpClient();
+                        return http;
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LocalClientPassedToAnotherCall_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddScoped<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    public void Init()
+                    {
+                        var http = new HttpClient();
+                        Store(http);
+                    }
+
+                    private void Store(HttpClient http) { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task ComputedStaticHttpClientProperty_Silent()
+    {
+        // An expression-bodied getter hands back a fresh client per access, so it retains nothing and
+        // rotates exactly as intended.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly IHttpClientFactory Factory = null!;
+
+                    private static HttpClient Client => Factory.CreateClient("default");
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task AddSingletonHttpClientFromFactoryCreateClient_Reports()
+    {
+        // A singleton calls the factory once and then holds that one client -- and therefore that one
+        // handler -- forever. Handler rotation only happens across later CreateClient calls, so the
+        // stale-DNS condition still applies and this must not be exempted.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddHttpClient();
+                        [|services.AddSingleton<HttpClient>(sp =>
+                            sp.GetRequiredService<IHttpClientFactory>().CreateClient())|];
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task StaticLazyOfHttpClientField_Silent()
     {
         var source =

@@ -412,12 +412,6 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            // A factory that hands back a factory-created client is already rotating.
-            if (FactoryDelegatesToHttpClientFactory(registration.FactoryExpression))
-            {
-                continue;
-            }
-
             var keySuffix =
                 registration.IsKeyed && registration.KeyLiteral is { } key ? $" with key {key}"
                 : registration.IsKeyed ? " with a service key"
@@ -433,22 +427,57 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool FactoryDelegatesToHttpClientFactory(ExpressionSyntax? factoryExpression)
-    {
-        if (factoryExpression is null)
-        {
-            return false;
-        }
-
-        return factoryExpression
-            .DescendantNodesAndSelf()
-            .OfType<MemberAccessExpressionSyntax>()
-            .Any(memberAccess => memberAccess.Name.Identifier.ValueText == "CreateClient");
-    }
 
     // ----------------------------------------------------------------
     // Tier B leg 2 -- static member
     // ----------------------------------------------------------------
+
+    /// <summary>
+    /// Reports whether a property stores its value rather than computing it. An auto-property (no
+    /// accessor bodies) or one with an initializer retains the instance; an expression-bodied or
+    /// explicitly-implemented getter produces a value on each access and retains nothing.
+    /// </summary>
+    private static bool PropertyRetainsValue(IPropertySymbol property)
+    {
+        if (property.DeclaringSyntaxReferences.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (var reference in property.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is not PropertyDeclarationSyntax declaration)
+            {
+                return false;
+            }
+
+            if (declaration.ExpressionBody is not null)
+            {
+                return false;
+            }
+
+            if (declaration.Initializer is not null)
+            {
+                continue;
+            }
+
+            var accessors = declaration.AccessorList?.Accessors;
+            if (accessors is null)
+            {
+                return false;
+            }
+
+            foreach (var accessor in accessors)
+            {
+                if (accessor.Body is not null || accessor.ExpressionBody is not null)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
 
     private static void AnalyzeStaticMember(
         SymbolAnalysisContext context,
@@ -464,7 +493,10 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         var (memberType, memberKind) = symbol switch
         {
             IFieldSymbol field => ((ITypeSymbol?)field.Type, "field"),
-            IPropertySymbol property => (property.Type, "property"),
+            // Only a property that actually stores a client can pin a handler. A computed getter such
+            // as `static HttpClient Client => factory.CreateClient();` hands back a fresh client per
+            // access and rotates exactly as intended, so reporting it would be wrong.
+            IPropertySymbol property when PropertyRetainsValue(property) => (property.Type, "property"),
             _ => (null, string.Empty),
         };
 

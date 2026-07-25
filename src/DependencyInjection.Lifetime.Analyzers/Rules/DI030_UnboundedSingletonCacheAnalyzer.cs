@@ -514,7 +514,12 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                         if (
                             firstWriteNode is null
                             && IsPerInvocationWrite(access)
-                            && !IsOneTimeInitialization(access)
+                            && !IsOneTimeInitialization(
+                                access,
+                                candidate.ContainingType,
+                                model,
+                                cancellationToken
+                            )
                             && keyExpression is not null
                             && KeyIsUnbounded(
                                 keyExpression,
@@ -700,7 +705,12 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     /// Leg A4: writes that populate the store once from a bounded source, or behind a one-shot guard,
     /// are not unbounded growth however the key is shaped.
     /// </summary>
-    private static bool IsOneTimeInitialization(SyntaxNode node)
+    private static bool IsOneTimeInitialization(
+        SyntaxNode node,
+        INamedTypeSymbol containingType,
+        SemanticModel model,
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         var body = node.FirstAncestorOrSelf<MethodDeclarationSyntax>();
         if (body is null)
@@ -723,7 +733,14 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
 
                 // A one-shot flag guard: `if (_initialized) return;`
                 case IfStatementSyntax ifStatement
-                    when ifStatement.Span.End <= node.SpanStart && GuardReturnsEarly(ifStatement):
+                    when ifStatement.Span.End <= node.SpanStart
+                        && GuardReturnsEarly(ifStatement)
+                        && GuardTestsInstanceFlag(
+                            ifStatement.Condition,
+                            containingType,
+                            model,
+                            cancellationToken
+                        ):
                     return true;
             }
         }
@@ -737,6 +754,45 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             ? block.Statements.FirstOrDefault()
             : ifStatement.Statement;
         return statement is ReturnStatementSyntax;
+    }
+
+    /// <summary>
+    /// A one-shot guard tests state carried by the instance — a flag field or property — so the write
+    /// below it runs once. An early return over anything else is an ordinary argument or state check
+    /// (<c>if (key is null) return;</c>) and says nothing about how often the write happens, so
+    /// treating it as one-time initialization would silence real leaks. The condition must therefore
+    /// reference a field or property of the declaring type and must not depend on a parameter.
+    /// </summary>
+    private static bool GuardTestsInstanceFlag(
+        ExpressionSyntax condition,
+        INamedTypeSymbol containingType,
+        SemanticModel model,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var referencesInstanceState = false;
+
+        foreach (
+            var identifier in condition.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>()
+        )
+        {
+            var symbol = model.GetSymbolInfo(identifier, cancellationToken).Symbol;
+
+            if (symbol is IParameterSymbol)
+            {
+                return false;
+            }
+
+            if (
+                symbol is IFieldSymbol or IPropertySymbol
+                && SymbolEqualityComparer.Default.Equals(symbol.ContainingType, containingType)
+            )
+            {
+                referencesInstanceState = true;
+            }
+        }
+
+        return referencesInstanceState;
     }
 
     /// <summary>
@@ -893,21 +949,70 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     )
     {
         var assignment = (AssignmentExpressionSyntax)context.Node;
-        if (
-            assignment.Left is not MemberAccessExpressionSyntax memberAccess
-            || memberAccess.Name.Identifier.ValueText != "SizeLimit"
-        )
+
+        switch (assignment.Left)
         {
-            return;
+            // options.SizeLimit = 1024;
+            case MemberAccessExpressionSyntax memberAccess
+                when memberAccess.Name.Identifier.ValueText == "SizeLimit":
+            {
+                var ownerType = context
+                    .SemanticModel.GetTypeInfo(memberAccess.Expression, context.CancellationToken)
+                    .Type;
+                if (
+                    wellKnownTypes.IsMemoryCacheOptions(ownerType)
+                    && AssignsNonNullLimit(assignment.Right, context)
+                )
+                {
+                    cacheHasGlobalSizeLimit.Value = true;
+                }
+
+                return;
+            }
+
+            // new MemoryCacheOptions { SizeLimit = 1024 } -- an initializer assigns through a bare
+            // identifier, not a member access. Missing this shape would leave the tier enabled for a
+            // cache that really is bounded, so it is a false-positive risk rather than a missed leak.
+            case IdentifierNameSyntax identifier
+                when identifier.Identifier.ValueText == "SizeLimit"
+                    && assignment.Parent is InitializerExpressionSyntax initializer:
+            {
+                var createdType = context
+                    .SemanticModel.GetTypeInfo(
+                        initializer.Parent ?? initializer,
+                        context.CancellationToken
+                    )
+                    .Type;
+                if (
+                    wellKnownTypes.IsMemoryCacheOptions(createdType)
+                    && AssignsNonNullLimit(assignment.Right, context)
+                )
+                {
+                    cacheHasGlobalSizeLimit.Value = true;
+                }
+
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>SizeLimit</c> is nullable, and assigning <c>null</c> explicitly leaves the cache unbounded.
+    /// Treating any assignment as a bound would let a single <c>SizeLimit = null</c> suppress every
+    /// memory-cache diagnostic in the compilation.
+    /// </summary>
+    private static bool AssignsNonNullLimit(
+        ExpressionSyntax value,
+        SyntaxNodeAnalysisContext context
+    )
+    {
+        if (value.IsKind(SyntaxKind.NullLiteralExpression))
+        {
+            return false;
         }
 
-        var ownerType = context
-            .SemanticModel.GetTypeInfo(memberAccess.Expression, context.CancellationToken)
-            .Type;
-        if (wellKnownTypes.IsMemoryCacheOptions(ownerType))
-        {
-            cacheHasGlobalSizeLimit.Value = true;
-        }
+        var constant = context.SemanticModel.GetConstantValue(value, context.CancellationToken);
+        return !constant.HasValue || constant.Value is not null;
     }
 
     private static void CollectCacheWrite(
@@ -1101,7 +1206,6 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                     or "SetSlidingExpiration"
                     or "SetSize"
                     or "AddExpirationToken"
-                    or "RegisterPostEvictionCallback"
             )
             {
                 return true;

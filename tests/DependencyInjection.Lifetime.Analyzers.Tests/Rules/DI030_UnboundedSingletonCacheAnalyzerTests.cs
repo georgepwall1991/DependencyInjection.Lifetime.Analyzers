@@ -844,6 +844,40 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
         await VerifySilentAsync(source);
     }
 
+    [Fact]
+    public async Task ArgumentGuardBeforeWrite_StillReports()
+    {
+        // An early return over a parameter is an ordinary argument check, not a one-shot
+        // initialization flag. Treating any early return as one-time init would silence a real leak
+        // behind the most common validation shape in C#.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<PriceService>();
+                }
+
+                public class PriceService
+                {
+                    private readonly ConcurrentDictionary<string, Quote> _cache = new();
+
+                    public void Store(string key, Quote quote)
+                    {
+                        if (key is null)
+                        {
+                            return;
+                        }
+
+                        [|_cache[key] = quote|];
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Tier A -- ownership gates
     // ----------------------------------------------------------------
@@ -1461,6 +1495,101 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
                 """;
 
         await VerifyCacheSilentAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheOptionsInitializerSizeLimit_Silent()
+    {
+        // An initializer assigns SizeLimit through a bare identifier rather than a member access.
+        // Missing that shape would leave the tier enabled for a cache that really is bounded.
+        var source =
+            CachePrelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton(new MemoryCache(new MemoryCacheOptions { SizeLimit = 1024 }));
+                        services.AddScoped<PriceService>();
+                    }
+                }
+
+                public class PriceService
+                {
+                    private readonly IMemoryCache _cache;
+
+                    public PriceService(IMemoryCache cache) => _cache = cache;
+
+                    public void Store(string userId, Quote quote)
+                    {
+                        _cache.Set(userId, quote);
+                    }
+                }
+                """;
+
+        await VerifyCacheSilentAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheSet_PostEvictionCallbackOnly_Reports()
+    {
+        // RegisterPostEvictionCallback observes an eviction after it happens; it neither schedules an
+        // expiration nor caps the cache, so it is not a bound.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    [|_cache.Set(
+                        userId,
+                        quote,
+                        new MemoryCacheEntryOptions().RegisterPostEvictionCallback((k, v, r, st) => { }))|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheOptionsSizeLimitNull_StillReports()
+    {
+        // SizeLimit is nullable; assigning null leaves the cache unbounded. Treating any assignment as
+        // a bound would let one such line suppress every memory-cache diagnostic in the compilation.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddMemoryCache(options => options.SizeLimit = null);
+                    services.AddScoped<PriceService>();
+                }
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    [|_cache.Set(userId, quote)|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -287,7 +288,13 @@ internal static class HttpClientCreationClassification
                         when declarator.Parent?.Parent
                             is LocalDeclarationStatementSyntax
                                 or UsingStatementSyntax:
-                        return HttpClientCreationEscape.None;
+                        // The declaration alone does not settle it: a local that is later returned or
+                        // handed to another call escapes just as plainly as `return new HttpClient()`,
+                        // which is silent. Judging from the declaration only would report the two
+                        // spellings inconsistently.
+                        return LocalEscapesAfterDeclaration(declarator, semanticModel, cancellationToken)
+                            ? HttpClientCreationEscape.Escapes
+                            : HttpClientCreationEscape.None;
 
                     // A field or property initializer holds the instance on the instance.
                     case VariableDeclaratorSyntax:
@@ -314,6 +321,70 @@ internal static class HttpClientCreationClassification
                 // reports it instead, so one construction never yields two diagnostics.
                 return HttpClientCreationEscape.Escapes;
         }
+    }
+
+    /// <summary>
+    /// Reports whether a local holding a freshly created client is later returned, passed to another
+    /// call, or assigned onward — any of which hands ownership somewhere this analyzer cannot follow.
+    /// A local that is only used through its own members (the ordinary request-scoped shape) does not
+    /// escape.
+    /// </summary>
+    private static bool LocalEscapesAfterDeclaration(
+        VariableDeclaratorSyntax declarator,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        if (
+            semanticModel.GetDeclaredSymbol(declarator, cancellationToken)
+            is not ILocalSymbol local
+        )
+        {
+            return true;
+        }
+
+        var body = declarator.FirstAncestorOrSelf<SyntaxNode>(ExecutableSyntaxHelper.IsExecutableBoundary);
+        if (body is null)
+        {
+            return true;
+        }
+
+        foreach (var identifier in body.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (
+                identifier.Identifier.ValueText != local.Name
+                || identifier.Parent is VariableDeclaratorSyntax
+            )
+            {
+                continue;
+            }
+
+            if (
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol,
+                    local
+                )
+            )
+            {
+                continue;
+            }
+
+            switch (identifier.Parent)
+            {
+                // c.GetStringAsync(...) -- used in place, not handed on.
+                case MemberAccessExpressionSyntax memberAccess
+                    when memberAccess.Expression == identifier:
+                case ConditionalAccessExpressionSyntax conditional
+                    when conditional.Expression == identifier:
+                    continue;
+
+                // return c; / Store(c); / _field = c; / new Wrapper(c) ...
+                default:
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool AssignmentTargetIsInstanceMember(
