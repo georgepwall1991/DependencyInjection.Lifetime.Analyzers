@@ -18,7 +18,13 @@ real and fixed, each with a regression test pinning the exact shape. One of them
 one-shot guard) was found independently by both passes, which is a useful signal that the review had
 real coverage rather than rubber-stamping.
 
-Findings and resolutions:
+The review ran to convergence over multiple rounds; each round's findings were fixed with regression
+tests before the next. Round 1 raised eight findings, round 2 seven, round 3 five. Two of the fixes
+corrected mistakes introduced by an earlier round's fix (the `PooledConnectionIdleTimeout` exemption
+and the over-broad instance-flag guard), which is the clearest argument for re-reviewing after each
+pass rather than treating one clean round as sufficient.
+
+Round 1 findings and resolutions:
 
 1. **DI028 immediate disposal** — the chain walk that lets `CreateLinkedTokenSource(...).Token
    .Register(H)` resolve also promoted `token.Register(H).Dispose()`, so the rule warned on one of the
@@ -43,6 +49,45 @@ Findings and resolutions:
    including a null assignment that leaves the cache unbounded. Only a non-null limit suppresses. The
    object-initializer form was also being missed, which was a false-positive risk rather than a missed
    leak, and is now recognized.
+
+Round 2 findings and resolutions:
+
+1. **DI029 handler construction (P1)** — constructing `HttpClientHandler` or `SocketsHttpHandler` opens
+   no connection until something sends through it, so a bare handler construction now stays silent. The
+   leak shape that matters, `new HttpClient(new SocketsHttpHandler())`, is still reported through the
+   client.
+2. **DI029 rotating long-lived client (P1)** — a client whose handler sets `PooledConnectionLifetime`
+   retires pooled connections on an interval and re-resolves DNS with them. That is the documented way
+   to run a long-lived client without the factory, so both stale-DNS tiers now exempt it.
+3. **DI030 discarded `CreateEntry`** — `MemoryCache` commits on disposal, so a discarded result stores
+   nothing and is no longer reported.
+4. **DI030 mentioned-vs-configured bound** — `SlidingExpiration = null` and a factory that merely reads
+   `entry.Size` were treated as bounds. Only a non-null assignment or a bounding setter call counts.
+5. **DI030 size-limit scope** — the suppression was compilation-wide, so a separately constructed
+   bounded cache could hide an unrelated unbounded container-provided one. It now applies only to a
+   limit configured on the container-provided cache.
+6. **DI028 linked-source claim** — the parent token's registration holds the linked source, not the
+   service that created it. Detection is unchanged; the message no longer claims the creator's whole
+   object graph is rooted.
+7. **DI028 explicit extension receiver** — bound by source position, so a reordered named-argument call
+   missed. Arguments are now bound through the declared parameters.
+
+Round 3 findings and resolutions:
+
+1. **DI028 unverified `OnChange`** — the call was classified from its receiver type alone, so a
+   project's own `void OnChange` extension reported a discarded registration despite creating none. The
+   selected method must now return something disposable.
+2. **DI029 idle timeout** — accepted as rotation by round 2's fix, incorrectly: an idle timeout never
+   elapses on a connection under continuous load. Only `PooledConnectionLifetime` qualifies.
+3. **DI030 expiration-vs-value binding** — `Set<TItem>` substitutes `TItem` with the cached value's own
+   type, so caching a `TimeSpan` read as setting an expiration. Bounds are now matched by declared
+   parameter name.
+4. **DI030 non-transitioning guard** — round 1's fix required the guard to reference instance state, but
+   `if (_disabled) return;` still lets the write run on every call. The guarded flag must now itself be
+   assigned in the same method.
+5. **DI030 options-pattern size limit** — `Configure<MemoryCacheOptions>(o => o.SizeLimit = n)` was not
+   recognized, so a bounded cache was claimed unbounded. It is now accepted alongside
+   `AddMemoryCache`'s callback.
 
 ## DI030 Info-to-Warning Promotion Criterion
 
