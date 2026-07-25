@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-07-25
+
+Three new leak-detection rules, shipped together as the leak-detection release. Each targets a defect
+class that appears in a large share of real .NET codebases and that none of DI001-DI027 modelled.
+
+### Added
+
+- **DI028 discarded callback registration** (Warning) — completes the subscription-leak family. DI025
+  proves a missing `-=` and DI027 proves a discarded `Subscribe` token; DI028 covers the remaining
+  callback mechanisms — `IOptionsMonitor<T>.OnChange`, `CancellationToken.Register`/`UnsafeRegister`,
+  `ChangeToken.OnChange`, `IChangeToken.RegisterChangeCallback`, and
+  `CancellationTokenSource.CreateLinkedTokenSource`. A transient or scoped service that registers a
+  callback on a longer-lived source and discards the registration leaves the callback attached for the
+  source's lifetime; because the callback captures the subscriber — through the handler or the
+  `object? state` argument — the source roots every instance the container creates. Two descriptors on
+  one ID (registration and linked-source arms) so the remediation sentence stays honest. The capture
+  leg classifies every argument rather than only delegate-typed ones, because a method group has no
+  `Type` of its own and gating on the argument type silently skipped `Register(OnStopping)`. Chained
+  sources are followed only through stable projections, with the metadata-only framework projections
+  `CancellationTokenSource.Token` and `IHostApplicationLifetime.ApplicationStopping`/`ApplicationStarted`/
+  `ApplicationStopped` accepted only as a contiguous suffix. Deliberate false negative: a linked source
+  whose local is referenced stays silent, which needs DI014-class disposal analysis. No code fix.
+- **DI029 HttpClient lifetime misuse** (Warning) — three descriptors on one ID covering both directions
+  of the same mistake. Per-invocation construction of `HttpClient`, `HttpClientHandler`, or
+  `SocketsHttpHandler` exhausts sockets under load, and `using` is deliberately reportable because
+  disposal is precisely what strands the socket in `TIME_WAIT`. A client registered as a singleton or
+  held in a static member pins a handler that never rotates and therefore never re-resolves DNS.
+  Whether a member-held client is a shared pool or a per-resolution socket depends on the owner's
+  registered lifetime, so escape classification is three-way and the verdict waits for the registration
+  graph. The socket tier requires the containing type to be a provably registered implementation and
+  requires `IHttpClientFactory` to be available, so tests, entry points, and projects without the
+  package stay silent. Boundary with DI008: the registration tier is singleton-only, so transient and
+  scoped `HttpClient` registrations remain DI008's finding and are never double-reported. No code fix —
+  the repair needs a registration-site change in a possibly different project.
+- **DI030 unbounded singleton or static cache** (Info) — a private collection owned by a singleton or
+  held in a static member, written with request-derived keys and never evicted, or an `IMemoryCache`
+  entry with neither an expiration nor a size in a cache with no `SizeLimit`. Info rather than Warning
+  because a key space unbounded in the type system may be bounded in production; a promotion criterion
+  is recorded in `docs/ANALYZER_HEALTH.md`. Requiring the field to be `private` is what makes the
+  "never evicted" claim sound: every reference then lives inside the declaring type, so scanning it is a
+  complete proof, and any unrecognized reference silences the candidate — which covers eviction in a
+  background timer, in a helper the field is passed to, and behind a `Count`-based cap without
+  special-casing any of them. Two editorconfig knobs:
+  `dotnet_code_quality.DI030.allowed_cache_types` and
+  `dotnet_code_quality.DI030.detect_memory_cache_bounds`. The scoped-service-cached-by-a-singleton tier
+  was dropped rather than shipped, because DI002's collection-mutation sink and DI003's constructor
+  analysis already own that path; exclusions keep DI002, DI003, DI006, and lock registries out by
+  construction. The message never mentions thread safety, keeping this claim separable from the parked
+  concurrent-mutation rule. No code fix — there is no single correct eviction policy.
+
+### Changed
+
+- `WellKnownTypes` gains the Primitives, cancellation, HTTP, collection, and caching symbols. The new
+  symbols are populated through an object initializer rather than the positional constructor, which
+  already carried 22 parameters. The Options, Primitives, and Hosting predicates fall back to name plus
+  namespace after symbol equality, so a project that models those abstractions locally is still
+  analyzed.
+- `EventReceiverClassification` gains `ChainSegmentsAreStableProjectionsWithFrameworkSuffix`, a sibling
+  of the frozen stable-projection proof. That proof requires declaring syntax, so metadata-only
+  properties can never satisfy it — and two of them are DI028's highest-confidence sources. DI025,
+  DI026, and DI027 keep byte-identical behavior.
+- `samples/SampleApp` takes a second package reference, `Microsoft.Extensions.Caching.Memory`, so
+  DI030's `IMemoryCache` tier is exercised by a real build rather than only by the test framework.
+  DI028 and DI029 stay package-free with namespace-matched stubs.
+- `docs/RULES.md` regains its DI027 rule-index row, which had drifted out of the table while the
+  section itself was present.
+
 ## [2.18.24] - 2026-07-17
 
 ### Fixed

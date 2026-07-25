@@ -455,11 +455,14 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            if (!semanticModelsByTree.TryGetValue(typeDeclaration.SyntaxTree, out var model))
-            {
-                model = compilation.GetSemanticModel(typeDeclaration.SyntaxTree);
-                semanticModelsByTree.TryAdd(typeDeclaration.SyntaxTree, model);
-            }
+            // A partial declaration may live in a tree this analyzer never visited, so the model has to
+            // be fetched rather than looked up. Routed through the shared memoizing helper, which owns
+            // the RS1030 suppression for exactly this compilation-end case.
+            var model = EventReceiverClassification.GetSemanticModel(
+                typeDeclaration.SyntaxTree,
+                compilation,
+                semanticModelsByTree
+            );
 
             foreach (
                 var identifier in typeDeclaration.DescendantNodes().OfType<IdentifierNameSyntax>()

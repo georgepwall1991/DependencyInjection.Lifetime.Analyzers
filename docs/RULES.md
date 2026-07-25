@@ -36,6 +36,10 @@ For the latest full rule content, see:
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 | [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 | [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) | Event subscription on scoped publisher without unsubscribe | Info | Yes |
+| [DI027](#di027-rx-subscription-on-longer-lived-observable-without-dispose) | Rx subscription on longer-lived observable without dispose | Warning | No |
+| [DI028](#di028-discarded-callback-registration-on-a-longer-lived-source) | Discarded callback registration on a longer-lived source | Warning | No |
+| [DI029](#di029-httpclient-lifetime-misuse) | HttpClient lifetime misuse | Warning | No |
+| [DI030](#di030-unbounded-singleton-or-static-cache) | Unbounded singleton or static cache | Info | No |
 
 ---
 
@@ -1049,3 +1053,142 @@ The BCL observer overload is also covered when the subscriber passes itself dire
 **Guardrails:** DI027 fires only on the highest-confidence discard shapes — an ignored expression statement, a discard assignment (`_ = obs.Subscribe(H)`), a local initialized with the token that is never referenced again (and is not a `using` declaration), or a simple assignment to a private field declared on the subscriber when that field has no other symbol-bound reference across any partial declaration. A later disposal, return, argument pass, reassignment, or other field access stays silent; inherited and public/internal/protected fields also stay silent because external handling cannot be ruled out. `using`/`using var`, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable`, and more complex field flows remain conservative. DI025's silence-on-unknown legs all apply: singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, separate observer objects, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, non-extension static helpers named `Subscribe`, and non-observer `Subscribe(this)` overloads.
 
 **Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.
+
+---
+
+## DI028: Discarded Callback Registration On A Longer-Lived Source
+
+**What it catches:** The third member of the DI025/DI027 family. Where DI025 proves a missing `-=` and DI027 proves a discarded `Subscribe` token, DI028 covers every remaining way .NET hands out a callback registration: `IOptionsMonitor<T>.OnChange`, `CancellationToken.Register` / `UnsafeRegister`, `ChangeToken.OnChange`, `IChangeToken.RegisterChangeCallback`, and `CancellationTokenSource.CreateLinkedTokenSource`. A **transient** or **scoped** registered service registers a callback on a longer-lived source — an injected singleton options monitor, `IHostApplicationLifetime.ApplicationStopping`, a token from a singleton-held `CancellationTokenSource`, a configuration reload token — and discards the registration that would detach it.
+
+**Why it matters:** A discarded registration is a live one. The callback must provably capture the subscriber, either through the handler (method group, `this`-capturing lambda, stored delegate) or through the `object? state` argument, so the source roots every subscriber instance the container creates along with everything it holds — for a typical service, a `DbContext` and its change tracker. `ApplicationStopping` lives for the whole process, so the leak grows once per resolution and is never reclaimed.
+
+**Problem:**
+
+```csharp
+services.AddScoped<OrderProcessor>();
+
+public class OrderProcessor
+{
+    public OrderProcessor(IHostApplicationLifetime lifetime, AppDbContext db)
+    {
+        // DI028: the registration is discarded; every OrderProcessor stays rooted
+        lifetime.ApplicationStopping.Register(() => Flush(db));
+    }
+
+    private void Flush(AppDbContext db) { }
+}
+```
+
+**Better pattern:** store the registration and dispose it when the subscriber is released.
+
+```csharp
+public class OrderProcessor : IDisposable
+{
+    private readonly CancellationTokenRegistration _registration;
+
+    public OrderProcessor(IHostApplicationLifetime lifetime, AppDbContext db) =>
+        _registration = lifetime.ApplicationStopping.Register(() => Flush(db));
+
+    public void Dispose() => _registration.Dispose();
+
+    private void Flush(AppDbContext db) { }
+}
+```
+
+Both the instance form (`monitor.OnChange(h)`) and the static extension form (`OptionsMonitorExtensions.OnChange(monitor, h)`) are recognized, with the source bound through Roslyn's parameter mapping so reordered named arguments resolve correctly. The `state` overloads are covered too: `token.Register(static s => ((Worker)s!).Run(), this)` has a static callback yet still pins the subscriber.
+
+**Guardrails:** the subscriber must be registered and shorter-lived than the source, so a **singleton** or hosted-service subscriber registering on `ApplicationStopping` — the idiomatic, correct pattern — never fires. Method-parameter tokens stay silent (an ASP.NET `RequestAborted` registration is request-scoped and correct), as do locally created `CancellationTokenSource` tokens, `IOptionsSnapshot` sources above scoped subscribers, and any scoped-on-scoped or equal-lifetime pair. Discard proof mirrors DI027 exactly: only an ignored expression statement, a `_ =` discard, a never-referenced non-`using` local, or an otherwise-unused private field report. Chained sources are followed only through provably stable projections; the metadata-only framework projections `CancellationTokenSource.Token` and `IHostApplicationLifetime.ApplicationStopping`/`ApplicationStarted`/`ApplicationStopped` are accepted only as a contiguous suffix, so nothing can be laundered through them. Known false negatives: the common `var linked = CreateLinkedTokenSource(...); await X(linked.Token);` shape stays silent because the local is referenced (proving it needs DI014-class disposal analysis); static-held `CancellationTokenSource` fields, `IChangeToken` reached through a field or local, and non-trivial `ChangeToken.OnChange` producer lambdas are also silent.
+
+**Code Fix:** No — planned. Introducing `IDisposable` on a transient subscriber recreates the DI008 disposable-transient shape, the linked-source arm needs a different repair from the registration arm, and `CancellationTokenRegistration` is a struct with defensive-copy pitfalls.
+
+---
+
+## DI029: HttpClient Lifetime Misuse
+
+**What it catches:** Two opposite lifetime errors on the same connection pool. **Socket exhaustion** — a registered service constructs `new HttpClient(...)`, `new HttpClientHandler(...)`, or `new SocketsHttpHandler(...)` on a per-invocation path (a method, accessor, lambda, any loop body, or the constructor of a transient service). **Stale DNS** — an `HttpClient` is handed to the container as a singleton (`AddSingleton<HttpClient>`, `AddSingleton(new HttpClient())`, a singleton `ServiceDescriptor`, or a keyed singleton) or held in a `static` field or property.
+
+**Why it matters:** Each per-call client opens its own connection pool, and disposing it does not free the socket — the connection sits in `TIME_WAIT` for minutes, so under load the ephemeral port range runs out and the application fails with `SocketException`. Wrapping the construction in `using` makes it worse, not better, because disposal is exactly what strands the socket. The usual fix — make it a singleton — trades the problem for its mirror image: one handler holds its connections for the life of the process and never re-resolves DNS, so after a failover or deployment the client keeps routing to an endpoint that has moved. `IHttpClientFactory` is the only shape that gets both connection reuse and DNS freshness.
+
+**Problem:**
+
+```csharp
+services.AddScoped<ApiClient>();
+
+public class ApiClient
+{
+    public async Task<Order> GetAsync(int id)
+    {
+        using var http = new HttpClient();  // DI029: one socket per call
+        return await http.GetFromJsonAsync<Order>($"/orders/{id}");
+    }
+}
+
+services.AddSingleton<HttpClient>();  // DI029: handler never rotates
+```
+
+**Better pattern:** let the container own the handler pool.
+
+```csharp
+services.AddHttpClient<ApiClient>(c => c.BaseAddress = new Uri("https://api.example.com"));
+
+public class ApiClient
+{
+    private readonly HttpClient _http;
+
+    public ApiClient(HttpClient http) => _http = http;
+
+    public Task<Order> GetAsync(int id) => _http.GetFromJsonAsync<Order>($"/orders/{id}");
+}
+```
+
+**Guardrails:** the socket-exhaustion tier fires only when the containing type is provably a registered implementation in the same compilation, so tests, `Program`/top-level statements, and unregistered helpers stay silent — a compilation with no registrations reports nothing at all. It also requires `IHttpClientFactory` to be available, so a diagnostic is never raised where the fix is unavailable. A handler supplied by the caller transfers pool ownership and stays silent, as does `disposeHandler: false` and any non-constant `disposeHandler`; handler arguments are bound by parameter symbol rather than position. A client stored in a member is judged against the owner's lifetime, since one pool shared by a singleton is correct while a transient owner rebuilds it per resolution. The stale-DNS tier is singleton-only: `AddTransient<HttpClient>` is **DI008**'s finding and is deliberately not double-reported, and `AddScoped<HttpClient>` is an accepted false negative. `HttpClient` subclasses are excluded at both gates, `Lazy<HttpClient>` and dictionary-of-clients static wrappers are accepted false negatives, and a singleton factory that provably delegates to `IHttpClientFactory.CreateClient` stays silent. A single construction never yields two findings: static initializers belong to the static-member tier and an argument-position construction to the registration tier.
+
+**Code Fix:** No — planned. Rewriting `new HttpClient()` into an injected `IHttpClientFactory` requires adding `services.AddHttpClient()` at a registration site that may be in another document or project, and possibly a `PackageReference` — which a code fix cannot do. Applying only the constructor and call-site half produces code that compiles and then throws `InvalidOperationException: No service for type 'IHttpClientFactory'`.
+
+---
+
+## DI030: Unbounded Singleton Or Static Cache
+
+**What it catches:** Two shapes of a store that never shrinks. **Unbounded growth** — a `private` field of a concrete mutable collection (`ConcurrentDictionary<,>`, `Dictionary<,>`, `List<>`, `HashSet<>`, `Queue<>`, `ConcurrentBag<>`, `ConcurrentQueue<>`) that is `static` or owned by a **singleton**-registered service, written on a per-invocation path with a key derived from request input, where nothing in the declaring type ever removes, clears, drains, or size-checks it. **Unbounded cache entries** — an `IMemoryCache.Set` / `GetOrCreate` / `CreateEntry` call with an unbounded key and neither an expiration nor a `Size`, in a compilation whose cache has no `SizeLimit`.
+
+**Why it matters:** A store held by a singleton or a static field lives as long as the process. Keyed by a user id, tenant id, or correlation id, it accumulates one entry per distinct caller forever: memory climbs monotonically and the process eventually dies of `OutOfMemoryException`, typically days into a deployment — which makes it one of the hardest leaks to attribute. `IMemoryCache` is not automatically safer: with no expiration, no entry size, and no configured `SizeLimit` it is an unbounded dictionary with extra steps.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<PriceService>();
+
+public class PriceService
+{
+    private readonly ConcurrentDictionary<string, Quote> _cache = new();
+
+    public Quote Get(string userId) =>
+        _cache.GetOrAdd(userId, id => Load(id));  // DI030: unbounded, never evicted
+
+    private Quote Load(string id) => new();
+}
+```
+
+**Better pattern:** bound the store — an expiration, a size limit, or an explicit eviction path.
+
+```csharp
+public class PriceService
+{
+    private readonly IMemoryCache _cache;
+
+    public PriceService(IMemoryCache cache) => _cache = cache;
+
+    public Quote Get(string userId) =>
+        _cache.GetOrCreate(userId, entry =>
+        {
+            entry.SlidingExpiration = TimeSpan.FromMinutes(10);
+            return Load(userId);
+        })!;
+
+    private Quote Load(string id) => new();
+}
+```
+
+**Guardrails:** reported at **Info**, because a key space that is unbounded in the type system may be bounded in production. The "never evicted" proof is sound rather than heuristic: the field must be `private`, so every reference to it lives inside the declaring type and a complete scan of that type is a complete proof. Anything not recognized as a write or a pure read makes the candidate silent — a `Remove`/`TryRemove`/`Clear`/`Dequeue`/`Pop`, any read of `Count` or `Length` (a size cap), the field passed as an argument, reassigned, iterated with `foreach`, used in LINQ, or captured into a lambda (a background eviction timer). Bounded keys are excluded up front: any compile-time constant, and any `enum`, `bool`, `System.Type`, or `char` key. One-time initialization is excluded too — constructor, static-constructor and initializer writes, assembly and `Enum.GetValues` scans, `Lazy<>` factories, and one-shot flag guards. Interface-typed fields (`IDictionary<,>`) stay silent because the backing type may be frozen or capped, as do `ImmutableDictionary`/`FrozenDictionary`, lock registries (`SemaphoreSlim`, `Lazy<>`, `Task`, `Mutex`-shaped value types), non-private fields, and types registered both singleton and scoped. Shapes owned by other rules are excluded rather than duplicated: a scope-resolved value stored into a collection is **DI002**, a scoped service cached by a singleton is **DI003**, and a static dictionary of providers is **DI006**. For `IMemoryCache`, options built anywhere other than inline at the call site stay silent, and a compilation-wide `MemoryCacheOptions.SizeLimit` disables the tier entirely. Two editorconfig knobs are available: `dotnet_code_quality.DI030.allowed_cache_types` and `dotnet_code_quality.DI030.detect_memory_cache_bounds`. Accepted false negatives: a key reached through a local alias, non-private and static-property caches, multi-level nested dictionaries, and collection types outside the seven recognized generics.
+
+**Code Fix:** No — and none planned. There is no single correct eviction policy: LRU, a TTL, a size cap, or a documented decision that the key space really is bounded are all valid answers, and a fixer that silently picks one would be worse than the diagnostic.
