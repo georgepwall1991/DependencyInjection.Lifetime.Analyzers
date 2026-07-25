@@ -9,6 +9,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <!-- DI030's IMemoryCache tier binds the real caching abstraction, so unlike the Hosting and Http
+         stubs used by DI028/DI029 it cannot be demonstrated package-free. -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

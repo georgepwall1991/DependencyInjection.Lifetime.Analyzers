@@ -199,6 +199,33 @@ const ruleSampleConfig = {
       { label: "Sample app store-and-dispose pattern", symbol: "Good_StoreAndDispose" },
     ],
   },
+  DI028: {
+    samplePath: "samples/SampleApp/Diagnostics/DI028/CallbackRegistrationLeakExamples.cs",
+    highlights: [
+      {
+        label: "Sample app discarded callback-registration warning",
+        symbol: "Bad_RegisterWithoutDispose",
+      },
+      { label: "Sample app store-and-dispose pattern", symbol: "Good_StoreAndDispose" },
+    ],
+  },
+  DI029: {
+    samplePath: "samples/SampleApp/Diagnostics/DI029/HttpClientLifetimeExamples.cs",
+    highlights: [
+      { label: "Sample app socket-exhaustion warning", symbol: "Bad_HttpClientPerRequest" },
+      { label: "Sample app injected-factory pattern", symbol: "Good_InjectedFactory" },
+    ],
+  },
+  DI030: {
+    samplePath: "samples/SampleApp/Diagnostics/DI030/UnboundedSingletonCacheExamples.cs",
+    highlights: [
+      { label: "Sample app unbounded-cache note", symbol: "Bad_UnboundedTenantCache" },
+      {
+        label: "Sample app bounded-by-eviction pattern",
+        symbol: "Good_BoundedByEvictionOnRelease",
+      },
+    ],
+  },
 };
 
 const publicDiagnosticInventoryPath = path.join(
