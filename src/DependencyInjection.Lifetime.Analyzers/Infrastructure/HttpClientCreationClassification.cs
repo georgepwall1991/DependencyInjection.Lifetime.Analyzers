@@ -20,6 +20,32 @@ internal enum HttpClientCreationKind
 }
 
 /// <summary>
+/// What happens to a newly constructed client, which decides whether the construction can be judged
+/// from the site alone.
+/// </summary>
+internal enum HttpClientCreationEscape
+{
+    /// <summary>
+    /// The instance is used and abandoned within the expression or statement that creates it, so it
+    /// is created once per execution of that path.
+    /// </summary>
+    None,
+
+    /// <summary>
+    /// The instance is stored in a field or property of the declaring type. Whether that is one
+    /// client per process or one per resolution depends on the owner's registered lifetime, so the
+    /// decision has to wait until the registration graph is known.
+    /// </summary>
+    RetainedInMember,
+
+    /// <summary>
+    /// The instance is returned, passed as an argument, or otherwise handed to code this analyzer
+    /// does not model, so ownership cannot be established and the site stays silent.
+    /// </summary>
+    Escapes,
+}
+
+/// <summary>
 /// Where in a type a construction site sits. DI029 reports only sites a caller reaches more than
 /// once, so the distinction between a per-invocation body and a one-time initializer is the whole
 /// difference between a socket leak and a shared client.
@@ -201,15 +227,20 @@ internal static class HttpClientCreationClassification
     }
 
     /// <summary>
-    /// Proof leg A-L3. Reports whether the created instance escapes the expression that creates it.
-    /// An escaping instance may be retained and shared, so only provably non-escaping shapes report.
+    /// Proof leg A-L3. Reports what happens to the created instance.
     /// <para>
     /// A <c>using</c> declaration counts as non-escaping and therefore reportable: disposing the
     /// client is precisely what strands its socket in TIME_WAIT, so it is the defect rather than the
-    /// remedy. Any shape not explicitly recognized is treated as escaping.
+    /// remedy.
+    /// </para>
+    /// <para>
+    /// Assignment into a field or property is reported separately from a genuine escape, because a
+    /// member-held client is one per process for a singleton owner but one per resolution for a
+    /// transient one — the same syntax, opposite verdicts. Anything else unmodelled is treated as an
+    /// escape and stays silent.
     /// </para>
     /// </summary>
-    public static bool EscapesEnclosingBoundary(
+    public static HttpClientCreationEscape ClassifyEscape(
         BaseObjectCreationExpressionSyntax creation,
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken
@@ -235,35 +266,64 @@ internal static class HttpClientCreationClassification
         {
             // new HttpClient(); -- the value is dropped on the floor.
             case ExpressionStatementSyntax:
-                return false;
+                return HttpClientCreationEscape.None;
 
             // new HttpClient().GetAsync(...) -- consumed and abandoned in place.
             case MemberAccessExpressionSyntax memberAccess when memberAccess.Expression == current:
             case ConditionalAccessExpressionSyntax conditionalAccess
                 when conditionalAccess.Expression == current:
-                return false;
+                return HttpClientCreationEscape.None;
 
-            // var c = new HttpClient(); including using declarations.
-            case EqualsValueClauseSyntax equalsValue:
-                return equalsValue.Parent is not VariableDeclaratorSyntax declarator
-                    || declarator.Parent?.Parent
-                        is not (LocalDeclarationStatementSyntax or UsingStatementSyntax);
-
-            // using (var c = new HttpClient()) -- the declaration form is handled above; this is
-            // the expression form, using (new HttpClient()).
+            // using (new HttpClient()) -- the expression form; the declaration form is an
+            // EqualsValueClause and is handled below.
             case UsingStatementSyntax usingStatement when usingStatement.Expression == current:
-                return false;
+                return HttpClientCreationEscape.None;
+
+            case EqualsValueClauseSyntax equalsValue:
+                switch (equalsValue.Parent)
+                {
+                    // var c = new HttpClient(); and using var c = new HttpClient();
+                    case VariableDeclaratorSyntax declarator
+                        when declarator.Parent?.Parent
+                            is LocalDeclarationStatementSyntax
+                                or UsingStatementSyntax:
+                        return HttpClientCreationEscape.None;
+
+                    // A field or property initializer holds the instance on the instance.
+                    case VariableDeclaratorSyntax:
+                    case PropertyDeclarationSyntax:
+                        return HttpClientCreationEscape.RetainedInMember;
+
+                    default:
+                        return HttpClientCreationEscape.Escapes;
+                }
+
+            case AssignmentExpressionSyntax assignment when assignment.Right == current:
+                return AssignmentTargetIsInstanceMember(
+                    assignment.Left,
+                    semanticModel,
+                    cancellationToken
+                )
+                    ? HttpClientCreationEscape.RetainedInMember
+                    : HttpClientCreationEscape.Escapes;
 
             default:
-                // Field or property assignment, return, argument position, lambda body, out/ref,
-                // collection element, throw, and anything unmodelled: assume the value is retained
-                // by someone else. Argument position in particular is what keeps
+                // Return, argument position, lambda body, out/ref, collection element, throw, and
+                // anything unmodelled. Argument position in particular is what keeps
                 // services.AddSingleton(new HttpClient()) out of this tier -- the registration tier
                 // reports it instead, so one construction never yields two diagnostics.
-                _ = semanticModel;
-                _ = cancellationToken;
-                return true;
+                return HttpClientCreationEscape.Escapes;
         }
+    }
+
+    private static bool AssignmentTargetIsInstanceMember(
+        ExpressionSyntax target,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var symbol = semanticModel.GetSymbolInfo(target, cancellationToken).Symbol;
+        return symbol is IFieldSymbol { IsStatic: false } or IPropertySymbol { IsStatic: false };
     }
 
     /// <summary>

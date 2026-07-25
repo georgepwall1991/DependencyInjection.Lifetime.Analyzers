@@ -1,0 +1,493 @@
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace DependencyInjection.Lifetime.Analyzers.Rules;
+
+/// <summary>
+/// DI029: two opposite lifetime errors on the same connection pool. A registered service constructs
+/// <see cref="System.Net.Http.HttpClient"/> or one of its pooling handlers on a per-invocation path,
+/// exhausting sockets under load; or an <c>HttpClient</c> is handed to the container as a singleton
+/// or held in a static member, pinning a handler that then never rotates and never re-resolves DNS.
+/// <para>
+/// The boundary with DI008 is the lifetime: DI008 owns transient and scoped <c>HttpClient</c>
+/// registrations (a disposable the container never disposes), so DI029's registration tier is
+/// singleton-only and the two never report the same registration.
+/// </para>
+/// </summary>
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
+{
+    /// <inheritdoc />
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
+        ImmutableArray.Create(
+            DiagnosticDescriptors.HttpClientSocketExhaustion,
+            DiagnosticDescriptors.HttpClientStaleDnsRegistration,
+            DiagnosticDescriptors.HttpClientStaleDnsStaticMember
+        );
+
+    /// <inheritdoc />
+    public override void Initialize(AnalysisContext context)
+    {
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
+        context.EnableConcurrentExecution();
+
+        context.RegisterCompilationStartAction(compilationContext =>
+        {
+            var wellKnownTypes = WellKnownTypes.Create(compilationContext.Compilation);
+            if (wellKnownTypes?.HttpClient is null)
+            {
+                return;
+            }
+
+            var registrationCollector = RegistrationCollector.Create(
+                compilationContext.Compilation
+            );
+            if (registrationCollector is null)
+            {
+                return;
+            }
+
+            // A rotating alternative must exist for the per-invocation and static-member tiers to be
+            // actionable; without Microsoft.Extensions.Http there is nothing to recommend. The
+            // registration tier is deliberately not gated: an explicit AddSingleton<HttpClient> is a
+            // process-lifetime handler whatever else the project references.
+            var hasFactory = wellKnownTypes.IHttpClientFactory is not null;
+
+            var creations = new ConcurrentBag<CreationRecord>();
+            var invocationObservations =
+                new ConcurrentQueue<ServiceCollectionReachabilityAnalyzer.InvocationObservation>();
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext =>
+                {
+                    var invocation = (InvocationExpressionSyntax)syntaxContext.Node;
+                    registrationCollector.AnalyzeInvocation(
+                        invocation,
+                        syntaxContext.SemanticModel
+                    );
+
+                    if (
+                        ServiceCollectionReachabilityAnalyzer.IsPotentialServiceCollectionWrapperInvocation(
+                            invocation,
+                            syntaxContext.SemanticModel
+                        )
+                    )
+                    {
+                        invocationObservations.Enqueue(
+                            new ServiceCollectionReachabilityAnalyzer.InvocationObservation(
+                                invocation,
+                                syntaxContext.SemanticModel
+                            )
+                        );
+                    }
+                },
+                SyntaxKind.InvocationExpression
+            );
+
+            if (hasFactory)
+            {
+                compilationContext.RegisterSyntaxNodeAction(
+                    syntaxContext => CollectCreation(syntaxContext, wellKnownTypes, creations),
+                    SyntaxKind.ObjectCreationExpression,
+                    SyntaxKind.ImplicitObjectCreationExpression
+                );
+
+                compilationContext.RegisterSymbolAction(
+                    symbolContext => AnalyzeStaticMember(symbolContext, wellKnownTypes),
+                    SymbolKind.Field,
+                    SymbolKind.Property
+                );
+            }
+
+            compilationContext.RegisterCompilationEndAction(endContext =>
+            {
+                ReportSocketExhaustion(endContext, registrationCollector, creations);
+                ReportSingletonRegistrations(
+                    endContext,
+                    registrationCollector,
+                    wellKnownTypes,
+                    invocationObservations
+                );
+            });
+        });
+    }
+
+    // ----------------------------------------------------------------
+    // Tier A -- socket exhaustion
+    // ----------------------------------------------------------------
+
+    private sealed class CreationRecord
+    {
+        public CreationRecord(
+            INamedTypeSymbol containingType,
+            string createdTypeName,
+            bool inLoopBody,
+            bool inConstructorOrInstanceInitializer,
+            HttpClientCreationEscape escape,
+            Location location
+        )
+        {
+            ContainingType = containingType;
+            CreatedTypeName = createdTypeName;
+            InLoopBody = inLoopBody;
+            InConstructorOrInstanceInitializer = inConstructorOrInstanceInitializer;
+            Escape = escape;
+            Location = location;
+        }
+
+        public INamedTypeSymbol ContainingType { get; }
+        public string CreatedTypeName { get; }
+        public bool InLoopBody { get; }
+        public bool InConstructorOrInstanceInitializer { get; }
+        public HttpClientCreationEscape Escape { get; }
+        public Location Location { get; }
+    }
+
+    private static void CollectCreation(
+        SyntaxNodeAnalysisContext context,
+        WellKnownTypes wellKnownTypes,
+        ConcurrentBag<CreationRecord> records
+    )
+    {
+        var creation = (BaseObjectCreationExpressionSyntax)context.Node;
+        var semanticModel = context.SemanticModel;
+        var cancellationToken = context.CancellationToken;
+
+        // A-L1: exact created type.
+        if (
+            !HttpClientCreationClassification.TryClassifyCreation(
+                creation,
+                semanticModel,
+                wellKnownTypes,
+                cancellationToken,
+                out _
+            )
+        )
+        {
+            return;
+        }
+
+        // A-L4: one leak, one diagnostic.
+        if (
+            HttpClientCreationClassification.IsNestedInsideMatchingCreation(
+                creation,
+                semanticModel,
+                wellKnownTypes,
+                cancellationToken
+            )
+        )
+        {
+            return;
+        }
+
+        // A-L5: an externally supplied handler owns the pool.
+        if (
+            HttpClientCreationClassification.HasExternallyOwnedOrRetainedHandler(
+                creation,
+                semanticModel,
+                wellKnownTypes,
+                cancellationToken
+            )
+        )
+        {
+            return;
+        }
+
+        // A-L3: an escaped instance has an owner this analyzer cannot see.
+        var escape = HttpClientCreationClassification.ClassifyEscape(
+            creation,
+            semanticModel,
+            cancellationToken
+        );
+        if (escape == HttpClientCreationEscape.Escapes)
+        {
+            return;
+        }
+
+        // A-L2 (location half).
+        if (
+            !HttpClientCreationClassification.TryClassifySite(
+                creation,
+                semanticModel,
+                cancellationToken,
+                out var site
+            )
+        )
+        {
+            return;
+        }
+
+        // A static initializer runs once per process, so it is never a socket leak. The
+        // static-member tier reports that shape on the declaration instead.
+        if (site.InStaticInitializerOrStaticConstructor)
+        {
+            return;
+        }
+
+        var createdType = semanticModel.GetTypeInfo(creation, cancellationToken).Type;
+        records.Add(
+            new CreationRecord(
+                site.ContainingType,
+                createdType?.Name ?? "HttpClient",
+                site.InLoopBody,
+                site.InConstructorOrInstanceInitializer,
+                escape,
+                creation.GetLocation()
+            )
+        );
+    }
+
+    private static void ReportSocketExhaustion(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        ConcurrentBag<CreationRecord> records
+    )
+    {
+        if (records.IsEmpty)
+        {
+            return;
+        }
+
+        var lifetimesByImplementation = BuildRegisteredImplementationLifetimeMap(
+            registrationCollector.AllRegistrations
+        );
+        if (lifetimesByImplementation.Count == 0)
+        {
+            // No registrations at all: tests, libraries, and console entry points land here and stay
+            // silent, because nothing proves the construction sits on a repeated path.
+            return;
+        }
+
+        foreach (
+            var record in records
+                .OrderBy(r => r.Location.SourceSpan.Start)
+                .ThenBy(r => r.Location.SourceTree?.FilePath, System.StringComparer.Ordinal)
+        )
+        {
+            if (!lifetimesByImplementation.TryGetValue(record.ContainingType, out var lifetime))
+            {
+                continue;
+            }
+
+            if (!IsReportableSite(record, lifetime))
+            {
+                continue;
+            }
+
+            context.ReportDiagnostic(
+                Diagnostic.Create(
+                    DiagnosticDescriptors.HttpClientSocketExhaustion,
+                    record.Location,
+                    record.ContainingType.Name,
+                    lifetime.ToString(),
+                    record.CreatedTypeName
+                )
+            );
+        }
+    }
+
+    /// <summary>
+    /// Decides whether a construction site actually repeats, which needs both where the site sits and
+    /// how long its owner lives.
+    /// <para>
+    /// A client stored in a member is one pool shared for the owner's lifetime — correct for a
+    /// singleton or scoped owner, and one fresh socket per resolution for a transient one. That is
+    /// the same syntax with opposite verdicts, which is why the escape kind cannot be judged at the
+    /// construction site alone.
+    /// </para>
+    /// </summary>
+    private static bool IsReportableSite(CreationRecord record, ServiceLifetime lifetime)
+    {
+        if (record.Escape == HttpClientCreationEscape.RetainedInMember)
+        {
+            // A loop that repeatedly overwrites a member burns a socket per iteration whatever the
+            // owner's lifetime; otherwise only a transient owner reconstructs the member.
+            return record.InLoopBody || lifetime == ServiceLifetime.Transient;
+        }
+
+        // A loop body is per-iteration regardless of lifetime. Outside a loop, a constructor or
+        // instance initializer only repeats for a transient service; for a scoped or singleton
+        // service it runs once per scope or once per process, which is an accepted false negative
+        // rather than a socket leak.
+        return record.InLoopBody
+            || !record.InConstructorOrInstanceInitializer
+            || lifetime == ServiceLifetime.Transient;
+    }
+
+    /// <summary>
+    /// Maps every registered implementation type, and each of its base types, to the lifetime it is
+    /// activated under. Where a type is registered more than once the <em>shortest-lived</em>
+    /// registration wins, because that is the one that constructs most often.
+    /// <para>
+    /// Deliberately not shared with DI027's subscriber rank map: that one takes the most conservative
+    /// (longest-lived) reading for a leak proof, this one takes the opposite for a churn proof.
+    /// Merging them would give one of the two rules the wrong answer.
+    /// </para>
+    /// </summary>
+    private static Dictionary<
+        INamedTypeSymbol,
+        ServiceLifetime
+    > BuildRegisteredImplementationLifetimeMap(IEnumerable<ServiceRegistration> registrations)
+    {
+        var map = new Dictionary<INamedTypeSymbol, ServiceLifetime>(SymbolEqualityComparer.Default);
+
+        foreach (var registration in registrations)
+        {
+            var implementation = registration.ImplementationType;
+            if (implementation is null)
+            {
+                continue;
+            }
+
+            for (
+                var current = implementation;
+                current is not null && current.SpecialType != SpecialType.System_Object;
+                current = current.BaseType
+            )
+            {
+                if (map.TryGetValue(current, out var existing))
+                {
+                    // Higher enum value is shorter-lived: Singleton = 0, Scoped = 1, Transient = 2.
+                    if (registration.Lifetime > existing)
+                    {
+                        map[current] = registration.Lifetime;
+                    }
+                }
+                else
+                {
+                    map[current] = registration.Lifetime;
+                }
+            }
+        }
+
+        return map;
+    }
+
+    // ----------------------------------------------------------------
+    // Tier B leg 1 -- container singleton
+    // ----------------------------------------------------------------
+
+    private static void ReportSingletonRegistrations(
+        CompilationAnalysisContext context,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes wellKnownTypes,
+        ConcurrentQueue<ServiceCollectionReachabilityAnalyzer.InvocationObservation> observations
+    )
+    {
+        // The deduplicated winner view, not AllRegistrations: a TryAddSingleton shadowed by an
+        // earlier AddSingleton must yield one diagnostic, and the duplicate-registration story
+        // belongs to DI012/DI012b.
+        var candidates = registrationCollector
+            .Registrations.Where(registration =>
+                wellKnownTypes.IsHttpClient(registration.ServiceType)
+                && registration.Lifetime == ServiceLifetime.Singleton
+            )
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var reachability = ServiceCollectionReachabilityAnalyzer.Create(
+            context.Compilation,
+            observations.ToImmutableArray(),
+            registrationCollector.AllRegistrations
+        );
+
+        foreach (var registration in candidates.OrderBy(r => r.Location.SourceSpan.Start))
+        {
+            if (
+                !reachability.IsReachable(registration.Location)
+                || reachability.HasOpaquePredecessor(registration.Location)
+            )
+            {
+                continue;
+            }
+
+            // A factory that hands back a factory-created client is already rotating.
+            if (FactoryDelegatesToHttpClientFactory(registration.FactoryExpression))
+            {
+                continue;
+            }
+
+            var keySuffix =
+                registration.IsKeyed && registration.KeyLiteral is { } key ? $" with key {key}"
+                : registration.IsKeyed ? " with a service key"
+                : string.Empty;
+
+            context.ReportDiagnostic(
+                Diagnostic.Create(
+                    DiagnosticDescriptors.HttpClientStaleDnsRegistration,
+                    registration.Location,
+                    keySuffix
+                )
+            );
+        }
+    }
+
+    private static bool FactoryDelegatesToHttpClientFactory(ExpressionSyntax? factoryExpression)
+    {
+        if (factoryExpression is null)
+        {
+            return false;
+        }
+
+        return factoryExpression
+            .DescendantNodesAndSelf()
+            .OfType<MemberAccessExpressionSyntax>()
+            .Any(memberAccess => memberAccess.Name.Identifier.ValueText == "CreateClient");
+    }
+
+    // ----------------------------------------------------------------
+    // Tier B leg 2 -- static member
+    // ----------------------------------------------------------------
+
+    private static void AnalyzeStaticMember(
+        SymbolAnalysisContext context,
+        WellKnownTypes wellKnownTypes
+    )
+    {
+        var symbol = context.Symbol;
+        if (!symbol.IsStatic || symbol.IsImplicitlyDeclared)
+        {
+            return;
+        }
+
+        var (memberType, memberKind) = symbol switch
+        {
+            IFieldSymbol field => ((ITypeSymbol?)field.Type, "field"),
+            IPropertySymbol property => (property.Type, "property"),
+            _ => (null, string.Empty),
+        };
+
+        // Exact HttpClient only. A Lazy<HttpClient>, Func<HttpClient>, or dictionary-of-clients
+        // wrapper is an accepted false negative rather than a guess about the wrapper's semantics.
+        if (!wellKnownTypes.IsHttpClient(memberType))
+        {
+            return;
+        }
+
+        var location = symbol.Locations.FirstOrDefault(candidate => candidate.IsInSource);
+        if (location is null)
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(
+            Diagnostic.Create(
+                DiagnosticDescriptors.HttpClientStaleDnsStaticMember,
+                location,
+                symbol.Name,
+                memberKind
+            )
+        );
+    }
+}
