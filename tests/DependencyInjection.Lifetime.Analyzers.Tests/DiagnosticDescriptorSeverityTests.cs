@@ -12,51 +12,59 @@ namespace DependencyInjection.Lifetime.Analyzers.Tests;
 
 public class DiagnosticDescriptorSeverityTests
 {
-    private static readonly string RepoRoot =
-        Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", ".."));
+    private static readonly string RepoRoot = Path.GetFullPath(
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..")
+    );
 
     public static IEnumerable<object[]> DefaultSeverityExpectations =>
-    [
-        ["DI001", DiagnosticSeverity.Warning],
-        ["DI002", DiagnosticSeverity.Warning],
-        ["DI003", DiagnosticSeverity.Warning],
-        ["DI004", DiagnosticSeverity.Warning],
-        ["DI005", DiagnosticSeverity.Warning],
-        ["DI006", DiagnosticSeverity.Warning],
-        ["DI007", DiagnosticSeverity.Info],
-        ["DI008", DiagnosticSeverity.Warning],
-        ["DI009", DiagnosticSeverity.Warning],
-        ["DI010", DiagnosticSeverity.Info],
-        ["DI011", DiagnosticSeverity.Info],
-        ["DI012", DiagnosticSeverity.Info],
-        ["DI012b", DiagnosticSeverity.Info],
-        ["DI013", DiagnosticSeverity.Error],
-        ["DI014", DiagnosticSeverity.Warning],
-        ["DI015", DiagnosticSeverity.Warning],
-        ["DI016", DiagnosticSeverity.Warning],
-        ["DI017", DiagnosticSeverity.Warning],
-        ["DI018", DiagnosticSeverity.Warning],
-        ["DI019", DiagnosticSeverity.Warning],
-        ["DI020", DiagnosticSeverity.Warning],
-        ["DI021", DiagnosticSeverity.Warning],
-        ["DI022", DiagnosticSeverity.Info],
-        ["DI024", DiagnosticSeverity.Warning],
-        ["DI025", DiagnosticSeverity.Warning],
-        ["DI026", DiagnosticSeverity.Info],
-        ["DI027", DiagnosticSeverity.Warning]
-    ];
+        [
+            ["DI001", DiagnosticSeverity.Warning],
+            ["DI002", DiagnosticSeverity.Warning],
+            ["DI003", DiagnosticSeverity.Warning],
+            ["DI004", DiagnosticSeverity.Warning],
+            ["DI005", DiagnosticSeverity.Warning],
+            ["DI006", DiagnosticSeverity.Warning],
+            ["DI007", DiagnosticSeverity.Info],
+            ["DI008", DiagnosticSeverity.Warning],
+            ["DI009", DiagnosticSeverity.Warning],
+            ["DI010", DiagnosticSeverity.Info],
+            ["DI011", DiagnosticSeverity.Info],
+            ["DI012", DiagnosticSeverity.Info],
+            ["DI012b", DiagnosticSeverity.Info],
+            ["DI013", DiagnosticSeverity.Error],
+            ["DI014", DiagnosticSeverity.Warning],
+            ["DI015", DiagnosticSeverity.Warning],
+            ["DI016", DiagnosticSeverity.Warning],
+            ["DI017", DiagnosticSeverity.Warning],
+            ["DI018", DiagnosticSeverity.Warning],
+            ["DI019", DiagnosticSeverity.Warning],
+            ["DI020", DiagnosticSeverity.Warning],
+            ["DI021", DiagnosticSeverity.Warning],
+            ["DI022", DiagnosticSeverity.Info],
+            ["DI024", DiagnosticSeverity.Warning],
+            ["DI025", DiagnosticSeverity.Warning],
+            ["DI026", DiagnosticSeverity.Info],
+            ["DI027", DiagnosticSeverity.Warning],
+            ["DI028", DiagnosticSeverity.Warning],
+            ["DI029", DiagnosticSeverity.Warning],
+            ["DI030", DiagnosticSeverity.Info],
+        ];
 
     [Theory]
     [MemberData(nameof(DefaultSeverityExpectations))]
-    public void DefaultSeverity_MatchesNoiseBudget(string diagnosticId, DiagnosticSeverity expectedSeverity)
+    public void DefaultSeverity_MatchesNoiseBudget(
+        string diagnosticId,
+        DiagnosticSeverity expectedSeverity
+    )
     {
         // An ID may have multiple descriptors (DI022 has the config-gated and scoped-lifetime
         // tiers); every descriptor sharing the ID must honor the same noise budget.
         var descriptors = GetDescriptorsById()[diagnosticId];
 
-        Assert.All(descriptors, descriptor => Assert.Equal(expectedSeverity, descriptor.DefaultSeverity));
+        Assert.All(
+            descriptors,
+            descriptor => Assert.Equal(expectedSeverity, descriptor.DefaultSeverity)
+        );
     }
 
     [Fact]
@@ -75,7 +83,8 @@ public class DiagnosticDescriptorSeverityTests
     public void PublicDiagnosticInventory_MatchesDiagnosticDescriptors()
     {
         var publicDiagnosticIds = GetPublicDiagnosticIds();
-        var descriptorIds = GetDescriptorsById().Select(group => group.Key)
+        var descriptorIds = GetDescriptorsById()
+            .Select(group => group.Key)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
 
@@ -129,7 +138,8 @@ public class DiagnosticDescriptorSeverityTests
             RepoRoot,
             "src",
             "DependencyInjection.Lifetime.Analyzers",
-            fileName);
+            fileName
+        );
 
         var diagnosticIdPattern = new Regex(@"^DI\d+[A-Za-z]*\b", RegexOptions.Compiled);
 

@@ -141,4 +141,29 @@ public static class DiagnosticIds
     /// the leak proof inverts from "missing -=" to "discarded token".
     /// </summary>
     public const string RxSubscriptionLeak = "DI027";
+
+    /// <summary>
+    /// DI028: Shorter-lived service registers a callback on a longer-lived registration source —
+    /// IOptionsMonitor.OnChange, CancellationToken.Register, ChangeToken.OnChange,
+    /// IChangeToken.RegisterChangeCallback, or a linked CancellationTokenSource — and discards the
+    /// returned registration. The callback captures the subscriber, so the source roots every
+    /// subscriber instance for its own lifetime. The third member of the DI025/DI027 family:
+    /// the leak proof is the same discarded-token shape applied to callback registrations.
+    /// </summary>
+    public const string CallbackRegistrationLeak = "DI028";
+
+    /// <summary>
+    /// DI029: HttpClient or one of its pooling handlers is constructed on a per-invocation path,
+    /// exhausting sockets under load, or an HttpClient is handed to the container as a singleton or
+    /// held in a static member, pinning a handler that then never rotates and never observes DNS
+    /// changes. Both are lifetime defects in the connection pool the container should own.
+    /// </summary>
+    public const string HttpClientLifetimeMisuse = "DI029";
+
+    /// <summary>
+    /// DI030: A collection owned by a singleton service or held in a static member is written with
+    /// request-derived keys and never evicted, or an IMemoryCache entry is written with neither an
+    /// expiration nor a size limit. The store grows monotonically for the life of the process.
+    /// </summary>
+    public const string UnboundedSingletonCache = "DI030";
 }

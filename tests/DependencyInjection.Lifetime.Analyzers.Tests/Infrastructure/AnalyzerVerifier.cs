@@ -16,67 +16,61 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// Reference assemblies using .NET 6 with the DI 6.0 packages.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithDi60 { get; } =
-        ReferenceAssemblies.Net.Net60
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0")
-            ]);
+        ReferenceAssemblies.Net.Net60.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "6.0.0"),
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection", "6.0.0"),
+        ]);
 
     /// <summary>
     /// Reference assemblies using .NET 8 with the DI 8.0 packages.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithDi80 { get; } =
-        ReferenceAssemblies.Net.Net80
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0"),
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "8.0.0")
-            ]);
+        ReferenceAssemblies.Net.Net80.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0"),
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection", "8.0.0"),
+        ]);
 
     /// <summary>
     /// Reference assemblies using .NET 8 with the latest DI packages used by the test project.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithLatestDi { get; } =
-        ReferenceAssemblies.Net.Net80
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2")
-            ]);
+        ReferenceAssemblies.Net.Net80.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2"),
+        ]);
 
     /// <summary>
     /// Reference assemblies with common framework IServiceCollection extension packages.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithFrameworkExtensions { get; } =
-        ReferenceAssemblies.Net.Net80
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.Logging", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.Options", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.Http", "10.0.2"),
-                new PackageIdentity("Microsoft.Extensions.Caching.Memory", "10.0.2"),
-                new PackageIdentity("Microsoft.AspNetCore.Http.Abstractions", "2.3.0"),
-                new PackageIdentity("Microsoft.Extensions.Hosting.Abstractions", "10.0.2")
-            ]);
+        ReferenceAssemblies.Net.Net80.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.Logging", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.Options", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.Http", "10.0.2"),
+            new PackageIdentity("Microsoft.Extensions.Caching.Memory", "10.0.2"),
+            new PackageIdentity("Microsoft.AspNetCore.Http.Abstractions", "2.3.0"),
+            new PackageIdentity("Microsoft.Extensions.Hosting.Abstractions", "10.0.2"),
+        ]);
 
     /// <summary>
     /// Reference assemblies with DI 8.0.0 for keyed service support.
     /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithKeyedDi { get; } =
-        ReferenceAssemblies.Net.Net80
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0")
-            ]);
+        ReferenceAssemblies.Net.Net80.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "8.0.0"),
+        ]);
 
     /// <summary>
     /// Reference assemblies with the latest keyed DI APIs used by the test project.
     /// Only Abstractions is referenced to avoid duplicate extension method ambiguity.
     /// </summary>
     public static ReferenceAssemblies ReferenceAssembliesWithLatestKeyedDi { get; } =
-        ReferenceAssemblies.Net.Net80
-            .AddPackages([
-                new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2")
-            ]);
+        ReferenceAssemblies.Net.Net80.AddPackages([
+            new PackageIdentity("Microsoft.Extensions.DependencyInjection.Abstractions", "10.0.2"),
+        ]);
 
     /// <summary>
     /// Verifies that the analyzer produces no diagnostics for the given source.
@@ -98,6 +92,31 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies that the analyzer produces no diagnostics for executable-style source, using the
+    /// supplied reference assemblies.
+    /// <para>
+    /// <see cref="VerifyNoDiagnosticsAsConsoleApplicationAsync"/> pins the DI 6.0 reference set,
+    /// which carries neither Microsoft.Extensions.Http nor the caching abstractions. A rule that
+    /// bails out when those are absent would pass such a test for the wrong reason — the bail-out
+    /// rather than the guard under test — so entry-point guards for those rules need this overload.
+    /// </para>
+    /// </summary>
+    public static async Task VerifyNoDiagnosticsAsConsoleApplicationWithReferencesAsync(
+        string source,
+        ReferenceAssemblies references
+    )
+    {
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
+        {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
+            TestCode = source,
+            ReferenceAssemblies = references,
+        };
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies that the analyzer produces no diagnostics for the given source and editorconfig.
     /// </summary>
     public static async Task VerifyNoDiagnosticsAsync(string source, string editorConfig)
@@ -109,7 +128,10 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// <summary>
     /// Verifies that the analyzer produces the expected diagnostics.
     /// </summary>
-    public static async Task VerifyDiagnosticsAsync(string source, params DiagnosticResult[] expected)
+    public static async Task VerifyDiagnosticsAsync(
+        string source,
+        params DiagnosticResult[] expected
+    )
     {
         var test = CreateTest(source);
         test.ExpectedDiagnostics.AddRange(expected);
@@ -119,7 +141,11 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// <summary>
     /// Verifies that the analyzer produces the expected diagnostics for the given source and editorconfig.
     /// </summary>
-    public static async Task VerifyDiagnosticsAsync(string source, string editorConfig, params DiagnosticResult[] expected)
+    public static async Task VerifyDiagnosticsAsync(
+        string source,
+        string editorConfig,
+        params DiagnosticResult[] expected
+    )
     {
         var test = CreateTest(source, editorConfig);
         test.ExpectedDiagnostics.AddRange(expected);
@@ -129,7 +155,10 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// <summary>
     /// Verifies that the analyzer produces the expected diagnostics across multiple source files.
     /// </summary>
-    public static async Task VerifyDiagnosticsAsync((string filename, string source)[] sources, params DiagnosticResult[] expected)
+    public static async Task VerifyDiagnosticsAsync(
+        (string filename, string source)[] sources,
+        params DiagnosticResult[] expected
+    )
     {
         var test = CreateTest(sources);
         test.ExpectedDiagnostics.AddRange(expected);
@@ -139,7 +168,11 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// <summary>
     /// Verifies diagnostics using custom reference assemblies (e.g., keyed DI 8.0.0).
     /// </summary>
-    public static async Task VerifyDiagnosticsWithReferencesAsync(string source, ReferenceAssemblies references, params DiagnosticResult[] expected)
+    public static async Task VerifyDiagnosticsWithReferencesAsync(
+        string source,
+        ReferenceAssemblies references,
+        params DiagnosticResult[] expected
+    )
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
@@ -154,7 +187,10 @@ public static class AnalyzerVerifier<TAnalyzer>
     /// <summary>
     /// Verifies no diagnostics using custom reference assemblies (e.g., keyed DI 8.0.0).
     /// </summary>
-    public static async Task VerifyNoDiagnosticsWithReferencesAsync(string source, ReferenceAssemblies references)
+    public static async Task VerifyNoDiagnosticsWithReferencesAsync(
+        string source,
+        ReferenceAssemblies references
+    )
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
@@ -175,13 +211,14 @@ public static class AnalyzerVerifier<TAnalyzer>
 
     private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(
         string source,
-        string? editorConfig = null)
+        string? editorConfig = null
+    )
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
             MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
             TestCode = source,
-            ReferenceAssemblies = ReferenceAssembliesWithDi60
+            ReferenceAssemblies = ReferenceAssembliesWithDi60,
         };
 
         if (!string.IsNullOrWhiteSpace(editorConfig))
@@ -193,12 +230,13 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     private static CSharpAnalyzerTest<TAnalyzer, DefaultVerifier> CreateTest(
-        (string filename, string source)[] sources)
+        (string filename, string source)[] sources
+    )
     {
         var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
         {
             MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
-            ReferenceAssemblies = ReferenceAssembliesWithDi60
+            ReferenceAssemblies = ReferenceAssembliesWithDi60,
         };
 
         foreach (var (filename, source) in sources)
