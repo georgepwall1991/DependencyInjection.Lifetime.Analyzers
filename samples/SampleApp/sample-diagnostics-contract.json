@@ -758,6 +758,55 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI028",
+      "ruleId": "DI028",
+      "claims": [
+        {
+          "filePathContains": "DI028/CallbackRegistrationLeakExamples.cs",
+          "anchor": "_lifetime.ApplicationStopping.Register(OnStopping);",
+          "occurrence": 1,
+          "ruleId": "DI028",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI029",
+      "ruleId": "DI029",
+      "claims": [
+        {
+          "filePathContains": "DI029/HttpClientLifetimeExamples.cs",
+          "anchor": "using var http = new HttpClient();",
+          "occurrence": 1,
+          "ruleId": "DI029",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI030",
+      "ruleId": "DI030",
+      "claims": [
+        {
+          "filePathContains": "DI030/UnboundedSingletonCacheExamples.cs",
+          "anchor": "return _cache.GetOrAdd(tenantId, id => Load(id));",
+          "occurrence": 1,
+          "ruleId": "DI030",
+          "severity": "note"
+        },
+        {
+          "filePathContains": "DI030/UnboundedSingletonCacheExamples.cs",
+          "anchor": "_cache.Set(userId, report);",
+          "occurrence": 1,
+          "ruleId": "DI030",
+          "severity": "note"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

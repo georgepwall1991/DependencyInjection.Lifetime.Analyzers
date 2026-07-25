@@ -176,3 +176,7 @@ secrets.json
 # Project-specific
 pr_diff.txt
 .tmp-test/
+
+# Transient agent worktrees
+.claude/worktrees/
+.claude/scheduled_tasks.lock

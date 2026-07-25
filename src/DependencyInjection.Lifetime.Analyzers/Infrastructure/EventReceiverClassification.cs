@@ -18,7 +18,7 @@ internal enum EventReceiverKind
     Unknown,
     StaticEvent,
     InjectedMember,
-    ConstructorParameter
+    ConstructorParameter,
 }
 
 /// <summary>
@@ -28,16 +28,27 @@ internal enum EventReceiverKind
 /// </summary>
 internal static class EventReceiverClassification
 {
-    public static (EventReceiverKind Kind, ISymbol? Root, ImmutableArray<ISymbol> Segments, INamedTypeSymbol? PublisherType) ClassifyReceiver(
+    public static (
+        EventReceiverKind Kind,
+        ISymbol? Root,
+        ImmutableArray<ISymbol> Segments,
+        INamedTypeSymbol? PublisherType
+    ) ClassifyReceiver(
         ExpressionSyntax left,
         ISymbol member,
         INamedTypeSymbol containingType,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         if (member.IsStatic)
         {
-            return (EventReceiverKind.StaticEvent, null, ImmutableArray<ISymbol>.Empty, member.ContainingType);
+            return (
+                EventReceiverKind.StaticEvent,
+                null,
+                ImmutableArray<ISymbol>.Empty,
+                member.ContainingType
+            );
         }
 
         if (left is not MemberAccessExpressionSyntax memberAccess)
@@ -48,7 +59,10 @@ internal static class EventReceiverClassification
         }
 
         var receiverExpression = UnwrapEventReceiver(
-            memberAccess.Expression, semanticModel, cancellationToken);
+            memberAccess.Expression,
+            semanticModel,
+            cancellationToken
+        );
 
         if (receiverExpression is MemberAccessExpressionSyntax chain)
         {
@@ -56,7 +70,11 @@ internal static class EventReceiverClassification
         }
 
         var (kind, root, publisherType) = ClassifyReceiverRoot(
-            receiverExpression, containingType, semanticModel, cancellationToken);
+            receiverExpression,
+            containingType,
+            semanticModel,
+            cancellationToken
+        );
         return (kind, root, ImmutableArray<ISymbol>.Empty, publisherType);
     }
 
@@ -67,11 +85,17 @@ internal static class EventReceiverClassification
     /// event access above it: DI027's leak is the Subscribe token, not a <c>+=</c>, so the receiver
     /// it must prove is the observable expression itself rather than a publisher qualifying an event.
     /// </summary>
-    public static (EventReceiverKind Kind, ISymbol? Root, ImmutableArray<ISymbol> Segments, INamedTypeSymbol? PublisherType) ClassifyReceiverExpression(
+    public static (
+        EventReceiverKind Kind,
+        ISymbol? Root,
+        ImmutableArray<ISymbol> Segments,
+        INamedTypeSymbol? PublisherType
+    ) ClassifyReceiverExpression(
         ExpressionSyntax receiver,
         INamedTypeSymbol containingType,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         var receiverExpression = UnwrapReceiver(receiver);
 
@@ -81,7 +105,11 @@ internal static class EventReceiverClassification
         }
 
         var (kind, root, publisherType) = ClassifyReceiverRoot(
-            receiverExpression, containingType, semanticModel, cancellationToken);
+            receiverExpression,
+            containingType,
+            semanticModel,
+            cancellationToken
+        );
         return (kind, root, ImmutableArray<ISymbol>.Empty, publisherType);
     }
 
@@ -91,11 +119,17 @@ internal static class EventReceiverClassification
     /// registration — and records every intermediate segment so the compilation-end pass can
     /// prove each one is a stable projection of the root before reporting.
     /// </summary>
-    private static (EventReceiverKind Kind, ISymbol? Root, ImmutableArray<ISymbol> Segments, INamedTypeSymbol? PublisherType) ClassifyChainedReceiver(
+    private static (
+        EventReceiverKind Kind,
+        ISymbol? Root,
+        ImmutableArray<ISymbol> Segments,
+        INamedTypeSymbol? PublisherType
+    ) ClassifyChainedReceiver(
         MemberAccessExpressionSyntax chain,
         INamedTypeSymbol containingType,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         var segments = new List<ISymbol>();
         var current = chain;
@@ -109,15 +143,21 @@ internal static class EventReceiverClassification
                 // `base.Bus` is the root member itself, not a segment above one; classify it
                 // directly so base-qualified injected receivers keep their direct shape.
                 var (baseKind, baseRoot, basePublisherType) = ClassifyReceiverRoot(
-                    current, containingType, semanticModel, cancellationToken);
+                    current,
+                    containingType,
+                    semanticModel,
+                    cancellationToken
+                );
                 return baseKind == EventReceiverKind.Unknown
                     ? (EventReceiverKind.Unknown, null, ImmutableArray<ISymbol>.Empty, null)
                     : (baseKind, baseRoot, segments.ToImmutableArray(), basePublisherType);
             }
 
-            if (semanticModel.GetSymbolInfo(current, cancellationToken).Symbol
-                    is not { IsStatic: false } segmentSymbol ||
-                segmentSymbol is not (IFieldSymbol or IPropertySymbol))
+            if (
+                semanticModel.GetSymbolInfo(current, cancellationToken).Symbol
+                    is not { IsStatic: false } segmentSymbol
+                || segmentSymbol is not (IFieldSymbol or IPropertySymbol)
+            )
             {
                 return (EventReceiverKind.Unknown, null, ImmutableArray<ISymbol>.Empty, null);
             }
@@ -131,41 +171,60 @@ internal static class EventReceiverClassification
             }
 
             var (kind, root, publisherType) = ClassifyReceiverRoot(
-                inner, containingType, semanticModel, cancellationToken);
+                inner,
+                containingType,
+                semanticModel,
+                cancellationToken
+            );
             return kind == EventReceiverKind.Unknown
                 ? (EventReceiverKind.Unknown, null, ImmutableArray<ISymbol>.Empty, null)
                 : (kind, root, segments.ToImmutableArray(), publisherType);
         }
     }
 
-    private static (EventReceiverKind Kind, ISymbol? Root, INamedTypeSymbol? PublisherType) ClassifyReceiverRoot(
+    private static (
+        EventReceiverKind Kind,
+        ISymbol? Root,
+        INamedTypeSymbol? PublisherType
+    ) ClassifyReceiverRoot(
         ExpressionSyntax receiverExpression,
         INamedTypeSymbol containingType,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
-        var receiverSymbol = semanticModel.GetSymbolInfo(receiverExpression, cancellationToken).Symbol;
+        var receiverSymbol = semanticModel
+            .GetSymbolInfo(receiverExpression, cancellationToken)
+            .Symbol;
 
         if (receiverSymbol is ILocalSymbol local)
         {
-            receiverSymbol = ResolveLocalAlias(local, receiverExpression, semanticModel, cancellationToken);
+            receiverSymbol = ResolveLocalAlias(
+                local,
+                receiverExpression,
+                semanticModel,
+                cancellationToken
+            );
         }
 
         switch (receiverSymbol)
         {
-            case IFieldSymbol field when !field.IsStatic && IsTypeOrBase(containingType, field.ContainingType):
+            case IFieldSymbol field
+                when !field.IsStatic && IsTypeOrBase(containingType, field.ContainingType):
                 return field.Type is INamedTypeSymbol fieldType
                     ? (EventReceiverKind.InjectedMember, field, fieldType)
                     : (EventReceiverKind.Unknown, null, null);
 
-            case IPropertySymbol property when !property.IsStatic && IsTypeOrBase(containingType, property.ContainingType):
+            case IPropertySymbol property
+                when !property.IsStatic && IsTypeOrBase(containingType, property.ContainingType):
                 return property.Type is INamedTypeSymbol propertyType
                     ? (EventReceiverKind.InjectedMember, property, propertyType)
                     : (EventReceiverKind.Unknown, null, null);
 
-            case IParameterSymbol parameter when
-                parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } ctor &&
-                IsTypeOrBase(containingType, ctor.ContainingType):
+            case IParameterSymbol parameter
+                when parameter.ContainingSymbol
+                    is IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } ctor
+                    && IsTypeOrBase(containingType, ctor.ContainingType):
                 return parameter.Type is INamedTypeSymbol parameterType
                     ? (EventReceiverKind.ConstructorParameter, parameter, parameterType)
                     : (EventReceiverKind.Unknown, null, null);
@@ -184,10 +243,14 @@ internal static class EventReceiverClassification
                 case ParenthesizedExpressionSyntax parenthesized:
                     expression = parenthesized.Expression;
                     continue;
-                case PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression } suppressed:
+                case PostfixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.SuppressNullableWarningExpression
+                } suppressed:
                     expression = suppressed.Operand;
                     continue;
-                case MemberAccessExpressionSyntax thisAccess when thisAccess.Expression is ThisExpressionSyntax:
+                case MemberAccessExpressionSyntax thisAccess
+                    when thisAccess.Expression is ThisExpressionSyntax:
                     return thisAccess.Name;
                 default:
                     return expression;
@@ -198,14 +261,18 @@ internal static class EventReceiverClassification
     private static ExpressionSyntax UnwrapEventReceiver(
         ExpressionSyntax expression,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         expression = UnwrapReceiver(expression);
 
-        while (expression is CastExpressionSyntax cast &&
-            semanticModel.GetOperation(cast, cancellationToken) is IConversionOperation conversion &&
-            !conversion.Conversion.IsUserDefined &&
-            (conversion.Conversion.IsIdentity || conversion.Conversion.IsReference))
+        while (
+            expression is CastExpressionSyntax cast
+            && semanticModel.GetOperation(cast, cancellationToken)
+                is IConversionOperation conversion
+            && !conversion.Conversion.IsUserDefined
+            && (conversion.Conversion.IsIdentity || conversion.Conversion.IsReference)
+        )
         {
             // Identity and reference casts preserve the publisher instance. If the operand is
             // a member chain, the existing stable-projection proof still decides whether it is
@@ -225,11 +292,15 @@ internal static class EventReceiverClassification
         ILocalSymbol local,
         ExpressionSyntax use,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
-        if (local.DeclaringSyntaxReferences.Length != 1 ||
-            local.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken) is not VariableDeclaratorSyntax declarator ||
-            declarator.Initializer is null)
+        if (
+            local.DeclaringSyntaxReferences.Length != 1
+            || local.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken)
+                is not VariableDeclaratorSyntax declarator
+            || declarator.Initializer is null
+        )
         {
             return null;
         }
@@ -240,10 +311,15 @@ internal static class EventReceiverClassification
             return null;
         }
 
-        foreach (var candidate in enclosingBody.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        foreach (
+            var candidate in enclosingBody.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+        )
         {
-            if (semanticModel.GetSymbolInfo(candidate.Left, cancellationToken).Symbol is ILocalSymbol assigned &&
-                SymbolEqualityComparer.Default.Equals(assigned, local))
+            if (
+                semanticModel.GetSymbolInfo(candidate.Left, cancellationToken).Symbol
+                    is ILocalSymbol assigned
+                && SymbolEqualityComparer.Default.Equals(assigned, local)
+            )
             {
                 return null;
             }
@@ -257,18 +333,27 @@ internal static class EventReceiverClassification
     }
 
     public static SyntaxNode? ExecutableBodyOf(SyntaxNode node) =>
-        node.AncestorsAndSelf().FirstOrDefault(ancestor =>
-            ancestor is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax or
-                LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax);
+        node.AncestorsAndSelf()
+            .FirstOrDefault(ancestor =>
+                ancestor
+                    is BaseMethodDeclarationSyntax
+                        or AccessorDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax
+            );
 
     public static SemanticModel GetSemanticModel(
         SyntaxTree syntaxTree,
         Compilation compilation,
-        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree
+    )
     {
-        #pragma warning disable RS1030 // Compilation-end analysis needs models for foreign trees.
-        return semanticModelsByTree.GetOrAdd(syntaxTree, tree => compilation.GetSemanticModel(tree));
-        #pragma warning restore RS1030
+#pragma warning disable RS1030 // Compilation-end analysis needs models for foreign trees.
+        return semanticModelsByTree.GetOrAdd(
+            syntaxTree,
+            tree => compilation.GetSemanticModel(tree)
+        );
+#pragma warning restore RS1030
     }
 
     public static bool IsTypeOrBase(INamedTypeSymbol type, INamedTypeSymbol candidateOwner)
@@ -294,10 +379,13 @@ internal static class EventReceiverClassification
         ISymbol? receiverRoot,
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
-        if (receiverKind != EventReceiverKind.ConstructorParameter ||
-            receiverRoot is not IParameterSymbol parameter)
+        if (
+            receiverKind != EventReceiverKind.ConstructorParameter
+            || receiverRoot is not IParameterSymbol parameter
+        )
         {
             return receiverRoot;
         }
@@ -306,18 +394,33 @@ internal static class EventReceiverClassification
 
         foreach (var typeReference in parameter.ContainingType.DeclaringSyntaxReferences)
         {
-            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            if (
+                typeReference.GetSyntax(cancellationToken)
+                is not TypeDeclarationSyntax typeDeclaration
+            )
             {
                 continue;
             }
 
-            var model = GetSemanticModel(typeDeclaration.SyntaxTree, compilation, semanticModelsByTree);
-            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            var model = GetSemanticModel(
+                typeDeclaration.SyntaxTree,
+                compilation,
+                semanticModelsByTree
+            );
+            foreach (
+                var assignment in typeDeclaration
+                    .DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+            )
             {
-                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                    model.GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken).Symbol
-                        is not IParameterSymbol sourceParameter ||
-                    !SymbolEqualityComparer.Default.Equals(sourceParameter, parameter))
+                if (
+                    !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    || model
+                        .GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken)
+                        .Symbol
+                        is not IParameterSymbol sourceParameter
+                    || !SymbolEqualityComparer.Default.Equals(sourceParameter, parameter)
+                )
                 {
                     continue;
                 }
@@ -325,8 +428,10 @@ internal static class EventReceiverClassification
                 var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
                 if (target is IFieldSymbol or IPropertySymbol)
                 {
-                    if (storedInto is not null &&
-                        !SymbolEqualityComparer.Default.Equals(storedInto, target))
+                    if (
+                        storedInto is not null
+                        && !SymbolEqualityComparer.Default.Equals(storedInto, target)
+                    )
                     {
                         return receiverRoot;
                     }
@@ -349,7 +454,8 @@ internal static class EventReceiverClassification
         ISymbol? receiverRoot,
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         if (receiverRoot is not ISymbol member)
         {
@@ -361,8 +467,10 @@ internal static class EventReceiverClassification
         foreach (var reference in member.DeclaringSyntaxReferences)
         {
             var syntax = reference.GetSyntax(cancellationToken);
-            if (syntax is VariableDeclaratorSyntax { Initializer: not null } ||
-                syntax is PropertyDeclarationSyntax { Initializer: not null })
+            if (
+                syntax is VariableDeclaratorSyntax { Initializer: not null }
+                || syntax is PropertyDeclarationSyntax { Initializer: not null }
+            )
             {
                 return false;
             }
@@ -370,13 +478,24 @@ internal static class EventReceiverClassification
 
         foreach (var typeReference in member.ContainingType.DeclaringSyntaxReferences)
         {
-            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            if (
+                typeReference.GetSyntax(cancellationToken)
+                is not TypeDeclarationSyntax typeDeclaration
+            )
             {
                 continue;
             }
 
-            var model = GetSemanticModel(typeDeclaration.SyntaxTree, compilation, semanticModelsByTree);
-            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            var model = GetSemanticModel(
+                typeDeclaration.SyntaxTree,
+                compilation,
+                semanticModelsByTree
+            );
+            foreach (
+                var assignment in typeDeclaration
+                    .DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+            )
             {
                 var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
                 if (target is null || !SymbolEqualityComparer.Default.Equals(target, member))
@@ -389,10 +508,20 @@ internal static class EventReceiverClassification
                     return false;
                 }
 
-                if (model.GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken).Symbol
-                        is not IParameterSymbol parameter ||
-                    parameter.ContainingSymbol is not IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } ctor ||
-                    !SymbolEqualityComparer.Default.Equals(ctor.ContainingType, member.ContainingType))
+                if (
+                    model.GetSymbolInfo(UnwrapReceiver(assignment.Right), cancellationToken).Symbol
+                        is not IParameterSymbol parameter
+                    || parameter.ContainingSymbol
+                        is not IMethodSymbol
+                        {
+                            MethodKind: MethodKind.Constructor,
+                            IsStatic: false
+                        } ctor
+                    || !SymbolEqualityComparer.Default.Equals(
+                        ctor.ContainingType,
+                        member.ContainingType
+                    )
+                )
                 {
                     return false;
                 }
@@ -406,7 +535,8 @@ internal static class EventReceiverClassification
 
     public static bool ReceiverSegmentsMatch(
         ImmutableArray<ISymbol> subscriptionSegments,
-        ImmutableArray<ISymbol> removalSegments)
+        ImmutableArray<ISymbol> removalSegments
+    )
     {
         if (subscriptionSegments.Length != removalSegments.Length)
         {
@@ -431,17 +561,18 @@ internal static class EventReceiverClassification
     /// </summary>
     private static bool SegmentSymbolsMatch(ISymbol subscription, ISymbol removal)
     {
-        return SymbolEqualityComparer.Default.Equals(subscription, removal) ||
-               ImplementsInterfaceSegment(subscription, removal) ||
-               ImplementsInterfaceSegment(removal, subscription);
+        return SymbolEqualityComparer.Default.Equals(subscription, removal)
+            || ImplementsInterfaceSegment(subscription, removal)
+            || ImplementsInterfaceSegment(removal, subscription);
     }
 
     private static bool ImplementsInterfaceSegment(ISymbol implementation, ISymbol interfaceMember)
     {
-        return interfaceMember.ContainingType.TypeKind == TypeKind.Interface &&
-               SymbolEqualityComparer.Default.Equals(
-                   implementation.ContainingType.FindImplementationForInterfaceMember(interfaceMember),
-                   implementation);
+        return interfaceMember.ContainingType.TypeKind == TypeKind.Interface
+            && SymbolEqualityComparer.Default.Equals(
+                implementation.ContainingType.FindImplementationForInterfaceMember(interfaceMember),
+                implementation
+            );
     }
 
     /// <summary>
@@ -458,7 +589,8 @@ internal static class EventReceiverClassification
         List<ServiceRegistration> registrations,
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         for (var i = 0; i < receiverSegments.Length; i++)
         {
@@ -481,9 +613,17 @@ internal static class EventReceiverClassification
 
             if (property.ContainingType.TypeKind == TypeKind.Interface)
             {
-                if (i != 0 ||
-                    !InterfaceSegmentHasStableImplementations(
-                        property, publisherType, registrations, compilation, semanticModelsByTree, cancellationToken))
+                if (
+                    i != 0
+                    || !InterfaceSegmentHasStableImplementations(
+                        property,
+                        publisherType,
+                        registrations,
+                        compilation,
+                        semanticModelsByTree,
+                        cancellationToken
+                    )
+                )
                 {
                     return false;
                 }
@@ -491,8 +631,17 @@ internal static class EventReceiverClassification
                 continue;
             }
 
-            if (property.IsAbstract || property.IsVirtual || property.IsOverride ||
-                !PropertyIsStableProjection(property, compilation, semanticModelsByTree, cancellationToken))
+            if (
+                property.IsAbstract
+                || property.IsVirtual
+                || property.IsOverride
+                || !PropertyIsStableProjection(
+                    property,
+                    compilation,
+                    semanticModelsByTree,
+                    cancellationToken
+                )
+            )
             {
                 return false;
             }
@@ -501,13 +650,68 @@ internal static class EventReceiverClassification
         return true;
     }
 
+    /// <summary>
+    /// DI028 sibling of <see cref="ChainSegmentsAreStableProjections"/>. Some framework projections
+    /// are stable by documented contract but live only in metadata, so
+    /// <see cref="PropertyIsStableProjection"/> can never prove them — it requires declaring syntax.
+    /// <c>CancellationTokenSource.Token</c> and <c>IHostApplicationLifetime.ApplicationStopping</c>
+    /// are exactly that shape, and they are DI028's highest-confidence sources.
+    /// <para>
+    /// Such segments are accepted only as a contiguous suffix of the chain; the remaining prefix is
+    /// delegated to the frozen proof unchanged, preserving its "interface segments only on hop 0"
+    /// rule. A recognized segment appearing before a user segment fails the whole chain, so an
+    /// arbitrary projection cannot be laundered through one.
+    /// </para>
+    /// </summary>
+    public static bool ChainSegmentsAreStableProjectionsWithFrameworkSuffix(
+        ImmutableArray<ISymbol> receiverSegments,
+        INamedTypeSymbol? publisherType,
+        List<ServiceRegistration> registrations,
+        Compilation compilation,
+        ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
+        System.Threading.CancellationToken cancellationToken,
+        System.Func<ISymbol, bool> isKnownStableFrameworkSegment
+    )
+    {
+        var prefixLength = receiverSegments.Length;
+        while (
+            prefixLength > 0 && isKnownStableFrameworkSegment(receiverSegments[prefixLength - 1])
+        )
+        {
+            prefixLength--;
+        }
+
+        for (var i = 0; i < prefixLength; i++)
+        {
+            if (isKnownStableFrameworkSegment(receiverSegments[i]))
+            {
+                return false;
+            }
+        }
+
+        var prefix =
+            prefixLength == receiverSegments.Length
+                ? receiverSegments
+                : ImmutableArray.Create(receiverSegments, 0, prefixLength);
+
+        return ChainSegmentsAreStableProjections(
+            prefix,
+            publisherType,
+            registrations,
+            compilation,
+            semanticModelsByTree,
+            cancellationToken
+        );
+    }
+
     private static bool InterfaceSegmentHasStableImplementations(
         IPropertySymbol interfaceProperty,
         INamedTypeSymbol? rootServiceType,
         List<ServiceRegistration> registrations,
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         if (rootServiceType is null)
         {
@@ -521,11 +725,16 @@ internal static class EventReceiverClassification
         var matched = MatchingUnkeyedRegistrations(registrations, rootServiceType);
         var constructFromRoot = false;
 
-        if (matched.Count == 0 &&
-            rootServiceType.IsGenericType &&
-            !rootServiceType.IsUnboundGenericType)
+        if (
+            matched.Count == 0
+            && rootServiceType.IsGenericType
+            && !rootServiceType.IsUnboundGenericType
+        )
         {
-            matched = MatchingUnkeyedRegistrations(registrations, rootServiceType.ConstructUnboundGenericType());
+            matched = MatchingUnkeyedRegistrations(
+                registrations,
+                rootServiceType.ConstructUnboundGenericType()
+            );
             constructFromRoot = true;
         }
 
@@ -549,14 +758,23 @@ internal static class EventReceiverClassification
                     return false;
                 }
 
-                implementationType = implementationType.OriginalDefinition
-                    .Construct(rootServiceType.TypeArguments.ToArray());
+                implementationType = implementationType.OriginalDefinition.Construct(
+                    rootServiceType.TypeArguments.ToArray()
+                );
             }
 
-            if (implementationType.FindImplementationForInterfaceMember(interfaceProperty)
-                    is not IPropertySymbol implementationProperty ||
-                implementationProperty.IsAbstract || implementationProperty.IsVirtual ||
-                !PropertyIsStableProjection(implementationProperty, compilation, semanticModelsByTree, cancellationToken))
+            if (
+                implementationType.FindImplementationForInterfaceMember(interfaceProperty)
+                    is not IPropertySymbol implementationProperty
+                || implementationProperty.IsAbstract
+                || implementationProperty.IsVirtual
+                || !PropertyIsStableProjection(
+                    implementationProperty,
+                    compilation,
+                    semanticModelsByTree,
+                    cancellationToken
+                )
+            )
             {
                 return false;
             }
@@ -567,14 +785,17 @@ internal static class EventReceiverClassification
 
     private static List<ServiceRegistration> MatchingUnkeyedRegistrations(
         List<ServiceRegistration> registrations,
-        INamedTypeSymbol serviceType)
+        INamedTypeSymbol serviceType
+    )
     {
         var matched = new List<ServiceRegistration>();
 
         foreach (var registration in registrations)
         {
-            if (!registration.IsKeyed &&
-                SymbolEqualityComparer.Default.Equals(registration.ServiceType, serviceType))
+            if (
+                !registration.IsKeyed
+                && SymbolEqualityComparer.Default.Equals(registration.ServiceType, serviceType)
+            )
             {
                 matched.Add(registration);
             }
@@ -587,12 +808,15 @@ internal static class EventReceiverClassification
         IPropertySymbol property,
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
-        if (property.IsStatic ||
-            property.GetMethod is null ||
-            property.SetMethod is { IsInitOnly: false } ||
-            property.DeclaringSyntaxReferences.IsEmpty)
+        if (
+            property.IsStatic
+            || property.GetMethod is null
+            || property.SetMethod is { IsInitOnly: false }
+            || property.DeclaringSyntaxReferences.IsEmpty
+        )
         {
             return false;
         }
@@ -628,7 +852,8 @@ internal static class EventReceiverClassification
     private static bool ReturnedExpressionIsStable(
         ExpressionSyntax returned,
         SemanticModel semanticModel,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken
+    )
     {
         // Only a simple self-reference (`_inner` / `this._inner`) qualifies: a member reached
         // through another receiver (`_holder.Inner`) may repoint when the holder is
@@ -642,16 +867,18 @@ internal static class EventReceiverClassification
         return semanticModel.GetSymbolInfo(unwrapped, cancellationToken).Symbol switch
         {
             IFieldSymbol field => field.IsReadOnly && !field.IsStatic,
-            IPropertySymbol property =>
-                !property.IsStatic &&
-                !property.IsVirtual && !property.IsAbstract && !property.IsOverride &&
-                property.SetMethod is null &&
-                property.GetMethod is not null &&
-                !property.DeclaringSyntaxReferences.IsEmpty &&
-                property.DeclaringSyntaxReferences.All(reference =>
-                    reference.GetSyntax(cancellationToken) is PropertyDeclarationSyntax nested &&
-                    IsGetOnlyAutoProperty(nested)),
-            _ => false
+            IPropertySymbol property => !property.IsStatic
+                && !property.IsVirtual
+                && !property.IsAbstract
+                && !property.IsOverride
+                && property.SetMethod is null
+                && property.GetMethod is not null
+                && !property.DeclaringSyntaxReferences.IsEmpty
+                && property.DeclaringSyntaxReferences.All(reference =>
+                    reference.GetSyntax(cancellationToken) is PropertyDeclarationSyntax nested
+                    && IsGetOnlyAutoProperty(nested)
+                ),
+            _ => false,
         };
     }
 
@@ -693,16 +920,18 @@ internal static class EventReceiverClassification
             return declaration.ExpressionBody.Expression;
         }
 
-        var getter = declaration.AccessorList?.Accessors
-            .FirstOrDefault(accessor => accessor.IsKind(SyntaxKind.GetAccessorDeclaration));
+        var getter = declaration.AccessorList?.Accessors.FirstOrDefault(accessor =>
+            accessor.IsKind(SyntaxKind.GetAccessorDeclaration)
+        );
 
         if (getter?.ExpressionBody is not null)
         {
             return getter.ExpressionBody.Expression;
         }
 
-        return getter?.Body is { Statements.Count: 1 } body &&
-               body.Statements[0] is ReturnStatementSyntax { Expression: { } returnedExpression }
+        return
+            getter?.Body is { Statements.Count: 1 } body
+            && body.Statements[0] is ReturnStatementSyntax { Expression: { } returnedExpression }
             ? returnedExpression
             : null;
     }
