@@ -238,6 +238,38 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
         await VerifyAsync(source);
     }
 
+    [Fact]
+    public async Task UserDefinedVoidOnChangeExtension_Silent()
+    {
+        // The receiver type alone does not make a call a registration: a void extension that invokes
+        // the callback immediately hands back no token to discard.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddTransient<Reloader>();
+            }
+
+            public static class LocalMonitorExtensions
+            {
+                public static void OnChange<T>(this IOptionsMonitor<T> monitor, Action<T> listener) =>
+                    listener(monitor.CurrentValue);
+            }
+
+            public class Reloader
+            {
+                public Reloader(IOptionsMonitor<Settings> monitor)
+                {
+                    LocalMonitorExtensions.OnChange(monitor, Apply);
+                }
+
+                private void Apply(Settings settings) { }
+            }
+            """;
+
+        await VerifySilentAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Positives -- cancellation tokens
     // ----------------------------------------------------------------

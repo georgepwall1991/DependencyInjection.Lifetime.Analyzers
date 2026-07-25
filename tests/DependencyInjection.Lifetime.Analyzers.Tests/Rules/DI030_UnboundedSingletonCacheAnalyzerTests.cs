@@ -1655,6 +1655,97 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
     }
 
     [Fact]
+    public async Task MemoryCacheSet_TimeSpanAsCachedValue_Reports()
+    {
+        // The value happens to be a TimeSpan. Classifying by argument type rather than by declared
+        // parameter would read it as an expiration and drop a real finding.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<DurationService>();
+            }
+
+            public class DurationService
+            {
+                private readonly IMemoryCache _cache;
+
+                public DurationService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, TimeSpan duration)
+                {
+                    [|_cache.Set(userId, duration)|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task ConfigureMemoryCacheOptionsSizeLimit_Silent()
+    {
+        // The standard options pattern configures the very cache the container hands out.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddMemoryCache();
+                    services.Configure<MemoryCacheOptions>(options => options.SizeLimit = 1024);
+                    services.AddScoped<PriceService>();
+                }
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    _cache.Set(userId, quote);
+                }
+            }
+            """;
+
+        await VerifyCacheSilentAsync(source);
+    }
+
+    [Fact]
+    public async Task NonTransitioningInstanceFlagGuard_StillReports()
+    {
+        // `if (_disabled) return;` gates the write but never transitions, so the write still runs on
+        // every call. Only a flag the method itself assigns proves one-time initialization.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddSingleton<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private bool _disabled;
+                private readonly ConcurrentDictionary<string, Quote> _cache = new();
+
+                public void Store(string key, Quote quote)
+                {
+                    if (_disabled)
+                    {
+                        return;
+                    }
+
+                    [|_cache[key] = quote|];
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task DetectMemoryCacheBoundsFalse_TierBSilent()
     {
         var source =

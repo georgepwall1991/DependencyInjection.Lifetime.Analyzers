@@ -366,6 +366,14 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                         return false;
                     }
 
+                    // The receiver type alone does not make this a registration. A project may define
+                    // its own OnChange extension on IOptionsMonitor that returns void and invokes the
+                    // callback immediately; there is no registration to discard there.
+                    if (!ReturnsDisposable(method.ReturnType))
+                    {
+                        return false;
+                    }
+
                     anchors = ImmutableArray.Create(monitorExpression);
                     mechanism = RegistrationMechanism.OptionsMonitorOnChange;
                     mechanismDisplay = "IOptionsMonitor<T>.OnChange";
@@ -465,6 +473,20 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// A registration mechanism must hand back something disposable; that token is the thing whose
+    /// discard this rule proves.
+    /// </summary>
+    private static bool ReturnsDisposable(ITypeSymbol returnType)
+    {
+        if (returnType.SpecialType == SpecialType.System_IDisposable)
+        {
+            return true;
+        }
+
+        return returnType.AllInterfaces.Any(i => i.SpecialType == SpecialType.System_IDisposable);
     }
 
     /// <summary>

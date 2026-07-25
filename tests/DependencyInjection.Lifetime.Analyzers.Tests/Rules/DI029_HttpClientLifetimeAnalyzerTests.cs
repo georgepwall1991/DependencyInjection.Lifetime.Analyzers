@@ -1089,6 +1089,23 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
+    public async Task AddSingletonHttpClientWithOnlyIdleTimeout_Reports()
+    {
+        // An idle timeout never elapses on a connection under continuous load, so it establishes no
+        // maximum connection age and proves nothing about DNS freshness.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    [|services.AddSingleton<HttpClient>(sp => new HttpClient(
+                        new SocketsHttpHandler { PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2) }))|];
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task InstanceHttpClientField_Silent()
     {
         var source =

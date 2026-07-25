@@ -457,7 +457,8 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// Reports whether an expression provably configures connection rotation, which is what makes a
     /// long-lived client acceptable: <c>SocketsHttpHandler.PooledConnectionLifetime</c> retires pooled
-    /// connections on an interval, so DNS is re-resolved without rotating the client itself.
+    /// connections on an interval, so DNS is re-resolved without rotating the client itself. An idle
+    /// timeout does not qualify -- a connection under continuous load never goes idle.
     /// </summary>
     private static bool ConfiguresConnectionRotation(SyntaxNode? expression)
     {
@@ -475,7 +476,9 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
                 _ => null,
             };
 
-            if (name is "PooledConnectionLifetime" or "PooledConnectionIdleTimeout")
+            // Only PooledConnectionLifetime establishes a maximum connection age. An idle timeout
+            // never elapses on a continuously active connection, so it proves nothing about DNS.
+            if (name is "PooledConnectionLifetime")
             {
                 return true;
             }

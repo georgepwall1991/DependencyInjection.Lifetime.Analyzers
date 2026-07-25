@@ -770,7 +770,7 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         System.Threading.CancellationToken cancellationToken
     )
     {
-        var referencesInstanceState = false;
+        var flags = new List<ISymbol>();
 
         foreach (
             var identifier in condition.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>()
@@ -788,11 +788,37 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                 && SymbolEqualityComparer.Default.Equals(symbol.ContainingType, containingType)
             )
             {
-                referencesInstanceState = true;
+                flags.Add(symbol);
             }
         }
 
-        return referencesInstanceState;
+        if (flags.Count == 0)
+        {
+            return false;
+        }
+
+        // Referencing instance state is not enough. `if (_disabled) return;` still lets the write run
+        // on every call while the flag is false, so suppression requires a provable one-time
+        // transition: the guarded flag must itself be assigned somewhere in the same method.
+        var body = condition.FirstAncestorOrSelf<MethodDeclarationSyntax>();
+        if (body is null)
+        {
+            return false;
+        }
+
+        foreach (var assignment in body.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+        {
+            var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
+            if (
+                target is not null
+                && flags.Any(flag => SymbolEqualityComparer.Default.Equals(flag, target))
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1003,7 +1029,14 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             _ => null,
         };
 
-        return name is "AddMemoryCache" or "AddDistributedMemoryCache";
+        // Configure<MemoryCacheOptions>(o => o.SizeLimit = n) is the standard options pattern and
+        // configures the very cache the container hands out, so it bounds it exactly as
+        // AddMemoryCache's own callback does.
+        return name
+            is "AddMemoryCache"
+                or "AddDistributedMemoryCache"
+                or "Configure"
+                or "PostConfigure";
     }
 
     private static bool AssignsNonNullLimit(
@@ -1127,6 +1160,17 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     /// options object built anywhere other than inline is unprovable and therefore silencing — the
     /// single biggest false-positive source in this tier.
     /// </summary>
+    /// <summary>
+    /// A cache entry counts as bounded when an expiration or size is provable at the call site. An
+    /// options object built anywhere other than inline is unprovable and therefore silencing — the
+    /// single biggest false-positive source in this tier.
+    /// <para>
+    /// Arguments are matched by declared parameter name rather than by type. The framework's
+    /// <c>Set&lt;TItem&gt;(cache, key, TItem value, ...)</c> substitutes <c>TItem</c> with the cached
+    /// value's own type, so a cached <c>TimeSpan</c> would otherwise be mistaken for an expiration and
+    /// a real finding dropped.
+    /// </para>
+    /// </summary>
     private static bool EntryIsBounded(
         InvocationExpressionSyntax invocation,
         IMethodSymbol method,
@@ -1136,22 +1180,30 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         System.Threading.CancellationToken cancellationToken
     )
     {
-        foreach (var argument in arguments.Skip(1))
+        // CreateEntry only commits when the returned entry is disposed. A discarded result never stores
+        // anything, and a retained one may still be bounded by its caller, so there is nothing this rule
+        // can honestly report about it.
+        if (method.Name == "CreateEntry")
         {
-            var argumentType = semanticModel
-                .GetTypeInfo(argument.Expression, cancellationToken)
-                .Type;
+            return true;
+        }
 
-            // Set(key, value, TimeSpan) / (DateTimeOffset) / (CancellationChangeToken) all bound it.
-            if (
-                argumentType is not null
-                && argumentType.Name is "TimeSpan" or "DateTimeOffset" or "CancellationChangeToken"
-            )
+        foreach (var argument in arguments)
+        {
+            var parameter = ParameterFor(argument, method, arguments);
+            if (parameter is null)
             {
+                // An unresolvable argument leaves the entry's bounds unknown.
                 return true;
             }
 
-            if (wellKnownTypes.IsMemoryCacheEntryOptions(argumentType))
+            // The cache, the key, and the cached value carry no bound.
+            if (parameter.Name is "cache" or "key" or "value")
+            {
+                continue;
+            }
+
+            if (wellKnownTypes.IsMemoryCacheEntryOptions(parameter.Type))
             {
                 // Only an inline construction can be inspected.
                 if (
@@ -1169,7 +1221,7 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                 return ExpressionSetsBound(argument.Expression);
             }
 
-            // A GetOrCreate/CreateEntry factory can bound the entry through its ICacheEntry.
+            // A GetOrCreate factory can bound the entry through its ICacheEntry.
             if (argument.Expression is AnonymousFunctionExpressionSyntax lambda)
             {
                 if (ExpressionSetsBound(lambda))
@@ -1179,13 +1231,11 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
 
                 continue;
             }
-        }
 
-        // CreateEntry only commits when the returned entry is disposed. A discarded result never
-        // stores anything, and a retained one may still be bounded by its caller, so there is nothing
-        // this rule can honestly report about it.
-        if (method.Name == "CreateEntry")
-        {
+            // Any remaining parameter on these overloads is an expiration or an expiration token, all
+            // of which bound the entry.
+            _ = semanticModel;
+            _ = cancellationToken;
             return true;
         }
 
@@ -1198,6 +1248,24 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     /// or logs <c>entry.Size</c> configures nothing. Only an assignment with a non-null value, or a
     /// call to one of the bounding setters, counts.
     /// </summary>
+    /// <summary>
+    /// Resolves the parameter an argument binds to, honoring named arguments.
+    /// </summary>
+    private static IParameterSymbol? ParameterFor(
+        ArgumentSyntax argument,
+        IMethodSymbol method,
+        SeparatedSyntaxList<ArgumentSyntax> arguments
+    )
+    {
+        if (argument.NameColon?.Name.Identifier.ValueText is { } name)
+        {
+            return method.Parameters.FirstOrDefault(p => p.Name == name);
+        }
+
+        var ordinal = arguments.IndexOf(argument);
+        return ordinal >= 0 && ordinal < method.Parameters.Length ? method.Parameters[ordinal] : null;
+    }
+
     private static bool ExpressionSetsBound(SyntaxNode expression)
     {
         foreach (var node in expression.DescendantNodesAndSelf())
