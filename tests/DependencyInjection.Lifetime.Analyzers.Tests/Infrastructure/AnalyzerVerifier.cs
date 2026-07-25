@@ -202,6 +202,26 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies no diagnostics using custom reference assemblies and an editorconfig, for rules whose
+    /// options knobs apply to shapes that only bind under a framework reference set.
+    /// </summary>
+    public static async Task VerifyNoDiagnosticsWithReferencesAsync(
+        string source,
+        ReferenceAssemblies references,
+        string editorConfig
+    )
+    {
+        var test = new CSharpAnalyzerTest<TAnalyzer, DefaultVerifier>
+        {
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
+            TestCode = source,
+            ReferenceAssemblies = references,
+        };
+        test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", editorConfig));
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Creates a diagnostic result for the given descriptor at the specified location.
     /// </summary>
     public static DiagnosticResult Diagnostic(DiagnosticDescriptor descriptor)
