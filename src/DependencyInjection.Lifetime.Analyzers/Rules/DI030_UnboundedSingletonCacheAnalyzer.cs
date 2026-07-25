@@ -402,12 +402,15 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                 current = current.BaseType
             )
             {
-                // A keyed-only registration does not prove an unkeyed singleton resolution.
+                // A keyed registration neither proves nor disproves an unkeyed singleton resolution,
+                // so it is ignored entirely. Treating it as shorter-lived would let an additional keyed
+                // singleton erase a proven unkeyed one, whose cache still lives for the process.
                 if (registration.IsKeyed)
                 {
-                    shorterLived.Add(current);
+                    continue;
                 }
-                else if (registration.Lifetime == ServiceLifetime.Singleton)
+
+                if (registration.Lifetime == ServiceLifetime.Singleton)
                 {
                     singletons.Add(current);
                 }
@@ -810,12 +813,21 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         {
             var target = model.GetSymbolInfo(assignment.Left, cancellationToken).Symbol;
             if (
-                target is not null
-                && flags.Any(flag => SymbolEqualityComparer.Default.Equals(flag, target))
+                target is null
+                || !flags.Any(flag => SymbolEqualityComparer.Default.Equals(flag, target))
             )
             {
-                return true;
+                continue;
             }
+
+            // The flag has to latch. `_initialized = false` after the write leaves the guard open, so
+            // the write still runs on every call.
+            if (assignment.Right.IsKind(SyntaxKind.FalseLiteralExpression))
+            {
+                continue;
+            }
+
+            return true;
         }
 
         return false;
@@ -983,7 +995,7 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         // reporting rather than toward silence.
         if (
             assignment.FirstAncestorOrSelf<InvocationExpressionSyntax>() is not { } enclosingCall
-            || !IsAddMemoryCacheCall(enclosingCall)
+            || !IsCacheConfigurationCall(enclosingCall, context)
         )
         {
             return;
@@ -1018,25 +1030,37 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     /// memory-cache diagnostic in the compilation.
     /// </summary>
     /// <summary>
-    /// Recognizes the registration whose options configure the cache the container hands to consumers.
+    /// Recognizes the registration whose options configure the cache the container hands to consumers:
+    /// AddMemoryCache's own callback, or the standard options pattern over MemoryCacheOptions.
+    /// <para>
+    /// Bound to the framework's own extension containers rather than matched by name, so a project's
+    /// own no-op <c>Configure(Action&lt;MemoryCacheOptions&gt;)</c> cannot suppress the whole tier.
+    /// </para>
     /// </summary>
-    private static bool IsAddMemoryCacheCall(InvocationExpressionSyntax invocation)
+    private static bool IsCacheConfigurationCall(
+        InvocationExpressionSyntax invocation,
+        SyntaxNodeAnalysisContext context
+    )
     {
-        var name = invocation.Expression switch
+        if (
+            context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol
+            is not IMethodSymbol method
+        )
         {
-            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
-            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-            _ => null,
-        };
+            return false;
+        }
 
-        // Configure<MemoryCacheOptions>(o => o.SizeLimit = n) is the standard options pattern and
-        // configures the very cache the container hands out, so it bounds it exactly as
-        // AddMemoryCache's own callback does.
-        return name
-            is "AddMemoryCache"
-                or "AddDistributedMemoryCache"
-                or "Configure"
-                or "PostConfigure";
+        var original = method.ReducedFrom ?? method;
+        if (
+            original.Name
+            is not ("AddMemoryCache" or "AddDistributedMemoryCache" or "Configure" or "PostConfigure")
+        )
+        {
+            return false;
+        }
+
+        var containerNamespace = original.ContainingType?.ContainingNamespace?.ToDisplayString();
+        return containerNamespace is "Microsoft.Extensions.DependencyInjection";
     }
 
     private static bool AssignsNonNullLimit(
@@ -1050,7 +1074,17 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         }
 
         var constant = context.SemanticModel.GetConstantValue(value, context.CancellationToken);
-        return !constant.HasValue || constant.Value is not null;
+        if (constant.HasValue)
+        {
+            return constant.Value is not null;
+        }
+
+        // A non-constant nullable expression -- a configuration-backed long?, say -- may well be null at
+        // runtime. Only a value whose type cannot be null establishes the bound.
+        var valueType = context.SemanticModel.GetTypeInfo(value, context.CancellationToken).Type;
+        return valueType is not null
+            && valueType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+            && valueType.NullableAnnotation != NullableAnnotation.Annotated;
     }
 
     private static void CollectCacheWrite(
@@ -1103,7 +1137,14 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         }
 
         var arguments = invocation.ArgumentList.Arguments;
-        var keyExpression = arguments.FirstOrDefault()?.Expression;
+
+        // Bound through the declared parameter: a reordered named-argument call such as
+        // Set(value: q, key: userId) does not put the key first.
+        var keyExpression = arguments
+            .FirstOrDefault(argument =>
+                ParameterFor(argument, method, arguments)?.Name == "key"
+            )
+            ?.Expression;
         if (keyExpression is null)
         {
             return;
@@ -1268,28 +1309,58 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
 
     private static bool ExpressionSetsBound(SyntaxNode expression)
     {
+        // The receiver that a bound must be configured on: the options object under construction, or
+        // the ICacheEntry a factory lambda receives. Anything else with a same-named property -- a
+        // cached domain object with its own Size, say -- configures nothing.
+        var entryParameterName = expression switch
+        {
+            SimpleLambdaExpressionSyntax simple => simple.Parameter.Identifier.ValueText,
+            ParenthesizedLambdaExpressionSyntax parenthesized when
+                parenthesized.ParameterList.Parameters.Count == 1 =>
+                parenthesized.ParameterList.Parameters[0].Identifier.ValueText,
+            _ => null,
+        };
+
         foreach (var node in expression.DescendantNodesAndSelf())
         {
             switch (node)
             {
                 case AssignmentExpressionSyntax assignment:
                 {
-                    var target = assignment.Left switch
+                    if (assignment.Right.IsKind(SyntaxKind.NullLiteralExpression))
                     {
-                        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                        MemberAccessExpressionSyntax memberAccess =>
+                        continue;
+                    }
+
+                    var (target, receiver) = assignment.Left switch
+                    {
+                        // Object-initializer form: the receiver is the object being constructed.
+                        IdentifierNameSyntax identifier when
+                            assignment.Parent is InitializerExpressionSyntax =>
+                            (identifier.Identifier.ValueText, (string?)null),
+                        MemberAccessExpressionSyntax memberAccess => (
                             memberAccess.Name.Identifier.ValueText,
-                        _ => null,
+                            (memberAccess.Expression as IdentifierNameSyntax)?.Identifier.ValueText
+                        ),
+                        _ => (null, null),
                     };
 
                     if (
                         target
-                            is "AbsoluteExpiration"
-                                or "AbsoluteExpirationRelativeToNow"
-                                or "SlidingExpiration"
-                                or "Size"
-                        && !assignment.Right.IsKind(SyntaxKind.NullLiteralExpression)
+                        is not (
+                            "AbsoluteExpiration"
+                            or "AbsoluteExpirationRelativeToNow"
+                            or "SlidingExpiration"
+                            or "Size"
+                        )
                     )
+                    {
+                        continue;
+                    }
+
+                    // Inside a factory the receiver must be the entry parameter; in an initializer
+                    // there is no receiver to check.
+                    if (entryParameterName is null || receiver == entryParameterName)
                     {
                         return true;
                     }

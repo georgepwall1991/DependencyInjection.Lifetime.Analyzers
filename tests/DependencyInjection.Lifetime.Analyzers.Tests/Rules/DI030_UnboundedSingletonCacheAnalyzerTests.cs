@@ -1746,6 +1746,169 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
     }
 
     [Fact]
+    public async Task MemoryCacheSet_ReorderedNamedKeyArgument_Reports()
+    {
+        // The key is bound through the declared parameter, so a reordered named-argument call is not
+        // mistaken for a bounded write.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId)
+                {
+                    [|_cache.Set(value: new Quote(), key: userId)|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheGetOrCreate_FactorySetsSizeOnCachedValue_Reports()
+    {
+        // The factory assigns Size on the cached object, never on its ICacheEntry, so the entry is
+        // still unbounded.
+        var source = CachePrelude + """
+            public class Sized { public long Size { get; set; } }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<SizedService>();
+            }
+
+            public class SizedService
+            {
+                private readonly IMemoryCache _cache;
+
+                public SizedService(IMemoryCache cache) => _cache = cache;
+
+                public Sized Get(string userId) =>
+                    [|_cache.GetOrCreate(userId, entry =>
+                    {
+                        var value = new Sized();
+                        value.Size = 1;
+                        return value;
+                    })|]!;
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task UserDefinedConfigureWithSizeLimit_DoesNotSuppress_Reports()
+    {
+        // A project's own Configure never touches the container cache, so it must not silence the tier.
+        var source = CachePrelude + """
+            public static class LocalOptions
+            {
+                public static void Configure(Action<MemoryCacheOptions> configure) { }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddMemoryCache();
+                    LocalOptions.Configure(options => options.SizeLimit = 1024);
+                    services.AddScoped<PriceService>();
+                }
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    [|_cache.Set(userId, quote)|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task NonLatchingOneShotFlag_StillReports()
+    {
+        // The flag is reset to false after the write, so the guard never closes.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddSingleton<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private bool _initialized;
+                private readonly ConcurrentDictionary<string, Quote> _cache = new();
+
+                public void Warm(string key, Quote quote)
+                {
+                    if (_initialized)
+                    {
+                        return;
+                    }
+
+                    [|_cache[key] = quote|];
+                    _initialized = false;
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task UnkeyedSingletonAlongsideKeyedSingleton_Reports()
+    {
+        // An additional keyed registration says nothing about the unkeyed singleton, whose cache still
+        // lives for the process.
+        var source = Prelude + """
+            public interface IPrices { }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<PriceService>();
+                    services.AddKeyedSingleton<IPrices, PriceService>("primary");
+                }
+            }
+
+            public class PriceService : IPrices
+            {
+                private readonly ConcurrentDictionary<string, Quote> _cache = new();
+
+                public void Store(string key, Quote quote)
+                {
+                    [|_cache[key] = quote|];
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI030_UnboundedSingletonCacheAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI030_UnboundedSingletonCacheAnalyzer>.ReferenceAssembliesWithLatestKeyedDi
+        );
+    }
+
+    [Fact]
     public async Task DetectMemoryCacheBoundsFalse_TierBSilent()
     {
         var source =

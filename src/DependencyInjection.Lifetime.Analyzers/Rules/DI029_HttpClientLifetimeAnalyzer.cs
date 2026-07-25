@@ -478,7 +478,40 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
 
             // Only PooledConnectionLifetime establishes a maximum connection age. An idle timeout
             // never elapses on a continuously active connection, so it proves nothing about DNS.
-            if (name is "PooledConnectionLifetime")
+            if (name is not "PooledConnectionLifetime")
+            {
+                continue;
+            }
+
+            // ...and only a finite one. Timeout.InfiniteTimeSpan is precisely the non-rotating
+            // default, so assigning it explicitly proves the opposite of rotation.
+            var assigned = node.FirstAncestorOrSelf<AssignmentExpressionSyntax>();
+            if (assigned is not null && AssignsInfiniteTimeSpan(assigned.Right))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Recognizes the infinite timeout, which disables rotation rather than configuring it.
+    /// </summary>
+    private static bool AssignsInfiniteTimeSpan(ExpressionSyntax value)
+    {
+        foreach (var node in value.DescendantNodesAndSelf())
+        {
+            var name = node switch
+            {
+                MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                _ => null,
+            };
+
+            if (name is "InfiniteTimeSpan" or "MaxValue" or "Infinite")
             {
                 return true;
             }

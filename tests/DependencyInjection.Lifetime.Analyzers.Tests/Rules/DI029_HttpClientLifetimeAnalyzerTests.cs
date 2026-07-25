@@ -1106,6 +1106,25 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
+    public async Task AddSingletonHttpClientWithInfinitePooledLifetime_Reports()
+    {
+        // Timeout.InfiniteTimeSpan is the non-rotating default. Assigning it explicitly proves the
+        // opposite of rotation, so it must not suppress.
+        var source = Prelude + """
+            using System.Threading;
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    [|services.AddSingleton<HttpClient>(sp => new HttpClient(
+                        new SocketsHttpHandler { PooledConnectionLifetime = Timeout.InfiniteTimeSpan }))|];
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
     public async Task InstanceHttpClientField_Silent()
     {
         var source =
