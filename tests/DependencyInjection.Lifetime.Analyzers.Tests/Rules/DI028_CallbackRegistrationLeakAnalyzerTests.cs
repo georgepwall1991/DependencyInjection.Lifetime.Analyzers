@@ -212,6 +212,32 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
         await VerifyAsync(source);
     }
 
+    [Fact]
+    public async Task OptionsMonitorOnChange_ExplicitExtensionReorderedNamedArguments_Reports()
+    {
+        // The receiver is bound through the declared parameters, so a named-argument call that lists
+        // the monitor last is still recognized.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddTransient<Reloader>();
+            }
+
+            public class Reloader
+            {
+                public Reloader(IOptionsMonitor<Settings> monitor)
+                {
+                    [|OptionsMonitorExtensions.OnChange(listener: Apply, monitor: monitor)|];
+                }
+
+                private void Apply(Settings settings) { }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
     // ----------------------------------------------------------------
     // Positives -- cancellation tokens
     // ----------------------------------------------------------------

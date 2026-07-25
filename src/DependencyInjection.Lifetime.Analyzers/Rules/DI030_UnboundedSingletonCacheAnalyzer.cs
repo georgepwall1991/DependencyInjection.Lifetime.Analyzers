@@ -950,6 +950,19 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     {
         var assignment = (AssignmentExpressionSyntax)context.Node;
 
+        // Only a limit configured on the container-provided cache is applied, because that is the cache
+        // Tier B's writes actually go through. A standalone `new MemoryCache(options)` bounds only
+        // itself, and letting it suppress every write in the compilation would hide unrelated unbounded
+        // caches. Per-receiver identity would be more precise still; until then this errs toward
+        // reporting rather than toward silence.
+        if (
+            assignment.FirstAncestorOrSelf<InvocationExpressionSyntax>() is not { } enclosingCall
+            || !IsAddMemoryCacheCall(enclosingCall)
+        )
+        {
+            return;
+        }
+
         switch (assignment.Left)
         {
             // options.SizeLimit = 1024;
@@ -970,29 +983,6 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            // new MemoryCacheOptions { SizeLimit = 1024 } -- an initializer assigns through a bare
-            // identifier, not a member access. Missing this shape would leave the tier enabled for a
-            // cache that really is bounded, so it is a false-positive risk rather than a missed leak.
-            case IdentifierNameSyntax identifier
-                when identifier.Identifier.ValueText == "SizeLimit"
-                    && assignment.Parent is InitializerExpressionSyntax initializer:
-            {
-                var createdType = context
-                    .SemanticModel.GetTypeInfo(
-                        initializer.Parent ?? initializer,
-                        context.CancellationToken
-                    )
-                    .Type;
-                if (
-                    wellKnownTypes.IsMemoryCacheOptions(createdType)
-                    && AssignsNonNullLimit(assignment.Right, context)
-                )
-                {
-                    cacheHasGlobalSizeLimit.Value = true;
-                }
-
-                return;
-            }
         }
     }
 
@@ -1001,6 +991,21 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
     /// Treating any assignment as a bound would let a single <c>SizeLimit = null</c> suppress every
     /// memory-cache diagnostic in the compilation.
     /// </summary>
+    /// <summary>
+    /// Recognizes the registration whose options configure the cache the container hands to consumers.
+    /// </summary>
+    private static bool IsAddMemoryCacheCall(InvocationExpressionSyntax invocation)
+    {
+        var name = invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            _ => null,
+        };
+
+        return name is "AddMemoryCache" or "AddDistributedMemoryCache";
+    }
+
     private static bool AssignsNonNullLimit(
         ExpressionSyntax value,
         SyntaxNodeAnalysisContext context
@@ -1176,39 +1181,62 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        // CreateEntry returns the entry itself; a caller that keeps it may bound it later.
+        // CreateEntry only commits when the returned entry is disposed. A discarded result never
+        // stores anything, and a retained one may still be bounded by its caller, so there is nothing
+        // this rule can honestly report about it.
         if (method.Name == "CreateEntry")
         {
-            return invocation.Parent is not ExpressionStatementSyntax;
+            return true;
         }
 
         return false;
     }
 
+    /// <summary>
+    /// Reports whether an expression provably configures a bound. A bare mention of a bounding member
+    /// is not enough: <c>SlidingExpiration = null</c> assigns no bound, and a factory that merely reads
+    /// or logs <c>entry.Size</c> configures nothing. Only an assignment with a non-null value, or a
+    /// call to one of the bounding setters, counts.
+    /// </summary>
     private static bool ExpressionSetsBound(SyntaxNode expression)
     {
         foreach (var node in expression.DescendantNodesAndSelf())
         {
-            var name = node switch
+            switch (node)
             {
-                NameEqualsSyntax nameEquals => nameEquals.Name.Identifier.ValueText,
-                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-                _ => null,
-            };
+                case AssignmentExpressionSyntax assignment:
+                {
+                    var target = assignment.Left switch
+                    {
+                        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                        MemberAccessExpressionSyntax memberAccess =>
+                            memberAccess.Name.Identifier.ValueText,
+                        _ => null,
+                    };
 
-            if (
-                name
-                is "AbsoluteExpiration"
-                    or "AbsoluteExpirationRelativeToNow"
-                    or "SlidingExpiration"
-                    or "Size"
-                    or "SetAbsoluteExpiration"
-                    or "SetSlidingExpiration"
-                    or "SetSize"
-                    or "AddExpirationToken"
-            )
-            {
-                return true;
+                    if (
+                        target
+                            is "AbsoluteExpiration"
+                                or "AbsoluteExpirationRelativeToNow"
+                                or "SlidingExpiration"
+                                or "Size"
+                        && !assignment.Right.IsKind(SyntaxKind.NullLiteralExpression)
+                    )
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                case InvocationExpressionSyntax invocation
+                    when invocation.Expression is MemberAccessExpressionSyntax call
+                        && call.Name.Identifier.ValueText
+                            is "SetAbsoluteExpiration"
+                                or "SetSlidingExpiration"
+                                or "SetSize"
+                                or "AddExpirationToken":
+                    return true;
             }
         }
 

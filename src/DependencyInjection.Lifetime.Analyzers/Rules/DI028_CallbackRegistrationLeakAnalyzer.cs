@@ -524,7 +524,46 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         }
 
         // Explicit static extension syntax: OptionsMonitorExtensions.OnChange(monitor, handler).
-        return invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+        // Bound through the declared parameters rather than by source order, so reordered named
+        // arguments such as OnChange(listener: Apply, monitor: m) still identify the receiver.
+        return ArgumentForParameterOrdinal(invocation, method, 0);
+    }
+
+    /// <summary>
+    /// Returns the argument bound to a parameter ordinal, honoring named arguments. Source position is
+    /// not a reliable guide: a named-argument call may list the extension receiver last.
+    /// </summary>
+    private static ExpressionSyntax? ArgumentForParameterOrdinal(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method,
+        int ordinal
+    )
+    {
+        var original = method.ReducedFrom ?? method;
+        if (ordinal >= original.Parameters.Length)
+        {
+            return null;
+        }
+
+        var parameterName = original.Parameters[ordinal].Name;
+        var arguments = invocation.ArgumentList.Arguments;
+
+        foreach (var argument in arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.ValueText == parameterName)
+            {
+                return argument.Expression;
+            }
+        }
+
+        // No name matched, so positional binding applies -- but only while no earlier argument was
+        // named, which would shift the mapping.
+        if (ordinal < arguments.Count && arguments.Take(ordinal + 1).All(a => a.NameColon is null))
+        {
+            return arguments[ordinal].Expression;
+        }
+
+        return null;
     }
 
     // ----------------------------------------------------------------

@@ -506,11 +506,11 @@ public static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor CallbackRegistrationLeakLinkedTokenSource = new(
         id: DiagnosticIds.CallbackRegistrationLeak,
         title: "Dispose the registration returned when registering a callback on a longer-lived source",
-        messageFormat: "'{0}' is registered as {1} but never disposes the linked CancellationTokenSource created from {2}. Linking registers a callback on the longer-lived token, so it roots every '{0}' instance the container creates; dispose the linked source when it is no longer needed.",
+        messageFormat: "'{0}' is registered as {1} but never disposes the linked CancellationTokenSource created from {2}. Linking leaves a registration on the longer-lived token, so one undisposed source accumulates there per resolution; dispose the linked source when it is no longer needed.",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "CancellationTokenSource.CreateLinkedTokenSource registers a callback on each token it links. That callback lives on the longest-lived token in the chain, so an undisposed linked source created from a process-lifetime token — the host application lifetime's shutdown token, or a token from a singleton-held source — stays registered for the life of the process and roots the service that created it. The leak grows once per resolution. Dispose the linked source, preferably with a using declaration scoped to the operation it guards.",
+        description: "CancellationTokenSource.CreateLinkedTokenSource registers a callback on each token it links. That callback lives on the longest-lived token in the chain and holds the linked source itself, so an undisposed linked source created from a process-lifetime token — the host application lifetime's shutdown token, or a token from a singleton-held source — stays registered for the life of the process. What accumulates is one undisposed source per resolution on the parent token's registration list, not necessarily the creating service's whole object graph. Dispose the linked source, preferably with a using declaration scoped to the operation it guards.",
         customTags: WellKnownDiagnosticTags.CompilationEnd
     );
 

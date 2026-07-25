@@ -167,9 +167,18 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
                 semanticModel,
                 wellKnownTypes,
                 cancellationToken,
-                out _
+                out var creationKind
             )
         )
+        {
+            return;
+        }
+
+        // Only a client consumes a socket. Constructing a handler opens no connection until something
+        // sends through it, and proving that it reaches a request path needs interprocedural analysis
+        // this rule does not do -- so a bare handler construction stays silent. The leak shape that
+        // matters, new HttpClient(new SocketsHttpHandler()), is still reported through the client.
+        if (creationKind != HttpClientCreationKind.Client)
         {
             return;
         }
@@ -404,6 +413,14 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
 
         foreach (var registration in candidates.OrderBy(r => r.Location.SourceSpan.Start))
         {
+            // A handler configured with PooledConnectionLifetime replaces its connections on that
+            // interval and re-resolves DNS with them, which is the documented way to run a long-lived
+            // client without the factory. Reporting it would be wrong.
+            if (ConfiguresConnectionRotation(registration.FactoryExpression))
+            {
+                continue;
+            }
+
             if (
                 !reachability.IsReachable(registration.Location)
                 || reachability.HasOpaquePredecessor(registration.Location)
@@ -437,6 +454,36 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
     /// accessor bodies) or one with an initializer retains the instance; an expression-bodied or
     /// explicitly-implemented getter produces a value on each access and retains nothing.
     /// </summary>
+    /// <summary>
+    /// Reports whether an expression provably configures connection rotation, which is what makes a
+    /// long-lived client acceptable: <c>SocketsHttpHandler.PooledConnectionLifetime</c> retires pooled
+    /// connections on an interval, so DNS is re-resolved without rotating the client itself.
+    /// </summary>
+    private static bool ConfiguresConnectionRotation(SyntaxNode? expression)
+    {
+        if (expression is null)
+        {
+            return false;
+        }
+
+        foreach (var node in expression.DescendantNodesAndSelf())
+        {
+            var name = node switch
+            {
+                IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+                _ => null,
+            };
+
+            if (name is "PooledConnectionLifetime" or "PooledConnectionIdleTimeout")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool PropertyRetainsValue(IPropertySymbol property)
     {
         if (property.DeclaringSyntaxReferences.IsEmpty)
@@ -511,6 +558,14 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         if (location is null)
         {
             return;
+        }
+
+        foreach (var reference in symbol.DeclaringSyntaxReferences)
+        {
+            if (ConfiguresConnectionRotation(reference.GetSyntax(context.CancellationToken)))
+            {
+                return;
+            }
         }
 
         context.ReportDiagnostic(

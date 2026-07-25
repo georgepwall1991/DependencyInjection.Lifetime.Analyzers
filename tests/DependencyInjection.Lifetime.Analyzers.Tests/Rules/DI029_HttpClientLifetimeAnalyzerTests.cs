@@ -211,7 +211,7 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
-    public async Task RegisteredService_NewHttpClientHandler_Reports()
+    public async Task RegisteredService_NewHttpClientHandler_Silent()
     {
         var source =
             Prelude
@@ -226,17 +226,19 @@ public class DI029_HttpClientLifetimeAnalyzerTests
                 {
                     public void Configure()
                     {
-                        var handler = [|new HttpClientHandler()|];
+                        // Constructing a handler allocates no connection; only a client that sends
+                        // through it consumes a socket.
+                        var handler = new HttpClientHandler();
                         handler.UseCookies = false;
                     }
                 }
                 """;
 
-        await VerifyAsync(source);
+        await VerifySilentAsync(source);
     }
 
     [Fact]
-    public async Task RegisteredService_NewSocketsHttpHandler_Reports()
+    public async Task RegisteredService_NewSocketsHttpHandler_Silent()
     {
         var source =
             Prelude
@@ -251,13 +253,13 @@ public class DI029_HttpClientLifetimeAnalyzerTests
                 {
                     public void Configure()
                     {
-                        var handler = [|new SocketsHttpHandler()|];
+                        var handler = new SocketsHttpHandler();
                         handler.MaxConnectionsPerServer = 4;
                     }
                 }
                 """;
 
-        await VerifyAsync(source);
+        await VerifySilentAsync(source);
     }
 
     [Fact]
@@ -1053,6 +1055,37 @@ public class DI029_HttpClientLifetimeAnalyzerTests
                 .WithLocation(0)
                 .WithArguments("Shared", "property")
         );
+    }
+
+    [Fact]
+    public async Task AddSingletonHttpClientWithPooledConnectionLifetime_Silent()
+    {
+        // The documented way to run a long-lived client without the factory: the handler retires pooled
+        // connections on an interval, so DNS is re-resolved without rotating the client.
+        var source = Prelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddSingleton<HttpClient>(sp => new HttpClient(
+                        new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) }));
+            }
+            """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticHttpClientFieldWithPooledConnectionLifetime_Silent()
+    {
+        var source = Prelude + """
+            public class ApiClient
+            {
+                private static readonly HttpClient Shared = new HttpClient(
+                    new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) });
+            }
+            """;
+
+        await VerifySilentAsync(source);
     }
 
     [Fact]

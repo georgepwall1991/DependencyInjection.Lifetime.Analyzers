@@ -1497,38 +1497,6 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
         await VerifyCacheSilentAsync(source);
     }
 
-    [Fact]
-    public async Task MemoryCacheOptionsInitializerSizeLimit_Silent()
-    {
-        // An initializer assigns SizeLimit through a bare identifier rather than a member access.
-        // Missing that shape would leave the tier enabled for a cache that really is bounded.
-        var source =
-            CachePrelude
-            + """
-                public static class Registrations
-                {
-                    public static void Configure(IServiceCollection services)
-                    {
-                        services.AddSingleton(new MemoryCache(new MemoryCacheOptions { SizeLimit = 1024 }));
-                        services.AddScoped<PriceService>();
-                    }
-                }
-
-                public class PriceService
-                {
-                    private readonly IMemoryCache _cache;
-
-                    public PriceService(IMemoryCache cache) => _cache = cache;
-
-                    public void Store(string userId, Quote quote)
-                    {
-                        _cache.Set(userId, quote);
-                    }
-                }
-                """;
-
-        await VerifyCacheSilentAsync(source);
-    }
 
     [Fact]
     public async Task MemoryCacheSet_PostEvictionCallbackOnly_Reports()
@@ -1574,6 +1542,100 @@ public class DI030_UnboundedSingletonCacheAnalyzerTests
                     services.AddMemoryCache(options => options.SizeLimit = null);
                     services.AddScoped<PriceService>();
                 }
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    [|_cache.Set(userId, quote)|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheSet_SlidingExpirationNull_Reports()
+    {
+        // A bare mention of a bounding member is not a bound: assigning null configures nothing.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId, Quote quote)
+                {
+                    [|_cache.Set(
+                        userId,
+                        quote,
+                        new MemoryCacheEntryOptions { SlidingExpiration = null })|];
+                }
+            }
+            """;
+
+        await VerifyCacheAsync(source);
+    }
+
+    [Fact]
+    public async Task MemoryCacheCreateEntry_Discarded_Silent()
+    {
+        // A discarded CreateEntry never commits: MemoryCache stores the entry on disposal.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services) =>
+                    services.AddScoped<PriceService>();
+            }
+
+            public class PriceService
+            {
+                private readonly IMemoryCache _cache;
+
+                public PriceService(IMemoryCache cache) => _cache = cache;
+
+                public void Store(string userId)
+                {
+                    _cache.CreateEntry(userId);
+                }
+            }
+            """;
+
+        await VerifyCacheSilentAsync(source);
+    }
+
+    [Fact]
+    public async Task StandaloneBoundedCache_DoesNotSuppressContainerCacheWrite_Reports()
+    {
+        // A separately constructed bounded cache bounds only itself. Letting it suppress every write in
+        // the compilation would hide an unrelated unbounded container-provided cache.
+        var source = CachePrelude + """
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddMemoryCache();
+                    services.AddScoped<PriceService>();
+                }
+            }
+
+            public class Unrelated
+            {
+                private readonly MemoryCache _own = new MemoryCache(
+                    new MemoryCacheOptions { SizeLimit = 512 });
             }
 
             public class PriceService
