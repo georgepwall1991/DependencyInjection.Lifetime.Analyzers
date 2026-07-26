@@ -297,6 +297,34 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI032: A container-created service implements only IAsyncDisposable.
+    /// </summary>
+    public static readonly DiagnosticDescriptor AsyncOnlyDisposableRegistration = new(
+        id: DiagnosticIds.AsyncOnlyDisposableRegistration,
+        title: "Service implements only IAsyncDisposable",
+        messageFormat: "'{0}' implements only IAsyncDisposable, so disposing the provider or scope synchronously throws instead of disposing it",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The container tracks services it creates for disposal, but a synchronous Dispose() on the provider or scope cannot dispose a service that implements only IAsyncDisposable: it throws InvalidOperationException. Either implement IDisposable alongside IAsyncDisposable, or guarantee the provider and every scope are disposed asynchronously (DisposeAsync, CreateAsyncScope, await using).",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
+    /// DI033: A disposable instance handed to the container is never disposed by it.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ExternallyOwnedDisposableInstance = new(
+        id: DiagnosticIds.ExternallyOwnedDisposableInstance,
+        title: "Container will not dispose a pre-built instance",
+        messageFormat: "'{0}' is registered as an existing instance, so the container will not dispose it",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "The container disposes only the instances it creates. A disposable handed to it through AddSingleton(instance) or a descriptor's implementation instance is never disposed by the provider, so whoever built it owns its disposal for the life of the application. Register the type instead of the instance (AddSingleton<TService, TImplementation>) to hand ownership to the container, or dispose it deliberately at shutdown.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI031: One implementation registered under several service types yields one instance per
     /// registration, not one shared instance.
     /// </summary>

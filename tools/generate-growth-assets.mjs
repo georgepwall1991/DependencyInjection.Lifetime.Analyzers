@@ -229,6 +229,20 @@ const ruleSampleConfig = {
       { label: "Sample app injected-factory pattern", symbol: "Good_InjectedFactory" },
     ],
   },
+  DI032: {
+    samplePath: "samples/SampleApp/Diagnostics/DI032/AsyncOnlyDisposableExamples.cs",
+    highlights: [
+      { label: "Sample app async-only disposable warning", symbol: "Bad_AsyncOnlyUploadQueue" },
+      { label: "Sample app dual-disposable pattern", symbol: "Good_DualDisposableUploadQueue" },
+    ],
+  },
+  DI033: {
+    samplePath: "samples/SampleApp/Diagnostics/DI033/ExternallyOwnedInstanceExamples.cs",
+    highlights: [
+      { label: "Sample app externally-owned instance note", symbol: "Configure" },
+      { label: "Sample app container-owned registration pattern", symbol: "ConfigureGood" },
+    ],
+  },
   DI031: {
     samplePath: "samples/SampleApp/Diagnostics/DI031/SharedImplementationExamples.cs",
     highlights: [

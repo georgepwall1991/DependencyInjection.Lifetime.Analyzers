@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-07-26
+
+Two disposal-ownership rules. Both answer the same question the registration site does not: who
+disposes this, and can they.
+
+### Added
+
+- **DI032 async-only disposable registration** (Warning) — a singleton or scoped service whose
+  implementation implements `IAsyncDisposable` but not `IDisposable`. The container tracks everything
+  it creates so it can dispose it, but a synchronous `Dispose()` on the provider or a scope has
+  nothing to call and throws `InvalidOperationException` instead. Implement both interfaces, or
+  guarantee every disposal is asynchronous. Transient registrations stay with DI008, which already
+  reports the tracking-and-disposal problem for them; pre-built instances (DI033) and factory
+  registrations are exempt.
+- **DI033 externally owned disposable instance** (Info) — a disposable handed to the container as an
+  existing object (`AddSingleton<TService>(new Thing())` or a descriptor's implementation instance).
+  The container disposes only what it creates, so the provider never touches it and its handles live
+  until the process ends. Registering the type instead hands ownership over; keeping the instance is
+  a legitimate choice, which is why this is Info rather than Warning. Factory registrations are
+  exempt because the container does create what a factory returns.
+
 ## [3.2.0] - 2026-07-26
 
 ### Added

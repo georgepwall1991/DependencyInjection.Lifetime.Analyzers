@@ -862,6 +862,34 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI032",
+      "ruleId": "DI032",
+      "claims": [
+        {
+          "filePathContains": "DI032/AsyncOnlyDisposableExamples.cs",
+          "anchor": "services.AddSingleton<IUploadQueue, Bad_AsyncOnlyUploadQueue>();",
+          "occurrence": 1,
+          "ruleId": "DI032",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI033",
+      "ruleId": "DI033",
+      "claims": [
+        {
+          "filePathContains": "DI033/ExternallyOwnedInstanceExamples.cs",
+          "anchor": "services.AddSingleton<IMetricsSink>(new MetricsSink());",
+          "occurrence": 1,
+          "ruleId": "DI033",
+          "severity": "note"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

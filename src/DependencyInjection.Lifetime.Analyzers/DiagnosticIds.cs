@@ -115,6 +115,18 @@ public static class DiagnosticIds
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 
     /// <summary>
+    /// DI032: A container-created service implements only IAsyncDisposable, so disposing the
+    /// provider or scope synchronously throws instead of disposing it.
+    /// </summary>
+    public const string AsyncOnlyDisposableRegistration = "DI032";
+
+    /// <summary>
+    /// DI033: A disposable instance is handed to the container as a pre-built singleton. The
+    /// container disposes only what it creates, so this instance is never disposed by it.
+    /// </summary>
+    public const string ExternallyOwnedDisposableInstance = "DI033";
+
+    /// <summary>
     /// DI031: One implementation type is registered under several service types with a shared
     /// lifetime, so the container builds a separate instance for each registration.
     /// </summary>
