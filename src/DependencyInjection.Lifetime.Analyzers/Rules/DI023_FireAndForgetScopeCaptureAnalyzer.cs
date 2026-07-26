@@ -232,10 +232,11 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// The first position at which each tracked local is overwritten with something that is not
-    /// scope-derived. Work started before that point still captured the scoped value; work started
-    /// after it captured the replacement. Branch-insensitive by design — a conditional replacement
-    /// leaves the earliest position, keeping the diagnostic rather than guessing.
+    /// The position at which each tracked local is *definitely* overwritten with something that
+    /// is not scope-derived. Work started after that point captured the replacement, not the
+    /// scoped value. Only unconditional straight-line assignments count: a replacement inside an
+    /// if, loop, switch, or try may not run at all, and suppressing on it would hide a real
+    /// capture.
     /// </summary>
     private static Dictionary<ILocalSymbol, int> CollectReplacementPositions(
         SyntaxNode executableBody,
@@ -260,6 +261,11 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (!IsUnconditionalIn(assignment, executableBody))
+            {
+                continue;
+            }
+
             if (
                 !replacedAt.TryGetValue(assigned, out var existing)
                 || assignment.SpanStart < existing
@@ -270,6 +276,43 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         }
 
         return replacedAt;
+    }
+
+    /// <summary>
+    /// Whether the node runs exactly once on every path through the body — no conditional, loop,
+    /// switch, or exception-handling construct stands between it and the body itself.
+    /// </summary>
+    private static bool IsUnconditionalIn(SyntaxNode node, SyntaxNode executableBody)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current == executableBody)
+            {
+                return true;
+            }
+
+            if (
+                current
+                is IfStatementSyntax
+                    or SwitchStatementSyntax
+                    or SwitchExpressionSyntax
+                    or WhileStatementSyntax
+                    or DoStatementSyntax
+                    or ForStatementSyntax
+                    or ForEachStatementSyntax
+                    or TryStatementSyntax
+                    or ConditionalExpressionSyntax
+                    or BinaryExpressionSyntax
+                    or LambdaExpressionSyntax
+                    or AnonymousMethodExpressionSyntax
+                    or LocalFunctionStatementSyntax
+            )
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -317,6 +360,9 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     /// <c>nameof(service)</c> binds to the local but compiles to a constant string, so it captures
     /// nothing at runtime.
     /// </summary>
+    private static bool IsAssignmentTarget(SyntaxNode node) =>
+        node.Parent is AssignmentExpressionSyntax assignment && assignment.Left == node;
+
     private static bool IsInsideNameOf(SyntaxNode node)
     {
         for (var current = node.Parent; current is not null; current = current.Parent)
@@ -415,16 +461,10 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         foreach (var argument in invocation.ArgumentList.Arguments)
         {
             // A state argument is evaluated synchronously; if its value cannot hold the scope
-            // graph (a boxed int, a string), the started work retains nothing from the scope.
-            if (
-                argument.Expression is not (
-                    LambdaExpressionSyntax
-                    or AnonymousMethodExpressionSyntax
-                    or IdentifierNameSyntax
-                    or MemberAccessExpressionSyntax
-                )
-                && !CanKeepScopeAlive(semanticModel.GetTypeInfo(argument.Expression).Type)
-            )
+            // graph (a boxed int, a string, `service.Id`), the started work retains nothing from
+            // the scope. A method group has no type of its own, so it stays in.
+            var argumentType = semanticModel.GetTypeInfo(argument.Expression).Type;
+            if (argumentType is not null && !CanKeepScopeAlive(argumentType))
             {
                 continue;
             }
@@ -435,7 +475,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                     .OfType<IdentifierNameSyntax>()
             )
             {
-                if (IsInsideNameOf(identifier))
+                if (IsInsideNameOf(identifier) || IsAssignmentTarget(identifier))
                 {
                     continue;
                 }
@@ -445,7 +485,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                     && capturedLocals.TryGetValue(local, out var name)
                     && !(
                         replacementPositions.TryGetValue(local, out var replacedAt)
-                        && replacedAt < invocation.SpanStart
+                        && replacedAt < identifier.SpanStart
                     )
                 )
                 {

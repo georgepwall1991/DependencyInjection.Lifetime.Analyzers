@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not scope-derived, and `nameof(service)` all stay quiet. Both the declared type and the
   initializer's own type are checked, so `object hash = scope.GetHashCode()` is a boxed int rather
   than a live capture, and a state argument whose value cannot hold the scope graph is skipped.
-  Replacement is position-aware: work started *before* the local was overwritten still reports.
+  Replacement suppression is position-aware and definite-only: work started *before* the local was
+  overwritten still reports, and a replacement inside an `if`, loop, `switch`, or `try` never
+  suppresses because it may not run at all.
 
 ## [3.0.2] - 2026-07-26
 
