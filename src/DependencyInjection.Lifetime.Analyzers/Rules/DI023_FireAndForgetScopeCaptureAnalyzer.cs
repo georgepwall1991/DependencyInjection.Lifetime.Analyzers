@@ -501,7 +501,8 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var containingType = method.ContainingType?.ToDisplayString();
+        // A constructed TaskFactory<int> displays as itself, so compare the original definition.
+        var containingType = method.ContainingType?.OriginalDefinition.ToDisplayString();
 
         return (method.Name == "Run" && containingType == "System.Threading.Tasks.Task")
             || (
@@ -528,7 +529,20 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         )
         {
             var memberName = memberAccess.Name.Identifier.ValueText;
-            if (memberName is "Wait" or "Result" or "GetResult")
+            if (memberName is "Result" or "GetResult")
+            {
+                return false;
+            }
+
+            // Wait() blocks until the work finishes; Wait(timeout)/Wait(token) can return while it
+            // is still running, so only the parameterless form proves completion.
+            if (
+                memberName == "Wait"
+                && (
+                    memberAccess.Parent is not InvocationExpressionSyntax waitCall
+                    || waitCall.ArgumentList.Arguments.Count == 0
+                )
+            )
             {
                 return false;
             }

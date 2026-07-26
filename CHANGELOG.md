@@ -18,7 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NullReferenceException` under load at best, another user's request data at worst. Copy the values
   the work needs out of the context first. Awaited, returned, stored, and synchronously waited tasks
   keep the request alive and stay silent, as does background work that touches no context. Reading
-  the accessor from inside the work reports too, since the `AsyncLocal` has already moved on.
+  the accessor from inside the work reports too, since the `AsyncLocal` has already moved on, while
+  `nameof(context)` does not — it compiles to a constant string.
+
+### Fixed
+
+- **DI023 background-work recognition** — the same two gaps found while reviewing DI034 apply to
+  DI023 and are fixed in both: `Wait(timeout)` and `Wait(cancellationToken)` can return while the
+  work is still running, so only a parameterless `Wait()` now proves completion, and a constructed
+  `TaskFactory<TResult>` is matched through its original definition instead of its display string.
 
 ## [3.3.0] - 2026-07-26
 

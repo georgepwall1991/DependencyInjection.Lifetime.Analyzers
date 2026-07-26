@@ -180,4 +180,61 @@ public class DI034_HttpContextOffRequestAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task NameOfHttpContext_NoDiagnostic()
+    {
+        // nameof compiles to a constant string; nothing is captured or read.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        _ = Task.Run(() => Console.WriteLine(nameof(context)));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task WaitWithTimeout_ReportsDiagnostic()
+    {
+        // Wait(timeout) can return while the work is still running, so it proves nothing.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine({|DI034:context|}.TraceIdentifier)).Wait(0);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GenericTaskFactory_ReportsDiagnostic()
+    {
+        // A constructed TaskFactory<int> is still a TaskFactory.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        new TaskFactory<int>().StartNew(() => {|DI034:context|}.TraceIdentifier.Length);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }

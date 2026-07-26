@@ -125,6 +125,7 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
             // AsyncLocal holding the context has been cleared or reassigned to another request.
             if (
                 node is MemberAccessExpressionSyntax memberAccess
+                && !IsInsideNameOf(memberAccess)
                 && memberAccess.Name.Identifier.ValueText == "HttpContext"
                 && wellKnownTypes.IsHttpContextAccessor(
                     semanticModel.GetTypeInfo(memberAccess.Expression).Type
@@ -134,6 +135,11 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
                 reference = memberAccess;
                 referenceName = memberAccess.ToString();
                 return true;
+            }
+
+            if (node is IdentifierNameSyntax nameOfCandidate && IsInsideNameOf(nameOfCandidate))
+            {
+                continue;
             }
 
             if (
@@ -166,6 +172,34 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// <c>nameof(context)</c> binds to the symbol but compiles to a constant string, so it neither
+    /// captures nor reads the context.
+    /// </summary>
+    private static bool IsInsideNameOf(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (
+                current
+                is InvocationExpressionSyntax
+                {
+                    Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
+                }
+            )
+            {
+                return true;
+            }
+
+            if (current is StatementSyntax)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
+
     private static bool InheritsFromOrEquals(ITypeSymbol type, INamedTypeSymbol baseType)
     {
         for (var current = type; current is not null; current = current.BaseType)
@@ -189,7 +223,8 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        var containingType = method.ContainingType?.ToDisplayString();
+        // A constructed TaskFactory<int> displays as itself, so compare the original definition.
+        var containingType = method.ContainingType?.OriginalDefinition.ToDisplayString();
 
         return (method.Name == "Run" && containingType == "System.Threading.Tasks.Task")
             || (
@@ -212,7 +247,21 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
             && memberAccess.Expression == outermost
         )
         {
-            if (memberAccess.Name.Identifier.ValueText is "Wait" or "Result" or "GetResult")
+            var memberName = memberAccess.Name.Identifier.ValueText;
+            if (memberName is "Result" or "GetResult")
+            {
+                return false;
+            }
+
+            // Wait() blocks until the work finishes; Wait(timeout)/Wait(token) can return while it
+            // is still running, so only the parameterless form proves completion.
+            if (
+                memberName == "Wait"
+                && (
+                    memberAccess.Parent is not InvocationExpressionSyntax waitCall
+                    || waitCall.ArgumentList.Arguments.Count == 0
+                )
+            )
             {
                 return false;
             }
