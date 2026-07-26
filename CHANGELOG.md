@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-07-26
+
+### Changed
+
+- **NuGet / GitHub discoverability** — keyword-rich package `Title`, `Description`, and `PackageTags` for dependency injection lifetime search (captive dependency, scope leak, singleton/scoped/transient, `BuildServiceProvider`, `Microsoft.Extensions.DependencyInjection`); conversion-funnel README (problem → catches → install → product-flow visuals → 30-second path → feature snapshot → full rule encyclopedia); three SampleApp-backed SVG diagrams under `assets/` with absolute GitHub raw image URLs for NuGet.org README rendering; packs `assets/**` into the nupkg; adds `DiscoverabilityMetadataTests` and `scripts/verify-packages.sh`. Diagnostic IDs and default severities are unchanged.
+
 ## [3.5.1] - 2026-07-26
 
 Two fixes recovered from stale branches that had drifted 69 commits behind main. Each was

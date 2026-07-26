@@ -1,12 +1,10 @@
 <p align="center">
-  <img src="logo.png" alt="DependencyInjection.Lifetime.Analyzers - C# dependency injection lifetime analyser" width="512" height="512">
+  <img src="https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/icon.png" width="96" height="96" alt="DependencyInjection.Lifetime.Analyzers icon — Roslyn DI lifetime, captive dependency, and scope leak analyzer for ASP.NET Core">
 </p>
 
 # DependencyInjection.Lifetime.Analyzers
 
-**A Roslyn dependency injection analyzer/analyser package for C# and ASP.NET Core lifetime and activation bugs.**
-
-Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, circular dependencies, and unresolvable or non-instantiable services at compile time with zero runtime overhead.
+**Compile-time dependency injection lifetime analyzer for .NET** — a Roslyn package that catches captive dependencies, DI scope leaks, `BuildServiceProvider()` misuse, circular dependencies, and unresolvable services in `Microsoft.Extensions.DependencyInjection` before they fail at runtime.
 
 [![NuGet](https://img.shields.io/nuget/v/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/DependencyInjection.Lifetime.Analyzers.svg)](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
@@ -16,45 +14,42 @@ Catch DI scope leaks, captive dependencies, `BuildServiceProvider()` misuse, cir
 
 [Searchable docs site](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/) · [Rule index](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/rules/) · [Problem guides](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/problems/) · [NuGet package](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 
-`DependencyInjection.Lifetime.Analyzers` is for teams using `Microsoft.Extensions.DependencyInjection` who want compile-time protection against DI lifetime mistakes that normally show up as runtime bugs, flaky tests, or production-only startup failures.
+Stop shipping DI lifetime bugs that only show up as `ObjectDisposedException`, stale singletons, or production-only activation failures.
 
-- Works in Rider, Visual Studio, and `dotnet build` / CI.
-- Covers ASP.NET Core, worker services, console apps, and library code that wires services through the default DI container.
-- Ships 26 focused diagnostics, with code fixes where safe and unambiguous.
+## The problem
 
-## Why This DI Lifetime Analyser
+`Microsoft.Extensions.DependencyInjection` compiles cleanly even when lifetimes are wrong. A singleton that captures a scoped `DbContext`, an `IServiceScope` that is never disposed, `BuildServiceProvider()` called while registering services, a scoped service resolved from the root provider, or a missing registration often fails only at runtime — in a flaky test, under load, or on a cold production start.
 
-`DependencyInjection.Lifetime.Analyzers` helps teams using `Microsoft.Extensions.DependencyInjection` avoid common production issues:
+Code review and runtime helpers miss what static analysis can prove from registrations, constructors, and scope usage. Teams using ASP.NET Core, worker services, and the generic host need those failures in the editor and CI, not after deploy.
 
-- `ObjectDisposedException` from invalid scope usage.
-- Memory leaks from undisposed scopes or root providers.
-- Captive dependency bugs caused by incorrect service lifetimes.
-- Hidden service locator usage that weakens testability.
-- Runtime activation failures from missing or incompatible registrations.
+## What it catches
 
-This analyser package is designed for **ASP.NET Core**, **worker services**, **console apps**, and **CI pipelines** that need dependable dependency injection rules.
+DependencyInjection.Lifetime.Analyzers reports high-confidence DI lifetime and activation bugs:
 
-## Why Teams Install It
+- **Captive dependencies** — singleton (or other long-lived) services capturing scoped or transient dependencies (`DI003`, `DI009`)
+- **Scope leaks and disposal** — undisposed `IServiceScope` / root providers, use-after-dispose, async scope misuse (`DI001`, `DI004`, `DI005`, `DI014`)
+- **Scope escape and root resolution** — scoped services leaving their scope or resolved from the root provider (`DI002`, `DI019`)
+- **Registration and activation failures** — unresolvable dependencies, implementation mismatches, non-instantiable types, circular graphs (`DI013`, `DI015`, `DI017`, `DI018`)
+- **`BuildServiceProvider()` misuse** during service composition (`DI016`)
+- **Service locator drift** — static provider caches and overuse of `IServiceProvider` (`DI006`, `DI007`, `DI011`)
+- **ASP.NET Core / host hazards** — middleware scoped capture, hosted-service scope-per-iteration, `HttpClient` lifetime, fire-and-forget scope/`HttpContext` capture (`DI020`, `DI023`, `DI024`, `DI029`, `DI034`)
+- **Concurrency and leak families** — shared non-thread-safe services, event/Rx/callback subscription leaks, unbounded singleton caches (`DI021`–`DI022`, `DI025`–`DI028`, `DI030`, `DI035`)
 
-- Find captive dependencies before they become stale-state or thread-safety bugs.
-- Catch scope leaks before they become `ObjectDisposedException` incidents or memory leaks.
-- Detect missing registrations and implementation mismatches before startup or background-job activation fails in production.
-- Catch circular dependency chains and non-instantiable registrations before they fail at runtime.
-- Push DI architecture rules into CI instead of relying on code review memory.
+When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal feedback, not noisy guesses.
 
-## Quickstart
+## Install
 
 <!-- generated-install-snippets:start -->
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.2" />
 ```
 
 Then reference it from the project file:
@@ -72,7 +67,9 @@ Then reference it from the project file:
 ```
 <!-- generated-install-snippets:end -->
 
-Set useful severities in `.editorconfig`:
+**No runtime dependency** is added to your app. The package is a development-time Roslyn analyzer (`PrivateAssets="all"`).
+
+Optional starter severities in `.editorconfig`:
 
 ```ini
 [*.cs]
@@ -82,44 +79,71 @@ dotnet_diagnostic.DI007.severity = suggestion
 dotnet_diagnostic.DI011.severity = suggestion
 ```
 
-By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`, while broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` to reduce noisy diagnostics.
+By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`, while broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` to reduce noise. For a rollout checklist, see [docs/ADOPTION.md](docs/ADOPTION.md).
 
-For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](docs/ADOPTION.md).
+## See it work
 
-## Who This Is For
+Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, `DI016`, and related diagnostics):
+
+### 1. Build / IDE diagnostics (DI lifetime)
+
+![DependencyInjection.Lifetime.Analyzers Roslyn warnings for captive dependency DI003, scope leak DI001, BuildServiceProvider DI016, and root provider DI014](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/flow-ide-diagnostics.svg)
+
+### 2. Before / after (captive dependency fix)
+
+![Before and after: singleton captive dependency on scoped service fixed with IServiceScopeFactory pattern for DI003](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/flow-before-after-fix.svg)
+
+### 3. Product loop — install, diagnose, fix, CI
+
+![DependencyInjection.Lifetime.Analyzers product loop: NuGet package install, editor and build diagnostics, code fixes, and CI with the same DI lifetime rules](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/flow-ci-analyzer-loop.svg)
+
+## 30-second path
+
+1. Reference the package with `PrivateAssets="all"` (version `3.5.2` above).
+2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
+3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
+4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
+5. Raise severities for the rules your team treats as ship blockers (see [docs/ADOPTION.md](docs/ADOPTION.md)).
+
+## Feature snapshot
+
+| Area | What this analyzer does |
+|------|-------------------------|
+| Captive dependencies | Flags longer-lived services that capture shorter-lived dependencies, including open generics and high-confidence factories. |
+| Scope disposal | Detects undisposed `IServiceScope` / root providers and use-after-dispose patterns. |
+| Lifetime graph | Follows registrations, keyed services, and known framework scopes (for example EF Core / options snapshot paths) where modeled. |
+| Activation validity | Reports unresolvable, non-instantiable, and circular constructor graphs when the container graph is visible. |
+| `BuildServiceProvider` | Warns on registration-time provider builds and undisposed root providers. |
+| Service locator | Surfaces static provider caches and direct `IServiceProvider` injection smells at low default noise. |
+| ASP.NET Core / host | Middleware, hosted services, `HttpClient`, fire-and-forget scope/`HttpContext` capture. |
+| Code fixes | Safe, unambiguous fixes for selected disposal and lifetime issues (see Rule Index). |
+| Signal quality | Stays quiet when the bug cannot be proven statically. |
+
+## Compatibility
+
+- **Target:** projects using `Microsoft.Extensions.DependencyInjection` (ASP.NET Core, generic host, workers, console, libraries that wire the default container).
+- **Analyzer host:** Roslyn in Visual Studio, Rider, and `dotnet build` / CI.
+- **Package TFM:** `netstandard2.0` analyzer assembly (consumes from modern .NET SDK projects).
+- **Language:** C#.
+- **Not claimed:** third-party containers (Autofac, DryIoc, Lamar, etc.) unless they use the same registration APIs in a way this analyzer can see; FluentValidation and non-DI frameworks are out of scope.
+
+## Who this is for
 
 - Teams using `Microsoft.Extensions.DependencyInjection` in ASP.NET Core or generic-host applications.
-- Libraries and internal platforms that want DI usage guarded in CI, not just at runtime.
+- Libraries and internal platforms that want DI usage guarded in CI, not only at runtime.
 - Codebases using factories, keyed services, `ActivatorUtilities`, or manual scopes.
-- Maintainers trying to reduce `IServiceProvider`-driven service locator drift over time.
-
-## What It Catches
-
-| Problem Area | Example Rules |
-|--------------|---------------|
-| Scope disposal and leaks | `DI001`, `DI004`, `DI005`, `DI014` |
-| Lifetime mismatches | `DI003`, `DI009` |
-| Service location and architectural drift | `DI006`, `DI007`, `DI011` |
-| Registration correctness and activation validity | `DI012`, `DI013`, `DI015`, `DI016`, `DI018` |
-| Dependency graph correctness | `DI017` |
-| Root-provider lifetime validation | `DI019` |
-| Middleware lifetime validation | `DI020` |
-| Concurrency-unsafe captures in message handlers, timers, and parallel loops | `DI021`, `DI022` |
-| Hosted-service scope-per-iteration validation | `DI024` |
-| Cross-lifetime event-subscription leak detection | `DI025`, `DI026` |
-| Rx and callback registration leak detection | `DI027`, `DI028` |
-| HTTP client lifetime, socket exhaustion, and handler rotation | `DI029` |
-| Unbounded cache growth and memory retention | `DI030` |
-| Disposal ownership of container-created services | `DI002`, `DI008` |
-| Constructor and composition smell detection | `DI010` |
+- Maintainers reducing `IServiceProvider`-driven service locator drift over time.
 
 ## Table of Contents
 
-- [Why This DI Lifetime Analyser](#why-this-di-lifetime-analyser)
-- [Why Teams Install It](#why-teams-install-it)
-- [Quickstart](#quickstart)
-- [Who This Is For](#who-this-is-for)
-- [What It Catches](#what-it-catches)
+- [The problem](#the-problem)
+- [What it catches](#what-it-catches)
+- [Install](#install)
+- [See it work](#see-it-work)
+- [30-second path](#30-second-path)
+- [Feature snapshot](#feature-snapshot)
+- [Compatibility](#compatibility)
+- [Who this is for](#who-this-is-for)
 - [Rule Index](#rule-index)
 - [DI001: Service Scope Not Disposed](#di001-service-scope-not-disposed)
 - [DI002: Scoped Service Escapes Scope](#di002-scoped-service-escapes-scope)

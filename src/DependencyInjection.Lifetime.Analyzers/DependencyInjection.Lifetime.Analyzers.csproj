@@ -14,14 +14,15 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.5.1</Version>
+    <Version>3.5.2</Version>
     <Authors>George Wall</Authors>
-    <Description>Roslyn analyzers for Microsoft.Extensions.DependencyInjection that catch captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, and unresolvable services at compile time in ASP.NET Core and .NET applications.</Description>
-    <PackageTags>dependency-injection;di;ioc;dotnet;csharp;aspnetcore;aspnet-core;roslyn;roslyn-analyzer;analyzers;static-analysis;service-locator;iserviceprovider;iservicescope;buildserviceprovider;activatorutilities;captive-dependency;memory-leaks;microsoft-extensions-dependencyinjection;compile-time</PackageTags>
+    <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
+    <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
+    <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;roslyn;roslyn-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Compile-time DI diagnostics for captive dependencies, scope leaks, BuildServiceProvider misuse, and unresolvable services. Includes code fixes for safe lifetime and disposal issues.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Discoverability release: keyword-rich package title, description, and tags for DI lifetime (captive dependency, scope leak, singleton/scoped/transient, BuildServiceProvider); conversion-funnel README with product-flow visuals for IDE diagnostics, code fixes, and the install→CI loop; packs assets for NuGet README rendering; adds discoverability metadata tests and package verification. Diagnostic IDs and severities are unchanged.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>
@@ -56,6 +57,7 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\**\*" Pack="true" PackagePath="assets\" />
   </ItemGroup>
 
   <ItemGroup>
