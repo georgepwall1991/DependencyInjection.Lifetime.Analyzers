@@ -184,7 +184,7 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
                 current
                 is InvocationExpressionSyntax
                 {
-                    Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
+                    Expression: IdentifierNameSyntax { Identifier.Text: "nameof" },
                 }
             )
             {
@@ -239,6 +239,39 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
     /// The started task must be thrown away. An awaited, returned, stored, or synchronously waited
     /// task keeps the request alive until the work completes, so the context is still valid.
     /// </summary>
+    /// <summary>
+    /// Whether this <c>Wait</c> blocks until the work actually finishes. A finite timeout can
+    /// return with the work still running; <c>Timeout.Infinite</c>, <c>-1</c>, and a plain
+    /// cancellation token cannot.
+    /// </summary>
+    private static bool WaitsForCompletion(MemberAccessExpressionSyntax waitAccess)
+    {
+        if (waitAccess.Parent is not InvocationExpressionSyntax waitCall)
+        {
+            return true;
+        }
+
+        var arguments = waitCall.ArgumentList.Arguments;
+        if (arguments.Count == 0)
+        {
+            return true;
+        }
+
+        if (arguments.Count > 1)
+        {
+            return false;
+        }
+
+        var argument = arguments[0].Expression.ToString();
+        return argument
+            is "Timeout.Infinite"
+                or "System.Threading.Timeout.Infinite"
+                or "-1"
+                or "CancellationToken.None"
+                or "System.Threading.CancellationToken.None"
+                or "default";
+    }
+
     private static bool IsFireAndForget(InvocationExpressionSyntax invocation)
     {
         SyntaxNode outermost = invocation;
@@ -253,15 +286,10 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            // Wait() blocks until the work finishes; Wait(timeout)/Wait(token) can return while it
-            // is still running, so only the parameterless form proves completion.
-            if (
-                memberName == "Wait"
-                && (
-                    memberAccess.Parent is not InvocationExpressionSyntax waitCall
-                    || waitCall.ArgumentList.Arguments.Count == 0
-                )
-            )
+            // Wait() blocks until the work finishes; Wait(timeout) can return while it is still
+            // running. The infinite and cancellation-free overloads block just as the
+            // parameterless one does.
+            if (memberName == "Wait" && WaitsForCompletion(memberAccess))
             {
                 return false;
             }

@@ -237,4 +237,24 @@ public class DI034_HttpContextOffRequestAnalyzerTests
 
         await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task WaitWithInfiniteTimeout_NoDiagnostic()
+    {
+        // Timeout.Infinite blocks exactly as the parameterless overload does.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine(context.TraceIdentifier))
+                            .Wait(System.Threading.Timeout.Infinite);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }
