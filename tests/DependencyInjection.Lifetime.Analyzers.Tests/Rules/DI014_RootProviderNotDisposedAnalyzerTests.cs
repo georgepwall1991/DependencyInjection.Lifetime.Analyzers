@@ -2785,4 +2785,51 @@ public sealed class ProviderWrapper : IDisposable
 }";
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceUserDefinedConversionDisposedWrapper_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public void Main(ServiceCollection? services)
+    {
+        ProviderWrapper wrapper = services?[|.BuildServiceProvider()|]
+            ?? new ProviderWrapper();
+        wrapper.Dispose();
+    }
+}
+
+public sealed class ProviderWrapper : IDisposable
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+
+    public void Dispose() { }
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessBuild_CoalesceUserDefinedConversionReturned_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+#nullable enable
+
+public class Program
+{
+    public ProviderWrapper CreateProvider(ServiceCollection? services)
+    {
+        return services?[|.BuildServiceProvider()|]
+            ?? new ProviderWrapper();
+    }
+}
+
+public sealed class ProviderWrapper
+{
+    public static implicit operator ProviderWrapper(ServiceProvider provider) => new ProviderWrapper();
+}";
+        await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }

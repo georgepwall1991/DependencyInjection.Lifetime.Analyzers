@@ -5301,4 +5301,40 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
             throw new System.NotSupportedException(targetMethod?.Name);
         }
     }
+
+    [Fact]
+    public async Task ThreadingTimer_LockOnSharedStateParameter_NoDiagnostic()
+    {
+        // System.Threading.Timer passes the same constructor state object to every callback, so
+        // locking that callback parameter does serialize overlapping invocations.
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private readonly AppDbContext _db;
+                private Timer _timer;
+
+                public Poller(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var gate = new object();
+                    _timer = new Timer(Poll, gate, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    lock (state)
+                    {
+                        _db.Add(state);
+                        _db.SaveChanges();
+                    }
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
 }

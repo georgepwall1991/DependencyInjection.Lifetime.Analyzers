@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-07-26
+
+Two fixes recovered from stale branches that had drifted 69 commits behind main. Each was
+re-verified against current main, re-implemented on top of it, and mutation-tested.
+
+### Fixed
+
+- **DI014 provider laundered through a coalesce conversion** (false negative) — Roslyn does not
+  expose a coalesce's LEFT operand conversion through `SemanticModel.GetConversion`; it lives on
+  `ICoalesceOperation.ValueConversion`. A user-defined conversion there therefore looked like an
+  identity flow, so `services?.BuildServiceProvider() ?? new Wrapper()` transferred ownership to a
+  wrapper that never disposes the provider, and the rule stayed silent. The coalesce arm now checks
+  the operation's own conversion.
+- **DI021 lock on a `System.Threading.Timer` state parameter** (false positive) — a handler
+  parameter is normally a fresh object per invocation, so locking it guards nothing. A timer
+  callback is the exception: every invocation receives the same state object registered at
+  construction, so `lock (state)` genuinely serializes. Sinks now declare whether their handler
+  parameters are per-invocation, and the timer sink declares that they are not.
+
 ## [3.5.0] - 2026-07-26
 
 ### Added
