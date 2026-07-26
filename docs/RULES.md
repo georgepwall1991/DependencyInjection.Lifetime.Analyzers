@@ -42,6 +42,8 @@ For the latest full rule content, see:
 | [DI029](#di029-httpclient-lifetime-misuse) | HttpClient lifetime misuse | Warning | No |
 | [DI030](#di030-unbounded-singleton-or-static-cache) | Unbounded singleton or static cache | Info | No |
 | [DI031](#di031-shared-implementation-registered-under-several-service-types) | Shared implementation registered under several service types | Info | No |
+| [DI032](#di032-service-implements-only-iasyncdisposable) | Service implements only IAsyncDisposable | Warning | No |
+| [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
 
 ---
 
@@ -1167,6 +1169,68 @@ services.AddSingleton<IFeatureWriter>(sp => sp.GetRequiredService<FeatureStore>(
 **Guardrails:** transient registrations are exempt — a fresh instance per resolution is the contract, so there is no shared instance to lose. Registrations with different lifetimes, keyed registrations, factory registrations, pre-built instances, and registrations on different service-collection flows are all left alone, as is the same service type registered twice (that is DI012's duplicate registration). Registrations guarded by an `if`, `switch`, loop, or `try` never both run, so no two-instance claim is made, and neither do registrations in different executable bodies. Grouping is by constructed type, so `GenericStore<int>` and `GenericStore<string>` are distinct, and a `RemoveAll` or `Replace` that runs after the registration it removes withdraws the claim (a removal earlier in the method does not). Known false negatives: an open-generic registration paired with a closed one, and a fluent chain that removes a service type and then re-registers it in the same expression. Reported at Info: separate instances are occasionally deliberate, and the forwarding fix is a design decision.
 
 **Code Fix:** No — the repair chooses which service type keeps the concrete registration and rewrites the rest as factories, which changes registration order and is better made deliberately.
+
+---
+
+## DI032: Service Implements Only IAsyncDisposable
+
+**What it catches:** a service the container creates — a plain type registration at any lifetime — whose implementation implements `IAsyncDisposable` but not `IDisposable`.
+
+**Why it matters:** the container tracks everything it creates so it can dispose it, but a synchronous `Dispose()` on the provider or a scope has no synchronous disposal method to call. Rather than skipping the service, `ServiceProvider` throws `InvalidOperationException`: *"'X' type only implements IAsyncDisposable. Use DisposeAsync to dispose the container."* The failure surfaces at shutdown or at the end of a scope, which is exactly where it is hardest to notice in testing.
+
+**Problem:**
+
+```csharp
+public sealed class UploadQueue : IUploadQueue, IAsyncDisposable
+{
+    public ValueTask DisposeAsync() => default;
+}
+
+services.AddSingleton<IUploadQueue, UploadQueue>();  // DI032
+using var provider = services.BuildServiceProvider();  // throws on Dispose()
+```
+
+**Better pattern:** implement both, so every disposal path has something to call.
+
+```csharp
+public sealed class UploadQueue : IUploadQueue, IDisposable, IAsyncDisposable
+{
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => default;
+}
+```
+
+The alternative is to guarantee every disposal is asynchronous — `await provider.DisposeAsync()`, `CreateAsyncScope`, `await using` — which the generic host does for you but a hand-built provider does not.
+
+**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033). Factory registrations do count — the container creates and tracks a factory's result — when the lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A descriptor removed or replaced after it was added never reaches the provider. The diagnostic is conditional on the service being resolved at least once, since that is what puts it in the container's disposal list.
+
+**Code Fix:** No — adding a synchronous `Dispose` means deciding what synchronous teardown of an inherently asynchronous resource should do, which the analyzer cannot answer.
+
+---
+
+## DI033: Container Will Not Dispose a Pre-Built Instance
+
+**What it catches:** a disposable instance handed to the container as an existing object — `AddSingleton<TService>(new Thing())` or a descriptor carrying an implementation instance.
+
+**Why it matters:** the container disposes only the instances it creates. An instance built by the caller is registered as-is, and disposing the provider does not touch it, so its file handles, sockets, or timers live until the process ends. The registration reads exactly like the type-registration form that *is* disposed, which is what makes it easy to miss.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<IMetricsSink>(new MetricsSink());  // DI033: never disposed by the container
+```
+
+**Better pattern:** hand the type over instead, and the container owns creation and disposal together.
+
+```csharp
+services.AddSingleton<IMetricsSink, MetricsSink>();
+```
+
+If the instance must be pre-built — it is shared with code outside the container, or its construction needs values the container does not have — dispose it deliberately at shutdown and treat the registration as a loan.
+
+**Guardrails:** non-disposable instances raise no ownership question, and factory registrations are exempt because the container *does* create and therefore dispose what a factory returns, as is a descriptor removed or replaced after it was added. Reported at Info: caller-owned disposal is a legitimate choice, just one worth making explicitly.
+
+**Code Fix:** No — rewriting to a type registration changes construction, and disposing at shutdown is a lifecycle decision.
 
 ---
 

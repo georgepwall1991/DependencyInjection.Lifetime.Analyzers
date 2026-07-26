@@ -123,3 +123,10 @@ DI030 | DependencyInjection | Info | Singleton-owned or static collection grows 
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI023 | DependencyInjection | Warning | Fire-and-forget background work captures a using scope, its provider, or a service resolved from it
+
+## Release 3.2.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI031 | DependencyInjection | Info | One implementation type registered under several service types with a shared lifetime, producing a separate instance per registration
