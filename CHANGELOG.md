@@ -25,9 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not scope-derived, and `nameof(service)` all stay quiet. Both the declared type and the
   initializer's own type are checked, so `object hash = scope.GetHashCode()` is a boxed int rather
   than a live capture, and a state argument whose value cannot hold the scope graph is skipped.
-  Replacement suppression is position-aware and definite-only: work started *before* the local was
-  overwritten still reports, and a replacement inside an `if`, loop, `switch`, or `try` never
-  suppresses because it may not run at all.
+  Replacement suppression is proved by dominance: the overwrite and the capture must sit in the same
+  block (or the overwrite in an enclosing one) with the overwrite first, so work started before the
+  local was replaced still reports, a replacement on a branch the capture is not part of proves
+  nothing, and a conditionally evaluated assignment (`receiver?.Use(service = other)`) decides
+  nothing. An identifier on the left of an assignment is a write target rather than a capture.
 
 ## [3.0.2] - 2026-07-26
 

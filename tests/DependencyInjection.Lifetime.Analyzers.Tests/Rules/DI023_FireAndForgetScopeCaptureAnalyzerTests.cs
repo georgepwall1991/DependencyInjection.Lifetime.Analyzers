@@ -681,4 +681,107 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
 
         await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task ReplacementInsideConditionalAccess_ReportsDiagnostic()
+    {
+        // receiver?.Use(...) may never evaluate its argument, so the replacement is not definite.
+        var source = Usings + """
+            public class Helper
+            {
+                public void Use(IMyService service) { }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+                private readonly Helper _helper;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton, Helper helper)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                    _helper = helper;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _helper?.Use(service = _singleton);
+                    _ = {|DI023:Task.Run(() => service.DoWork())|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ReplacementDominatingCaptureInSameBranch_NoDiagnostic()
+    {
+        // Both statements live in the same branch, and the replacement runs first.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle(bool flag)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+
+                    if (flag)
+                    {
+                        service = _singleton;
+                        _ = Task.Run(() => service.DoWork());
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedServiceOnAssignmentTargetPath_NoDiagnostic()
+    {
+        // service is read synchronously to reach Child; only the replacement becomes task state.
+        var source = Usings + """
+            public class Node
+            {
+                public IMyService Child { get; set; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var node = scope.ServiceProvider.GetRequiredService<Node>();
+                    Task.Factory.StartNew(state => Console.WriteLine(state), node.Child = _singleton);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

@@ -69,12 +69,6 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         }
 
         var capturedLocals = CollectCapturedLocals(executableBody, semanticModel, scopeLocals);
-        var replacementPositions = CollectReplacementPositions(
-            executableBody,
-            semanticModel,
-            scopeLocals,
-            capturedLocals
-        );
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
@@ -92,7 +86,8 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                     invocation,
                     semanticModel,
                     capturedLocals,
-                    replacementPositions,
+                    scopeLocals,
+                    executableBody,
                     out var capturedName
                 )
             )
@@ -232,83 +227,126 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// The position at which each tracked local is *definitely* overwritten with something that
-    /// is not scope-derived. Work started after that point captured the replacement, not the
-    /// scoped value. Only unconditional straight-line assignments count: a replacement inside an
-    /// if, loop, switch, or try may not run at all, and suppressing on it would hide a real
-    /// capture.
+    /// Whether <paramref name="local"/> was definitely overwritten with something that is not
+    /// scope-derived before <paramref name="captureSite"/> runs. The proof is dominance by
+    /// straight-line order: the replacement and the capture must sit in the same block (or the
+    /// replacement in an enclosing one), with the replacement first. A replacement on a branch the
+    /// capture is not part of proves nothing and keeps the diagnostic.
     /// </summary>
-    private static Dictionary<ILocalSymbol, int> CollectReplacementPositions(
+    private static bool WasReplacedBefore(
+        ILocalSymbol local,
+        SyntaxNode captureSite,
         SyntaxNode executableBody,
         SemanticModel semanticModel,
         HashSet<ILocalSymbol> scopeLocals,
         Dictionary<ILocalSymbol, string> captured
     )
     {
-        var replacedAt = new Dictionary<ILocalSymbol, int>(SymbolEqualityComparer.Default);
-
-        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+        if (scopeLocals.Contains(local))
         {
-            if (
-                node is not AssignmentExpressionSyntax assignment
-                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                || semanticModel.GetSymbolInfo(assignment.Left).Symbol is not ILocalSymbol assigned
-                || scopeLocals.Contains(assigned)
-                || !captured.ContainsKey(assigned)
-                || ReferencesTrackedLocal(assignment.Right, semanticModel, captured)
-            )
+            return false;
+        }
+
+        // Walk outward from the capture. At each block, a preceding sibling statement that
+        // replaces the local dominates it.
+        for (
+            var statement = captureSite.FirstAncestorOrSelf<StatementSyntax>();
+            statement is not null;
+            statement = statement.Parent?.FirstAncestorOrSelf<StatementSyntax>()
+        )
+        {
+            if (statement.Parent is not BlockSyntax block)
             {
                 continue;
             }
 
-            if (!IsUnconditionalIn(assignment, executableBody))
+            var captureIndex = block.Statements.IndexOf(statement);
+            for (var index = captureIndex - 1; index >= 0; index--)
             {
-                continue;
+                if (
+                    TryGetReplacementOf(
+                        block.Statements[index],
+                        local,
+                        semanticModel,
+                        captured,
+                        out var replaces
+                    )
+                )
+                {
+                    return replaces;
+                }
             }
 
-            if (
-                !replacedAt.TryGetValue(assigned, out var existing)
-                || assignment.SpanStart < existing
-            )
+            if (block.Parent == executableBody || statement.Parent == executableBody)
             {
-                replacedAt[assigned] = assignment.SpanStart;
+                break;
             }
         }
 
-        return replacedAt;
+        return false;
     }
 
     /// <summary>
-    /// Whether the node runs exactly once on every path through the body — no conditional, loop,
-    /// switch, or exception-handling construct stands between it and the body itself.
+    /// Whether the statement assigns <paramref name="local"/>, and if so whether the assigned value
+    /// is detached from the scope. A conditional-access or short-circuited argument
+    /// (<c>receiver?.Use(local = other)</c>) may never evaluate, so it decides nothing.
     /// </summary>
-    private static bool IsUnconditionalIn(SyntaxNode node, SyntaxNode executableBody)
+    private static bool TryGetReplacementOf(
+        StatementSyntax statement,
+        ILocalSymbol local,
+        SemanticModel semanticModel,
+        Dictionary<ILocalSymbol, string> captured,
+        out bool replacesWithDetachedValue
+    )
     {
-        for (var current = node.Parent; current is not null; current = current.Parent)
+        replacesWithDetachedValue = false;
+
+        foreach (var assignment in statement.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
-            if (current == executableBody)
+            if (
+                !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                    local
+                )
+                || IsConditionallyEvaluated(assignment, statement)
+                // An assignment nested inside a further statement (an if body, a loop) belongs to
+                // that construct's control flow, not to this statement's straight-line execution.
+                || assignment.FirstAncestorOrSelf<StatementSyntax>() != statement
+            )
             {
-                return true;
+                continue;
             }
 
+            replacesWithDetachedValue = !ReferencesTrackedLocal(
+                assignment.Right,
+                semanticModel,
+                captured
+            );
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsConditionallyEvaluated(SyntaxNode node, SyntaxNode boundary)
+    {
+        for (
+            var current = node.Parent;
+            current is not null && current != boundary;
+            current = current.Parent
+        )
+        {
             if (
                 current
-                is IfStatementSyntax
-                    or SwitchStatementSyntax
-                    or SwitchExpressionSyntax
-                    or WhileStatementSyntax
-                    or DoStatementSyntax
-                    or ForStatementSyntax
-                    or ForEachStatementSyntax
-                    or TryStatementSyntax
+                is ConditionalAccessExpressionSyntax
                     or ConditionalExpressionSyntax
                     or BinaryExpressionSyntax
                     or LambdaExpressionSyntax
                     or AnonymousMethodExpressionSyntax
-                    or LocalFunctionStatementSyntax
             )
             {
-                return false;
+                return true;
             }
         }
 
@@ -360,8 +398,30 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     /// <c>nameof(service)</c> binds to the local but compiles to a constant string, so it captures
     /// nothing at runtime.
     /// </summary>
-    private static bool IsAssignmentTarget(SyntaxNode node) =>
-        node.Parent is AssignmentExpressionSyntax assignment && assignment.Left == node;
+    /// <summary>
+    /// Whether the identifier sits anywhere on the left of an assignment — <c>service = x</c> or
+    /// <c>node.Child = x</c>. It is read to reach the storage slot, not handed to the task.
+    /// </summary>
+    private static bool IsAssignmentTarget(SyntaxNode node)
+    {
+        for (var current = node; current is not null; current = current.Parent)
+        {
+            if (
+                current.Parent is AssignmentExpressionSyntax assignment
+                && assignment.Left == current
+            )
+            {
+                return true;
+            }
+
+            if (current is StatementSyntax or LambdaExpressionSyntax or ArgumentSyntax)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsInsideNameOf(SyntaxNode node)
     {
@@ -450,7 +510,8 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         Dictionary<ILocalSymbol, string> capturedLocals,
-        Dictionary<ILocalSymbol, int> replacementPositions,
+        HashSet<ILocalSymbol> scopeLocals,
+        SyntaxNode executableBody,
         out string capturedName
     )
     {
@@ -483,9 +544,13 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 if (
                     semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
                     && capturedLocals.TryGetValue(local, out var name)
-                    && !(
-                        replacementPositions.TryGetValue(local, out var replacedAt)
-                        && replacedAt < identifier.SpanStart
+                    && !WasReplacedBefore(
+                        local,
+                        identifier,
+                        executableBody,
+                        semanticModel,
+                        scopeLocals,
+                        capturedLocals
                     )
                 )
                 {
