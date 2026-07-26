@@ -5337,4 +5337,5 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
 
         await VerifyNoneAsync(source);
     }
+
 }

@@ -24,7 +24,13 @@ re-verified against current main, re-implemented on top of it, and mutation-test
   parameter is normally a fresh object per invocation, so locking it guards nothing. A timer
   callback is the exception: every invocation receives the same state object registered at
   construction, so `lock (state)` genuinely serializes. Sinks now declare whether their handler
-  parameters are per-invocation, and the timer sink declares that they are not.
+  parameters are per-invocation, and the timer sink declares that they are not. The guarantee is
+  deliberately not propagated across a one-hop delegation lambda, which is free to pass the target
+  method something fresh.
+
+  Accepted false negatives, both pre-existing and unchanged by this release: a coalesce inside a
+  `using` declaration short-circuits before the conversion check, and DI021's one-hop delegation
+  still does not flow lambda arguments into the target method's parameters.
 
 ## [3.5.0] - 2026-07-26
 

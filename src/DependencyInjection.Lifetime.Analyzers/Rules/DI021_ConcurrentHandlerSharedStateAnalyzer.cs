@@ -121,6 +121,14 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         /// construction every time — locking that parameter really does serialize invocations.
         /// </summary>
         public bool HandlerParametersArePerInvocation { get; }
+
+        /// <summary>
+        /// The same sink as seen by a delegated method. A one-hop lambda can pass anything it
+        /// likes to the method it calls (`state =&gt; Handle(new object())`), so the shared-state
+        /// guarantee does not survive the hop.
+        /// </summary>
+        public SinkContext WithPerInvocationParameters() =>
+            new(Concurrency, Description, SinkDisplay, KnobName, TimerInstance);
     }
 
     // ---------------------------------------------------------------------
@@ -2103,7 +2111,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // in the same-type instance method, so analyze that body as well.
                 if (TryGetOneHopTarget(lambda, out var delegated))
                 {
-                    AnalyzeMethodHandler(context, delegated, sink, registrationSyntax, scopedTierCandidates);
+                    AnalyzeMethodHandler(
+                        context,
+                        delegated,
+                        sink.WithPerInvocationParameters(),
+                        registrationSyntax,
+                        scopedTierCandidates);
                 }
 
                 break;
