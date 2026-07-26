@@ -192,38 +192,124 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             captured[scopeLocal] = scopeLocal.Name;
         }
 
+        // Scope -> provider -> service is two hops, and nothing bounds how many an ordinary
+        // method uses, so grow the set until it stops changing.
+        bool addedThisPass;
+        do
+        {
+            addedThisPass = false;
+
+            foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
+            {
+                if (
+                    node is not VariableDeclaratorSyntax declarator
+                    || declarator.Initializer?.Value is not { } initializer
+                    || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
+                    || captured.ContainsKey(local)
+                    || !CanKeepScopeAlive(local.Type)
+                )
+                {
+                    continue;
+                }
+
+                if (ReferencesTrackedLocal(initializer, semanticModel, captured))
+                {
+                    captured[local] = local.Name;
+                    addedThisPass = true;
+                }
+            }
+        } while (addedThisPass);
+
+        // A local reassigned to something that is not scope-derived no longer holds anything the
+        // scope owns, so capturing it afterwards is harmless.
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (
-                node is not VariableDeclaratorSyntax declarator
-                || declarator.Initializer?.Value is not { } initializer
-                || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
-                || captured.ContainsKey(local)
+                node is not AssignmentExpressionSyntax assignment
+                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || semanticModel.GetSymbolInfo(assignment.Left).Symbol is not ILocalSymbol assigned
+                || scopeLocals.Contains(assigned)
+                || !captured.ContainsKey(assigned)
+                || ReferencesTrackedLocal(assignment.Right, semanticModel, captured)
             )
             {
                 continue;
             }
 
-            if (ReferencesScopeLocal(initializer, semanticModel, scopeLocals))
-            {
-                captured[local] = local.Name;
-            }
+            captured.Remove(assigned);
         }
 
         return captured;
     }
 
-    private static bool ReferencesScopeLocal(
+    /// <summary>
+    /// Whether a value of this type could still hold the scope's graph. A primitive, enum, or
+    /// string computed FROM a scope (<c>scope.GetHashCode()</c>) keeps nothing alive.
+    /// </summary>
+    private static bool CanKeepScopeAlive(ITypeSymbol? type) =>
+        type is not null
+        && type.SpecialType
+            is not (
+                SpecialType.System_String
+                or SpecialType.System_Boolean
+                or SpecialType.System_Char
+                or SpecialType.System_Byte
+                or SpecialType.System_SByte
+                or SpecialType.System_Int16
+                or SpecialType.System_UInt16
+                or SpecialType.System_Int32
+                or SpecialType.System_UInt32
+                or SpecialType.System_Int64
+                or SpecialType.System_UInt64
+                or SpecialType.System_Single
+                or SpecialType.System_Double
+                or SpecialType.System_Decimal
+                or SpecialType.System_DateTime
+                or SpecialType.System_IntPtr
+                or SpecialType.System_UIntPtr
+            )
+        && type.TypeKind is not TypeKind.Enum;
+
+    private static bool ReferencesTrackedLocal(
         SyntaxNode node,
         SemanticModel semanticModel,
-        HashSet<ILocalSymbol> scopeLocals
+        Dictionary<ILocalSymbol, string> trackedLocals
     ) =>
         node.DescendantNodesAndSelf()
             .OfType<IdentifierNameSyntax>()
+            .Where(identifier => !IsInsideNameOf(identifier))
             .Any(identifier =>
                 semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
-                && scopeLocals.Contains(local)
+                && trackedLocals.ContainsKey(local)
             );
+
+    /// <summary>
+    /// <c>nameof(service)</c> binds to the local but compiles to a constant string, so it captures
+    /// nothing at runtime.
+    /// </summary>
+    private static bool IsInsideNameOf(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (
+                current
+                is InvocationExpressionSyntax
+                {
+                    Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
+                }
+            )
+            {
+                return true;
+            }
+
+            if (current is StatementSyntax or LambdaExpressionSyntax)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsBackgroundWorkStart(
         InvocationExpressionSyntax invocation,
@@ -261,7 +347,8 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             && memberAccess.Expression == outermost
         )
         {
-            if (memberAccess.Name.Identifier.ValueText is "Wait" or "Result" or "GetAwaiter")
+            var memberName = memberAccess.Name.Identifier.ValueText;
+            if (memberName is "Wait" or "Result" or "GetResult")
             {
                 return false;
             }
@@ -292,22 +379,21 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     {
         capturedName = string.Empty;
 
+        // Inline lambdas, anonymous methods, method groups on a scoped service, and delegate
+        // locals all reach the background work the same way: through an argument.
         foreach (var argument in invocation.ArgumentList.Arguments)
         {
-            if (
-                argument.Expression
-                is not (LambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
-            )
-            {
-                continue;
-            }
-
             foreach (
                 var identifier in argument
-                    .Expression.DescendantNodes()
+                    .Expression.DescendantNodesAndSelf()
                     .OfType<IdentifierNameSyntax>()
             )
             {
+                if (IsInsideNameOf(identifier))
+                {
+                    continue;
+                }
+
                 if (
                     semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
                     && capturedLocals.TryGetValue(local, out var name)

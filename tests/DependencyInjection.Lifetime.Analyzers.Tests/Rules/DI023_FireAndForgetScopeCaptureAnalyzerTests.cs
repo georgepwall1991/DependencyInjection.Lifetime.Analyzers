@@ -323,4 +323,191 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ScopeDerivedValueSnapshot_NoDiagnostic()
+    {
+        // A value computed FROM the scope is not the scope. An int cannot keep a disposed scope
+        // reachable, so capturing it is harmless.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var id = scope.GetHashCode();
+                    _ = Task.Run(() => Console.WriteLine(id));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NameOfScopedLocal_NoDiagnostic()
+    {
+        // nameof binds to the symbol but captures nothing at runtime.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    _ = Task.Run(() => Console.WriteLine(nameof(service)));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedLocalReplacedBeforeCapture_NoDiagnostic()
+    {
+        // The captured local no longer holds anything from the scope.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    service.DoWork();
+                    service = _singleton;
+                    _ = Task.Run(() => service.DoWork());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceResolvedThroughProviderAlias_ReportsDiagnostic()
+    {
+        // Two hops: scope -> provider -> service. Both hops die with the scope.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var provider = scope.ServiceProvider;
+                    var service = provider.GetRequiredService<IMyService>();
+                    _ = {|DI023:Task.Run(() => service.DoWork())|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MethodGroupOnScopedService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _ = {|DI023:Task.Run(service.DoWork)|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetAwaiterWithoutGetResult_ReportsDiagnostic()
+    {
+        // Fetching the awaiter and throwing it away waits for nothing.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    {|DI023:Task.Run(() => service.DoWork())|}.GetAwaiter();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GetAwaiterGetResult_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    Task.Run(() => service.DoWork()).GetAwaiter().GetResult();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

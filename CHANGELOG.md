@@ -18,7 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such work captures the scope local itself, a local bound to its `ServiceProvider`, or any local
   resolved from it. Guardrails: the scope must be disposed by a `using` in the same method (an
   undisposed scope is DI001's finding), and a task that is awaited, returned, stored in a local, or
-  waited on synchronously keeps the frame alive and stays silent.
+  waited on synchronously (`.Wait()`, `.GetAwaiter().GetResult()`) keeps the frame alive and stays
+  silent. Capture tracking follows any number of hops (scope → provider → service) and covers method
+  groups and delegate locals as well as inline lambdas, while values that cannot hold the scope's
+  graph — primitives, enums, strings such as `scope.GetHashCode()` — a local reassigned to something
+  not scope-derived, and `nameof(service)` all stay quiet.
 
 ## [3.0.2] - 2026-07-26
 
