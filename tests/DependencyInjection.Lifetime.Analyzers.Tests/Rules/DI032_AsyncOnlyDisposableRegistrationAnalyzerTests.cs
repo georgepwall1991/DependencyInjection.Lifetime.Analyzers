@@ -144,10 +144,10 @@ public class DI032_AsyncOnlyDisposableRegistrationAnalyzerTests
     }
 
     [Fact]
-    public async Task FactoryRegistration_NoDiagnostic()
+    public async Task FactoryConstructingAsyncOnlyDisposable_ReportsDiagnostic()
     {
-        // A factory registration states its own ownership story; the implementation type is not
-        // proven from the registration itself.
+        // The container creates and tracks whatever a factory returns, so the synchronous
+        // disposal throw applies exactly as it does to a type registration.
         var source =
             Usings
             + """
@@ -160,10 +160,70 @@ public class DI032_AsyncOnlyDisposableRegistrationAnalyzerTests
                 {
                     public void ConfigureServices(IServiceCollection services)
                     {
-                        services.AddSingleton<IWorker>(sp => new AsyncWorker());
+                        {|DI032:services.AddSingleton<IWorker>(sp => new AsyncWorker())|};
                     }
                 }
                 """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task OpaqueFactory_NoDiagnostic()
+    {
+        // Nothing at the registration site proves what this factory builds.
+        var source =
+            Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class Startup
+                {
+                    private static IWorker Create() => new AsyncWorker();
+
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddSingleton<IWorker>(sp => Create());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RemovedRegistration_NoDiagnostic()
+    {
+        // A descriptor removed after it was added never reaches the provider.
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IWorker { }
+
+            public class AsyncWorker : IWorker, IAsyncDisposable
+            {
+                public ValueTask DisposeAsync() => default;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IWorker, AsyncWorker>();
+                    services.RemoveAll<IWorker>();
+                }
+            }
+            """;
 
         await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
             source

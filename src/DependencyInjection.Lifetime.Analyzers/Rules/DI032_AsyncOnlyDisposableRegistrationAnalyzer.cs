@@ -53,19 +53,44 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
 
             compilationContext.RegisterCompilationEndAction(endContext =>
             {
+                var mutations = registrationCollector.OrderedMutations.ToList();
+
                 foreach (var registration in registrationCollector.AllRegistrations)
                 {
-                    // Only instances the container creates are tracked for disposal. A pre-built
-                    // instance is the caller's to dispose (DI033), and a factory registration
-                    // states its own ownership.
+                    // Only instances the container creates are tracked for disposal; a pre-built
+                    // instance is the caller's to dispose (DI033).
                     if (
-                        registration.ImplementationType is not { } implementationType
-                        || registration.HasImplementationInstance
+                        registration.HasImplementationInstance
                         // Transient disposables are DI008's finding: it already reports the
                         // whole tracking-and-disposal problem for them, and a second diagnostic
                         // on the same registration is noise.
                         || registration.Lifetime
                             is not (ServiceLifetime.Singleton or ServiceLifetime.Scoped)
+                    )
+                    {
+                        continue;
+                    }
+
+                    // A factory result is created by the container and tracked exactly like a type
+                    // registration, so a lambda that constructs a known type counts too.
+                    var implementationType =
+                        registration.ImplementationType
+                        ?? GetConstructedFactoryType(registration.FactoryExpression, endContext.Compilation);
+                    if (implementationType is null)
+                    {
+                        continue;
+                    }
+
+                    // A descriptor removed or replaced after it was added never reaches the
+                    // provider, so it cannot make disposal throw.
+                    if (
+                        mutations.Any(mutation =>
+                            SymbolEqualityComparer.Default.Equals(
+                                mutation.ServiceType,
+                                registration.ServiceType
+                            )
+                            && IsAfter(mutation.Location, registration.Location)
+                        )
                     )
                     {
                         continue;
@@ -89,5 +114,55 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                 }
             });
         });
+    }
+
+    /// <summary>
+    /// The type a factory lambda constructs when its body is a single object creation. Anything
+    /// less direct — a branch, a helper call, a builder — is left alone.
+    /// </summary>
+    private static INamedTypeSymbol? GetConstructedFactoryType(
+        ExpressionSyntax? factoryExpression,
+        Compilation compilation
+    )
+    {
+        if (factoryExpression is not LambdaExpressionSyntax lambda)
+        {
+            return null;
+        }
+
+        var created = lambda.Body switch
+        {
+            ObjectCreationExpressionSyntax creation => creation,
+            BlockSyntax block
+                when block.Statements.Count == 1
+                    && block.Statements[0]
+                        is ReturnStatementSyntax
+                        {
+                            Expression: ObjectCreationExpressionSyntax blockCreation,
+                        } => blockCreation,
+            _ => null,
+        };
+
+        if (created is null || !compilation.ContainsSyntaxTree(created.SyntaxTree))
+        {
+            return null;
+        }
+
+        var semanticModel = compilation.GetSemanticModel(created.SyntaxTree);
+        return semanticModel.GetTypeInfo(created).Type as INamedTypeSymbol;
+    }
+
+    /// <summary>Source order, treating locations in different files as incomparable.</summary>
+    private static bool IsAfter(Location candidate, Location reference)
+    {
+        if (candidate.SourceTree?.FilePath != reference.SourceTree?.FilePath)
+        {
+            return false;
+        }
+
+        var byStart = candidate.SourceSpan.Start.CompareTo(reference.SourceSpan.Start);
+        return byStart != 0
+            ? byStart > 0
+            : candidate.SourceSpan.End > reference.SourceSpan.End;
     }
 }

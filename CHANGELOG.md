@@ -19,14 +19,19 @@ disposes this, and can they.
   it creates so it can dispose it, but a synchronous `Dispose()` on the provider or a scope has
   nothing to call and throws `InvalidOperationException` instead. Implement both interfaces, or
   guarantee every disposal is asynchronous. Transient registrations stay with DI008, which already
-  reports the tracking-and-disposal problem for them; pre-built instances (DI033) and factory
-  registrations are exempt.
+  reports the tracking-and-disposal problem for them, and pre-built instances are DI033's. Factory
+  registrations count — the container creates and tracks whatever a factory returns — when the
+  lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A
+  descriptor removed or replaced after it was added never reaches the provider and is not reported.
+  The claim is conditional on the service actually being resolved, which is what makes the disposal
+  path run at all; the message says so.
 - **DI033 externally owned disposable instance** (Info) — a disposable handed to the container as an
   existing object (`AddSingleton<TService>(new Thing())` or a descriptor's implementation instance).
   The container disposes only what it creates, so the provider never touches it and its handles live
   until the process ends. Registering the type instead hands ownership over; keeping the instance is
   a legitimate choice, which is why this is Info rather than Warning. Factory registrations are
-  exempt because the container does create what a factory returns.
+  exempt because the container does create what a factory returns, as is a descriptor removed or
+  replaced after it was added.
 
 ## [3.2.0] - 2026-07-26
 

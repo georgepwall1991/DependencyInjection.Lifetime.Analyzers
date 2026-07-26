@@ -140,4 +140,37 @@ public class DI033_ExternallyOwnedInstanceAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task RemovedInstanceRegistration_NoDiagnostic()
+    {
+        // The descriptor is removed after it was added, so nobody is left holding the instance
+        // through the container.
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IConnectionPool { }
+
+            public class ConnectionPool : IConnectionPool, IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IConnectionPool>(new ConnectionPool());
+                    services.RemoveAll<IConnectionPool>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI033_ExternallyOwnedInstanceAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

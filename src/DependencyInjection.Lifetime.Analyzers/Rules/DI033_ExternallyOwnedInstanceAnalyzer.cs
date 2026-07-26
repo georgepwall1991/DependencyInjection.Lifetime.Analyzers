@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -52,6 +53,8 @@ public sealed class DI033_ExternallyOwnedInstanceAnalyzer : DiagnosticAnalyzer
 
             compilationContext.RegisterCompilationEndAction(endContext =>
             {
+                var mutations = registrationCollector.OrderedMutations.ToList();
+
                 foreach (var registration in registrationCollector.AllRegistrations)
                 {
                     if (
@@ -70,6 +73,21 @@ public sealed class DI033_ExternallyOwnedInstanceAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
+                    // A descriptor removed or replaced after it was added never reaches the
+                    // provider, so nobody is left holding it.
+                    if (
+                        mutations.Any(mutation =>
+                            SymbolEqualityComparer.Default.Equals(
+                                mutation.ServiceType,
+                                registration.ServiceType
+                            )
+                            && IsAfter(mutation.Location, registration.Location)
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
                     endContext.ReportDiagnostic(
                         Diagnostic.Create(
                             DiagnosticDescriptors.ExternallyOwnedDisposableInstance,
@@ -80,5 +98,19 @@ public sealed class DI033_ExternallyOwnedInstanceAnalyzer : DiagnosticAnalyzer
                 }
             });
         });
+    }
+
+    /// <summary>Source order, treating locations in different files as incomparable.</summary>
+    private static bool IsAfter(Location candidate, Location reference)
+    {
+        if (candidate.SourceTree?.FilePath != reference.SourceTree?.FilePath)
+        {
+            return false;
+        }
+
+        var byStart = candidate.SourceSpan.Start.CompareTo(reference.SourceSpan.Start);
+        return byStart != 0
+            ? byStart > 0
+            : candidate.SourceSpan.End > reference.SourceSpan.End;
     }
 }

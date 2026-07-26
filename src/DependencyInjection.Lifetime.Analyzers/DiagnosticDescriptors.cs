@@ -302,7 +302,7 @@ public static class DiagnosticDescriptors
     public static readonly DiagnosticDescriptor AsyncOnlyDisposableRegistration = new(
         id: DiagnosticIds.AsyncOnlyDisposableRegistration,
         title: "Service implements only IAsyncDisposable",
-        messageFormat: "'{0}' implements only IAsyncDisposable, so disposing the provider or scope synchronously throws instead of disposing it",
+        messageFormat: "'{0}' implements only IAsyncDisposable, so once it is resolved, disposing the provider or scope synchronously throws instead of disposing it",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,

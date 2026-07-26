@@ -1202,7 +1202,7 @@ public sealed class UploadQueue : IUploadQueue, IDisposable, IAsyncDisposable
 
 The alternative is to guarantee every disposal is asynchronous — `await provider.DisposeAsync()`, `CreateAsyncScope`, `await using` — which the generic host does for you but a hand-built provider does not.
 
-**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033), and factory registrations do not prove an implementation type from the registration site.
+**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033). Factory registrations do count — the container creates and tracks a factory's result — when the lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A descriptor removed or replaced after it was added never reaches the provider. The diagnostic is conditional on the service being resolved at least once, since that is what puts it in the container's disposal list.
 
 **Code Fix:** No — adding a synchronous `Dispose` means deciding what synchronous teardown of an inherently asynchronous resource should do, which the analyzer cannot answer.
 
@@ -1228,7 +1228,7 @@ services.AddSingleton<IMetricsSink, MetricsSink>();
 
 If the instance must be pre-built — it is shared with code outside the container, or its construction needs values the container does not have — dispose it deliberately at shutdown and treat the registration as a loan.
 
-**Guardrails:** non-disposable instances raise no ownership question, and factory registrations are exempt because the container *does* create and therefore dispose what a factory returns. Reported at Info: caller-owned disposal is a legitimate choice, just one worth making explicitly.
+**Guardrails:** non-disposable instances raise no ownership question, and factory registrations are exempt because the container *does* create and therefore dispose what a factory returns, as is a descriptor removed or replaced after it was added. Reported at Info: caller-owned disposal is a legitimate choice, just one worth making explicitly.
 
 **Code Fix:** No — rewriting to a type registration changes construction, and disposing at shutdown is a lifecycle decision.
 
