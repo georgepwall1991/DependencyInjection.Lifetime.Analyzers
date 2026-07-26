@@ -21,7 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary, and only a bare resolution body qualifies. Every existing guard still applies: the receiver
   must be enumerable-like and rooted in storage that outlives the scope, so local dictionaries, a
   repository whose method merely happens to be named `GetOrAdd`, and discarded `ImmutableList.Add`
-  results all stay quiet.
+  results all stay quiet. The exemption is contract-based, not name-based: only
+  `System.Collections.Concurrent.ConcurrentDictionary<,>`'s own members qualify, and each argument is
+  classified by the parameter it binds to, so the `key` and the `factoryArgument` of the `TArg`
+  overloads are never treated as stored. For factory arguments only the returned value counts —
+  `_ => service.CacheKey` computes a derived value and stays quiet, while `_ => service`,
+  `_ => (resolution)`, and `_ => { return resolution; }` report.
 
 ## [3.0.1] - 2026-07-25
 
