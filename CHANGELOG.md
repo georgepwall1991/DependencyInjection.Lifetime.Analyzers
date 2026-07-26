@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-07-26
+
+Two fixes recovered from stale branches that had drifted 69 commits behind main. Each was
+re-verified against current main, re-implemented on top of it, and mutation-tested.
+
+### Fixed
+
+- **DI014 provider laundered through a coalesce conversion** (false negative) — Roslyn does not
+  expose a coalesce's LEFT operand conversion through `SemanticModel.GetConversion`; it lives on
+  `ICoalesceOperation.ValueConversion`. A user-defined conversion there therefore looked like an
+  identity flow, so `services?.BuildServiceProvider() ?? new Wrapper()` transferred ownership to a
+  wrapper that never disposes the provider, and the rule stayed silent. The coalesce arm now checks
+  the operation's own conversion. This matches how the rule already treats a user-defined conversion
+  in a ternary arm, an assignment, and a return: the wrapper is opaque, so ownership cannot be
+  proven to transfer. A wrapper that genuinely forwards `Dispose()` to the provider is therefore
+  reported here as it already was in those positions — deliberate, and unchanged in this release.
+- **DI021 lock on a `System.Threading.Timer` state parameter** (false positive) — a handler
+  parameter is normally a fresh object per invocation, so locking it guards nothing. A timer
+  callback is the exception: every invocation receives the same state object registered at
+  construction, so `lock (state)` genuinely serializes. Sinks now declare whether their handler
+  parameters are per-invocation, and the timer sink declares that they are not. The guarantee is
+  deliberately not propagated across a one-hop delegation lambda, which is free to pass the target
+  method something fresh.
+
+  Accepted false negatives, both pre-existing and unchanged by this release: a coalesce inside a
+  `using` declaration short-circuits before the conversion check, and DI021's one-hop delegation
+  still does not flow lambda arguments into the target method's parameters.
+
 ## [3.5.0] - 2026-07-26
 
 ### Added

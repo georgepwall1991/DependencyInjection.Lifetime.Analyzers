@@ -90,13 +90,15 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             string description,
             string sinkDisplay,
             string knobName,
-            ISymbol? timerInstance = null)
+            ISymbol? timerInstance = null,
+            bool handlerParametersArePerInvocation = true)
         {
             Concurrency = concurrency;
             Description = description;
             SinkDisplay = sinkDisplay;
             KnobName = knobName;
             TimerInstance = timerInstance;
+            HandlerParametersArePerInvocation = handlerParametersArePerInvocation;
         }
 
         public SinkConcurrency Concurrency { get; }
@@ -112,6 +114,21 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
         /// <summary>For timer sinks: the local/field holding this timer, used to correlate re-arm guards.</summary>
         public ISymbol? TimerInstance { get; }
+
+        /// <summary>
+        /// Whether each callback invocation receives distinct parameter objects. False for
+        /// System.Threading.Timer, whose callback gets the same state object registered at
+        /// construction every time — locking that parameter really does serialize invocations.
+        /// </summary>
+        public bool HandlerParametersArePerInvocation { get; }
+
+        /// <summary>
+        /// The same sink as seen by a delegated method. A one-hop lambda can pass anything it
+        /// likes to the method it calls (`state =&gt; Handle(new object())`), so the shared-state
+        /// guarantee does not survive the hop.
+        /// </summary>
+        public SinkContext WithPerInvocationParameters() =>
+            new(Concurrency, Description, SinkDisplay, KnobName, TimerInstance);
     }
 
     // ---------------------------------------------------------------------
@@ -475,7 +492,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             "System.Threading.Timer callbacks (timer callbacks can overlap)",
             "System.Threading.Timer callbacks",
             "period",
-            timerInstance: GetCreationTargetSymbol(creation));
+            timerInstance: GetCreationTargetSymbol(creation),
+            handlerParametersArePerInvocation: false);
         AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax, scopedTierCandidates);
     }
 
@@ -2093,7 +2111,12 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 // in the same-type instance method, so analyze that body as well.
                 if (TryGetOneHopTarget(lambda, out var delegated))
                 {
-                    AnalyzeMethodHandler(context, delegated, sink, registrationSyntax, scopedTierCandidates);
+                    AnalyzeMethodHandler(
+                        context,
+                        delegated,
+                        sink.WithPerInvocationParameters(),
+                        registrationSyntax,
+                        scopedTierCandidates);
                 }
 
                 break;
@@ -2242,7 +2265,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
 
             if (IsDisposeOnlyUse(operation.Syntax) ||
-                IsInsideLock(context, operation.Syntax, handlerBoundary, writtenSymbols) ||
+                IsInsideLock(context, operation.Syntax, handlerBoundary, writtenSymbols, sink) ||
                 guards.Covers(operation.Syntax))
             {
                 continue;
@@ -2408,7 +2431,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
-            if (IsInsideLock(context, invocation.Syntax, handlerBoundary, writtenSymbols) || guards.Covers(invocation.Syntax))
+            if (IsInsideLock(context, invocation.Syntax, handlerBoundary, writtenSymbols, sink) || guards.Covers(invocation.Syntax))
             {
                 continue;
             }
@@ -2855,7 +2878,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         OperationAnalysisContext context,
         SyntaxNode useSyntax,
         SyntaxNode handlerBoundary,
-        HashSet<ISymbol> writtenSymbols)
+        HashSet<ISymbol> writtenSymbols,
+        SinkContext sink)
     {
         var semanticModel = context.Operation.SemanticModel;
         for (var node = useSyntax.Parent; node is not null && node != handlerBoundary; node = node.Parent)
@@ -2873,8 +2897,15 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
+            // A handler parameter is normally a fresh object per invocation, so locking it
+            // guards nothing. Sinks that hand every invocation the same object — a
+            // System.Threading.Timer's state argument — are the exception.
+            var parameterIsShared =
+                lockTarget is IParameterSymbol && !sink.HandlerParametersArePerInvocation;
+
             if (lockTarget is ILocalSymbol or IParameterSymbol &&
-                !IsDeclaredOutside(lockTarget, handlerBoundary))
+                !IsDeclaredOutside(lockTarget, handlerBoundary) &&
+                !parameterIsShared)
             {
                 // Per-invocation monitor: keep looking for an outer, genuinely shared lock.
                 continue;

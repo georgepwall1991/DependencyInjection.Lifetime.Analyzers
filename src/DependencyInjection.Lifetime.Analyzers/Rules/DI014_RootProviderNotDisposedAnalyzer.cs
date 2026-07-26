@@ -1924,8 +1924,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
 
             if (parentExpression is BinaryExpressionSyntax coalesceExpression &&
                 coalesceExpression.IsKind(SyntaxKind.CoalesceExpression) &&
-                (coalesceExpression.Left == current || coalesceExpression.Right == current) &&
-                !IsUserDefinedConversionResult(current, semanticModel))
+                IsSameInstanceCoalesceArm(coalesceExpression, current, semanticModel))
             {
                 // When this operand supplies the coalesce result, ownership follows it outward.
                 current = parentExpression;
@@ -1936,6 +1935,33 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         }
 
         return current;
+    }
+
+    /// <summary>
+    /// Whether this coalesce operand hands the very same provider instance outward. Roslyn does not
+    /// expose the LEFT operand's conversion through <see cref="SemanticModel.GetConversion"/> — it
+    /// lives on <see cref="ICoalesceOperation.ValueConversion"/> — so a user-defined conversion
+    /// there would otherwise look like an identity flow and silently transfer ownership to a
+    /// wrapper the container never disposes.
+    /// </summary>
+    private static bool IsSameInstanceCoalesceArm(
+        BinaryExpressionSyntax coalesceExpression,
+        SyntaxNode current,
+        SemanticModel semanticModel)
+    {
+        if (IsUserDefinedConversionResult(current, semanticModel))
+        {
+            return false;
+        }
+
+        if (coalesceExpression.Right == current)
+        {
+            return true;
+        }
+
+        return coalesceExpression.Left == current &&
+               semanticModel.GetOperation(coalesceExpression) is ICoalesceOperation coalesceOperation &&
+               !coalesceOperation.ValueConversion.IsUserDefined;
     }
 
     private static bool IsSameInstanceCast(
