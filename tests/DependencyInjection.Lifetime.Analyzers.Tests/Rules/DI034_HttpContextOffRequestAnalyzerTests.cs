@@ -1,0 +1,183 @@
+using System.Threading.Tasks;
+using DependencyInjection.Lifetime.Analyzers.Rules;
+using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
+using Xunit;
+
+namespace DependencyInjection.Lifetime.Analyzers.Tests.Rules;
+
+public class DI034_HttpContextOffRequestAnalyzerTests
+{
+    private const string Usings = """
+        using System;
+        using System.Threading.Tasks;
+        using Microsoft.AspNetCore.Http;
+        using Microsoft.Extensions.DependencyInjection;
+
+        namespace Microsoft.AspNetCore.Http
+        {
+            public abstract class HttpContext
+            {
+                public abstract string TraceIdentifier { get; }
+            }
+
+            public interface IHttpContextAccessor
+            {
+                HttpContext? HttpContext { get; set; }
+            }
+        }
+
+        """;
+
+    [Fact]
+    public async Task HttpContextParameter_CapturedByDiscardedTaskRun_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        _ = Task.Run(() => Console.WriteLine({|DI034:context|}.TraceIdentifier));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AccessorReadInsideBackgroundWork_ReportsDiagnostic()
+    {
+        // Reading the accessor from inside the work is no better: the AsyncLocal has moved on.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    private readonly IHttpContextAccessor _accessor;
+
+                    public Handler(IHttpContextAccessor accessor)
+                    {
+                        _accessor = accessor;
+                    }
+
+                    public void Handle()
+                    {
+                        _ = Task.Run(() => Console.WriteLine({|DI034:_accessor.HttpContext|}!.TraceIdentifier));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task HttpContextLocal_CapturedByTaskFactoryStartNew_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    private readonly IHttpContextAccessor _accessor;
+
+                    public Handler(IHttpContextAccessor accessor)
+                    {
+                        _accessor = accessor;
+                    }
+
+                    public void Handle()
+                    {
+                        var context = _accessor.HttpContext!;
+                        Task.Factory.StartNew(() => Console.WriteLine({|DI034:context|}.TraceIdentifier));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AwaitedBackgroundWork_NoDiagnostic()
+    {
+        // Awaiting keeps the request — and the context — alive until the work finishes.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public async Task HandleAsync(HttpContext context)
+                    {
+                        await Task.Run(() => Console.WriteLine(context.TraceIdentifier));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ValuesCopiedBeforeBackgroundWork_NoDiagnostic()
+    {
+        // The documented fix: take what you need out of the context first.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        var traceId = context.TraceIdentifier;
+                        _ = Task.Run(() => Console.WriteLine(traceId));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task SynchronouslyWaitedBackgroundWork_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine(context.TraceIdentifier)).Wait();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task BackgroundWorkWithoutHttpContext_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(string message)
+                    {
+                        _ = Task.Run(() => Console.WriteLine(message));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+}

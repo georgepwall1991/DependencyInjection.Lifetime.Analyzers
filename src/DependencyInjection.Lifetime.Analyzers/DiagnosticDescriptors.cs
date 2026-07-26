@@ -297,6 +297,19 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI034: HttpContext captured by fire-and-forget background work.
+    /// </summary>
+    public static readonly DiagnosticDescriptor HttpContextUsedOffRequest = new(
+        id: DiagnosticIds.HttpContextUsedOffRequest,
+        title: "Do not use HttpContext in fire-and-forget background work",
+        messageFormat: "Background work started here uses '{0}', but ASP.NET Core recycles the HttpContext as soon as the response completes",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "ASP.NET Core pools and resets HttpContext once the response has been written, and IHttpContextAccessor's backing AsyncLocal is cleared or reassigned to the next request. Background work that outlives the request therefore reads a context whose request, response, features, and RequestServices have already been torn down — usually as a NullReferenceException or ObjectDisposedException, sometimes as another user's data. Copy the values the work needs out of the context before starting it, or await the work before the handler returns."
+    );
+
+    /// <summary>
     /// DI032: A container-created service implements only IAsyncDisposable.
     /// </summary>
     public static readonly DiagnosticDescriptor AsyncOnlyDisposableRegistration = new(

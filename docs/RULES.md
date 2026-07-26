@@ -44,6 +44,7 @@ For the latest full rule content, see:
 | [DI031](#di031-shared-implementation-registered-under-several-service-types) | Shared implementation registered under several service types | Info | No |
 | [DI032](#di032-service-implements-only-iasyncdisposable) | Service implements only IAsyncDisposable | Warning | No |
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
+| [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 
 ---
 
@@ -1231,6 +1232,37 @@ If the instance must be pre-built — it is shared with code outside the contain
 **Guardrails:** non-disposable instances raise no ownership question, and factory registrations are exempt because the container *does* create and therefore dispose what a factory returns, as is a descriptor removed or replaced after it was added. Reported at Info: caller-owned disposal is a legitimate choice, just one worth making explicitly.
 
 **Code Fix:** No — rewriting to a type registration changes construction, and disposing at shutdown is a lifecycle decision.
+
+---
+
+## DI034: HttpContext Used in Fire-and-Forget Background Work
+
+**What it catches:** an `HttpContext` value — a parameter, local, or field of that type — or a read of `IHttpContextAccessor.HttpContext`, inside background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away.
+
+**Why it matters:** ASP.NET Core pools `HttpContext` and resets it as soon as the response has been written, and the accessor's backing `AsyncLocal` is cleared or reassigned to the next request. Work that outlives the request therefore reads a context whose request, response, features, and `RequestServices` have already been torn down. The usual symptom is a `NullReferenceException` or `ObjectDisposedException` under load, and the worst one is reading another user's request data from a recycled context.
+
+**Problem:**
+
+```csharp
+public void Handle(HttpContext context)
+{
+    _ = Task.Run(() => _audit.Write(context.TraceIdentifier));  // DI034
+}
+```
+
+**Better pattern:** take what the work needs out of the context first — plain values survive the request.
+
+```csharp
+public void Handle(HttpContext context)
+{
+    var traceId = context.TraceIdentifier;
+    _ = Task.Run(() => _audit.Write(traceId));
+}
+```
+
+**Guardrails:** a task that is awaited, returned, stored in a local, or waited on synchronously keeps the request alive until the work completes and stays silent, as does background work that touches no context. Reading the accessor *inside* the work is reported too, since by then the `AsyncLocal` has already moved on.
+
+**Code Fix:** No — which values to hoist out of the context is a decision about what the background work actually needs.
 
 ---
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-07-26
+
+### Added
+
+- **DI034 HttpContext used off-request** (Warning) — an `HttpContext` value, or a read of
+  `IHttpContextAccessor.HttpContext`, inside fire-and-forget background work. ASP.NET Core pools and
+  resets the context once the response is written, and the accessor's `AsyncLocal` is cleared or
+  reassigned to the next request, so work that outlives the request reads a torn-down context — a
+  `NullReferenceException` under load at best, another user's request data at worst. Copy the values
+  the work needs out of the context first. Awaited, returned, stored, and synchronously waited tasks
+  keep the request alive and stay silent, as does background work that touches no context. Reading
+  the accessor from inside the work reports too, since the `AsyncLocal` has already moved on.
+
 ## [3.3.0] - 2026-07-26
 
 Two disposal-ownership rules. Both answer the same question the registration site does not: who

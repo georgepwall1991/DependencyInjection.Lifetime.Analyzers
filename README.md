@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.3.0
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.4.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.3.0">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.4.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.3.0" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.4.0" />
 ```
 
 Then reference it from the project file:
@@ -191,6 +191,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI031](#di031-shared-implementation-registered-under-several-service-types) | Shared implementation registered under several service types | Info | No |
 | [DI032](#di032-service-implements-only-iasyncdisposable) | Service implements only IAsyncDisposable | Warning | No |
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
+| [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 
 ---
 

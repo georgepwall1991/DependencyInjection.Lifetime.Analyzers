@@ -130,3 +130,11 @@ DI023 | DependencyInjection | Warning | Fire-and-forget background work captures
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI031 | DependencyInjection | Info | One implementation type registered under several service types with a shared lifetime, producing a separate instance per registration
+
+## Release 3.3.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI032 | DependencyInjection | Warning | Container-created service implements only IAsyncDisposable, so synchronous provider or scope disposal throws
+DI033 | DependencyInjection | Info | Disposable instance registered as a pre-built singleton, which the container never disposes

@@ -229,6 +229,16 @@ const ruleSampleConfig = {
       { label: "Sample app injected-factory pattern", symbol: "Good_InjectedFactory" },
     ],
   },
+  DI034: {
+    samplePath: "samples/SampleApp/Diagnostics/DI034/HttpContextOffRequestExamples.cs",
+    highlights: [
+      { label: "Sample app off-request HttpContext warning", symbol: "Bad_AuditFromBackgroundWork" },
+      {
+        label: "Sample app copy-values-first pattern",
+        symbol: "Good_CopyValuesBeforeBackgroundWork",
+      },
+    ],
+  },
   DI032: {
     samplePath: "samples/SampleApp/Diagnostics/DI032/AsyncOnlyDisposableExamples.cs",
     highlights: [

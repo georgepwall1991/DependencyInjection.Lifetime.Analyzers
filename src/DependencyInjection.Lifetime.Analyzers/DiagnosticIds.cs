@@ -115,6 +115,12 @@ public static class DiagnosticIds
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 
     /// <summary>
+    /// DI034: HttpContext reaches fire-and-forget background work, which keeps running after
+    /// ASP.NET Core has recycled the context.
+    /// </summary>
+    public const string HttpContextUsedOffRequest = "DI034";
+
+    /// <summary>
     /// DI032: A container-created service implements only IAsyncDisposable, so disposing the
     /// provider or scope synchronously throws instead of disposing it.
     /// </summary>
