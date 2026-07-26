@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-07-26
+
+### Fixed
+
+- **DI002 value-returning storage mutations** — `ConcurrentDictionary.GetOrAdd` and `AddOrUpdate` now
+  count as escaping storage. They write the value into the receiver and return it, so the void/bool/int
+  return-type gate that keeps fluent immutable builders (`ImmutableList.Add`) quiet was exempting the
+  single most common cache-write shape. Both the direct value argument
+  (`_cache.GetOrAdd(key, scope.ServiceProvider.GetRequiredService<T>())`) and the value-factory
+  spelling (`_cache.GetOrAdd(key, _ => scope.ServiceProvider.GetRequiredService<T>())`) report. The
+  factory leg is matched from the mutation side because a lambda body is a separate executable
+  boundary, and only a bare resolution body qualifies. Every existing guard still applies: the receiver
+  must be enumerable-like and rooted in storage that outlives the scope, so local dictionaries, a
+  repository whose method merely happens to be named `GetOrAdd`, and discarded `ImmutableList.Add`
+  results all stay quiet. The exemption is contract-based, not name-based: only
+  `System.Collections.Concurrent.ConcurrentDictionary<,>`'s own members qualify, and each argument is
+  classified by the parameter it binds to, so the `key` and the `factoryArgument` of the `TArg`
+  overloads are never treated as stored. For factory arguments only the returned value counts —
+  `_ => service.CacheKey` computes a derived value and stays quiet, while `_ => service`,
+  `_ => (resolution)`, `_ => (IMyService)resolution`, and `_ => { return resolution; }` report. A cast
+  is unwrapped only when the conversion is identity or reference-preserving — a user-defined
+  conversion operator yields a different object and stays quiet. A scoped service used as the
+  dictionary *key* reports too, since an inserted entry retains its key.
+
+  Accepted false negatives: a factory that returns its `factoryArgument` (`(_, arg) => arg`), a
+  factory supplied as a delegate local rather than an inline lambda, block bodies with more than a
+  single return statement, and `ImmutableInterlocked.GetOrAdd(ref dict, ...)` whose receiver is a
+  static type. Each needs cross-boundary flow this rule does not yet carry, and none of them
+  regressed: every one was silent before 3.0.2 as well.
+
 ## [3.0.1] - 2026-07-25
 
 ### Fixed

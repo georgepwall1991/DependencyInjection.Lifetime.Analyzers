@@ -5651,4 +5651,676 @@ public class DI002_ScopeEscapeAnalyzerTests
     }
 
     #endregion
+
+    #region Value-returning storage mutations (GetOrAdd / AddOrUpdate)
+
+    [Fact]
+    public async Task ScopedService_GetOrAddValueArgumentOnFieldDictionary_ReportsDiagnostic()
+    {
+        // ConcurrentDictionary.GetOrAdd stores the value into the receiver and returns it. The
+        // non-void return must not exempt it: the field-held dictionary outlives the scope.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.GetOrAdd(key, {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddTrackedLocalOnFieldDictionary_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _cache.GetOrAdd(key, service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryLambdaOnFieldDictionary_ReportsDiagnostic()
+    {
+        // The dominant real-world shape: the resolution happens inside the value factory, so the
+        // resolution's parent is a lambda rather than the argument itself.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.GetOrAdd(key, _ => {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|});
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_AddOrUpdateOnFieldDictionary_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _cache.AddOrUpdate(key, service, (k, existing) => service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddOnLocalDictionary_NoDiagnostic()
+    {
+        // A dictionary created and kept inside the method dies with the scope-bounded work.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    var local = new ConcurrentDictionary<string, IMyService>();
+                    using var scope = _scopeFactory.CreateScope();
+                    local.GetOrAdd(key, scope.ServiceProvider.GetRequiredService<IMyService>());
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddOnNonCollectionField_NoDiagnostic()
+    {
+        // A repository with a method named GetOrAdd is a method argument, not collection storage.
+        var source = Usings + """
+            public interface IMyService { }
+
+            public class Repository
+            {
+                public IMyService GetOrAdd(string key, IMyService service) => service;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Repository _repository = new Repository();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _repository.GetOrAdd(key, scope.ServiceProvider.GetRequiredService<IMyService>());
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_ImmutableListAddDiscarded_NoDiagnostic()
+    {
+        // Regression guard for the return-type gate: ImmutableList.Add hands back a new list
+        // instead of storing into the receiver, so the discarded result retains nothing.
+        var source = Usings + """
+            using System.Collections.Immutable;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ImmutableList<IMyService> _cache = ImmutableList<IMyService>.Empty;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.Add(scope.ServiceProvider.GetRequiredService<IMyService>());
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryArgumentOverload_NoDiagnostic()
+    {
+        // The TArg overload hands the third argument to the factory; only the factory's RESULT is
+        // stored, so a resolution passed as factoryArgument does not escape by itself.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, string> _cache = new ConcurrentDictionary<string, string>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.GetOrAdd(key, (k, ignored) => "safe", scope.ServiceProvider.GetRequiredService<IMyService>());
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryReturningDerivedValue_NoDiagnostic()
+    {
+        // The factory uses the service during the call and stores a derived value. The service
+        // itself is never handed to the dictionary.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService
+            {
+                string CacheKey { get; }
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, string> _cache = new ConcurrentDictionary<string, string>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _cache.GetOrAdd(key, _ => service.CacheKey);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService
+            {
+                public string CacheKey => "k";
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddOnUserCollectionWithSameName_NoDiagnostic()
+    {
+        // An enumerable-shaped user type whose method merely happens to be named GetOrAdd has no
+        // storage contract; only ConcurrentDictionary is exempt from the return-type gate.
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public class Lookup<T> : List<T>
+            {
+                public T GetOrAdd(string key, T candidate) => candidate;
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly Lookup<IMyService> _lookup = new Lookup<IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _lookup.GetOrAdd(key, scope.ServiceProvider.GetRequiredService<IMyService>());
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddWrappedFactoryBody_ReportsDiagnostic()
+    {
+        // Parentheses and casts around the factory body preserve the stored value.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.GetOrAdd(key, _ => ({|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|}));
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddBlockBodiedFactory_ReportsDiagnostic()
+    {
+        // A single-return block factory stores exactly the returned resolution.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _cache.GetOrAdd(key, _ => { return {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|}; });
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryReturningTrackedLocal_ReportsDiagnostic()
+    {
+        // The factory returns the tracked service itself, so the dictionary stores it.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    _cache.GetOrAdd(key, _ => service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddAsDictionaryKey_ReportsDiagnostic()
+    {
+        // A ConcurrentDictionary retains the key it inserts just as it retains the value.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<IMyService, string> _byService = new ConcurrentDictionary<IMyService, string>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    _byService.GetOrAdd({|DI002:scope.ServiceProvider.GetRequiredService<IMyService>()|}, "value");
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryReturningUserDefinedConversion_NoDiagnostic()
+    {
+        // A user-defined conversion produces a different object; the dictionary never holds the
+        // service, so unwrapping the cast as identity-preserving would be wrong.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class ScopedMyService : IMyService
+            {
+                public static explicit operator string(ScopedMyService service) => "converted";
+            }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, string> _cache = new ConcurrentDictionary<string, string>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<ScopedMyService>();
+                    _cache.GetOrAdd(key, _ => (string)service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ScopedMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedService_GetOrAddFactoryReturningInterfaceCast_ReportsDiagnostic()
+    {
+        // An identity/reference cast still hands the same instance to the dictionary.
+        var source = Usings + """
+            using System.Collections.Concurrent;
+
+            public interface IMyService { }
+
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly ConcurrentDictionary<string, IMyService> _cache = new ConcurrentDictionary<string, IMyService>();
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Cache(string key)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = {|DI002:scope.ServiceProvider.GetRequiredService<ScopedMyService>()|};
+                    _cache.GetOrAdd(key, _ => (IMyService)service);
+                }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<ScopedMyService>();
+                }
+            }
+
+            public class ScopedMyService : IMyService { }
+            """;
+
+        await AnalyzerVerifier<DI002_ScopeEscapeAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    #endregion
 }
