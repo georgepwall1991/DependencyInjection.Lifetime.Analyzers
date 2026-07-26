@@ -500,12 +500,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
     /// <summary>
     /// Parameters of ConcurrentDictionary.GetOrAdd/AddOrUpdate whose argument is stored in the
-    /// dictionary. `key`, `comparisonValue`, and the `factoryArgument` of the TArg overloads are
-    /// deliberately absent: a service passed as factoryArgument is handed to the factory, and only
-    /// what the factory RETURNS is retained.
+    /// dictionary. The key counts: an inserted entry retains it exactly as it retains the value.
+    /// `comparisonValue` and the `factoryArgument` of the TArg overloads are deliberately absent —
+    /// a service passed as factoryArgument is handed to the factory, and only what the factory
+    /// RETURNS is retained.
     /// </summary>
     private static readonly ImmutableHashSet<string> StoredValueParameterNames =
-        ImmutableHashSet.Create("value", "addValue");
+        ImmutableHashSet.Create("key", "value", "addValue");
 
     private static readonly ImmutableHashSet<string> StoredFactoryParameterNames =
         ImmutableHashSet.Create("valueFactory", "addValueFactory", "updateValueFactory");
@@ -3386,7 +3387,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        returned = UnwrapValuePreservingExpression(returned);
+        returned = UnwrapValuePreservingExpression(returned, semanticModel);
 
         // _ => service — the factory hands back a tracked scoped local.
         if (TryGetTrackedLocalReference(returned, semanticModel, serviceVariables, out var trackedSource) &&
@@ -3415,7 +3416,14 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         return true;
     }
 
-    private static ExpressionSyntax UnwrapValuePreservingExpression(ExpressionSyntax expression)
+    /// <summary>
+    /// Strips wrappers that hand back the very same instance. A cast qualifies only when the
+    /// conversion is identity or reference-preserving: a user-defined conversion operator
+    /// produces a different object, so the factory result is not the service at all.
+    /// </summary>
+    private static ExpressionSyntax UnwrapValuePreservingExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
     {
         while (true)
         {
@@ -3424,7 +3432,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                 case ParenthesizedExpressionSyntax parenthesized:
                     expression = parenthesized.Expression;
                     continue;
-                case CastExpressionSyntax cast:
+                case CastExpressionSyntax cast
+                    when semanticModel.GetTypeInfo(cast.Type).Type is { } castType
+                        && semanticModel.ClassifyConversion(cast.Expression, castType) is
+                        {
+                            IsUserDefined: false,
+                        } conversion
+                        && (conversion.IsIdentity || conversion.IsReference):
                     expression = cast.Expression;
                     continue;
                 case PostfixUnaryExpressionSyntax suppression

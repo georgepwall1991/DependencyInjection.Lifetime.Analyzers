@@ -163,9 +163,13 @@ These are durable design decisions, recorded so a future pass does not re-litiga
   argument and the value-factory spelling report; the factory leg is matched from the mutation side
   because a lambda body is a separate executable boundary, and only a bare resolution body qualifies.
   Every receiver guard is unchanged, so local dictionaries, non-collection receivers with a method
-  named `GetOrAdd`, and discarded `ImmutableList.Add` results stay quiet. Remaining accepted FN:
-  `ImmutableInterlocked.GetOrAdd(ref dict, ...)`, whose receiver is a static type rather than the
-  collection.
+  named `GetOrAdd`, and discarded `ImmutableList.Add` results stay quiet. Arguments are classified by
+  the parameter they bind to (`key`/`value`/`addValue` are stored, `factoryArgument` and
+  `comparisonValue` are not), casts are unwrapped only for identity/reference conversions, and the
+  factory leg reports only what the lambda returns. Remaining accepted FNs, all silent before 3.0.2
+  too: `ImmutableInterlocked.GetOrAdd(ref dict, ...)` (static receiver), a factory returning its own
+  `factoryArgument`, a factory supplied as a delegate local, and block bodies with more than one
+  statement.
 - **DI028 linked-token-source disposal.** The dominant shape
   (`var linked = CreateLinkedTokenSource(...); await X(linked.Token);`) stays silent because the local
   is referenced. Closing it needs the reliable-disposal proof DI014 already has (branch ownership,

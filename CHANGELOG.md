@@ -26,7 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classified by the parameter it binds to, so the `key` and the `factoryArgument` of the `TArg`
   overloads are never treated as stored. For factory arguments only the returned value counts —
   `_ => service.CacheKey` computes a derived value and stays quiet, while `_ => service`,
-  `_ => (resolution)`, and `_ => { return resolution; }` report.
+  `_ => (resolution)`, `_ => (IMyService)resolution`, and `_ => { return resolution; }` report. A cast
+  is unwrapped only when the conversion is identity or reference-preserving — a user-defined
+  conversion operator yields a different object and stays quiet. A scoped service used as the
+  dictionary *key* reports too, since an inserted entry retains its key.
+
+  Accepted false negatives: a factory that returns its `factoryArgument` (`(_, arg) => arg`), a
+  factory supplied as a delegate local rather than an inline lambda, block bodies with more than a
+  single return statement, and `ImmutableInterlocked.GetOrAdd(ref dict, ...)` whose receiver is a
+  static type. Each needs cross-boundary flow this rule does not yet carry, and none of them
+  regressed: every one was silent before 3.0.2 as well.
 
 ## [3.0.1] - 2026-07-25
 
