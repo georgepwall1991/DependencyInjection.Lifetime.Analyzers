@@ -103,7 +103,13 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
 
     private static IEnumerable<SyntaxNode> EnumerateSelectorLambdas(ExpressionSyntax expression)
     {
-        foreach (var invocation in expression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        var selectors = new List<LambdaExpressionSyntax>();
+
+        foreach (
+            var invocation in expression
+                .DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+        )
         {
             if (
                 invocation.Expression is not MemberAccessExpressionSyntax memberAccess
@@ -117,10 +123,16 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
             {
                 if (argument.Expression is LambdaExpressionSyntax selector)
                 {
-                    yield return selector;
+                    selectors.Add(selector);
                 }
             }
         }
+
+        // Only the outermost selectors fan out. A Select nested inside another selector runs
+        // within that selector's single task, so anything it captures is per-task, not shared.
+        return selectors.Where(selector =>
+            !selectors.Any(other => other != selector && other.Span.Contains(selector.Span))
+        );
     }
 
     /// <summary>

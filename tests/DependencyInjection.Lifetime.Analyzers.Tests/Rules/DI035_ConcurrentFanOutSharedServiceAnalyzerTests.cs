@@ -247,9 +247,9 @@ public class DI035_ConcurrentFanOutSharedServiceAnalyzerTests
                         {
                             var db = new AppDbContext();
                             var ids = new[] { id };
-                            foreach (var item in ids.Select(x => x))
+                            foreach (var count in ids.Select(x => db.CountAsync(x)))
                             {
-                                await db.CountAsync(item);
+                                await count;
                             }
                         }));
                     }
