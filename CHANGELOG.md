@@ -18,7 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADO.NET connections, commands, transactions, and readers corrupt state or throw. The catalog is
   the one DI021 already uses, so both rules speak about the same types. Only values declared
   *outside* the concurrent body count — a context resolved inside the lambda belongs to that one
-  task — and thread-safe services, `nameof`, and sequential `foreach` loops stay silent.
+  task — and thread-safe services, `nameof`, and sequential `foreach` loops stay silent. Only the
+  selector of a `Select`/`SelectMany` (or a lambda handed to `WhenAll` directly) counts as a
+  concurrent body: a `Where` predicate runs one element at a time during enumeration, and a lambda
+  nested inside a selector belongs to that selector's single task. Properties are excluded because a
+  computed property can return a fresh instance per access. The claim assumes the operation invoked
+  on the shared instance is genuinely asynchronous, which is what makes the tasks overlap.
 
 ## [3.4.0] - 2026-07-26
 

@@ -76,8 +76,11 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
             == "System.Threading.Tasks.Task";
 
     /// <summary>
-    /// The lambdas whose bodies become the concurrent tasks: a projection passed to WhenAll
-    /// (<c>Task.WhenAll(items.Select(x =&gt; ...))</c>) and any lambda handed to it directly.
+    /// The lambdas whose bodies become the concurrent tasks: the selector of a
+    /// <c>Select</c>/<c>SelectMany</c> that feeds WhenAll, or a lambda handed to WhenAll directly.
+    /// A <c>Where</c> predicate or any other lambda in the chain runs during enumeration, one at a
+    /// time, so it is not a concurrent body — and a lambda nested inside a selector belongs to that
+    /// selector's single task rather than being a fan-out of its own.
     /// </summary>
     private static IEnumerable<SyntaxNode> EnumerateTaskProjections(
         InvocationExpressionSyntax whenAll
@@ -85,13 +88,37 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
     {
         foreach (var argument in whenAll.ArgumentList.Arguments)
         {
-            foreach (
-                var lambda in argument
-                    .Expression.DescendantNodesAndSelf()
-                    .OfType<LambdaExpressionSyntax>()
+            if (argument.Expression is LambdaExpressionSyntax directLambda)
+            {
+                yield return directLambda;
+                continue;
+            }
+
+            foreach (var selector in EnumerateSelectorLambdas(argument.Expression))
+            {
+                yield return selector;
+            }
+        }
+    }
+
+    private static IEnumerable<SyntaxNode> EnumerateSelectorLambdas(ExpressionSyntax expression)
+    {
+        foreach (var invocation in expression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (
+                invocation.Expression is not MemberAccessExpressionSyntax memberAccess
+                || memberAccess.Name.Identifier.ValueText is not ("Select" or "SelectMany")
             )
             {
-                yield return lambda;
+                continue;
+            }
+
+            foreach (var argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.Expression is LambdaExpressionSyntax selector)
+                {
+                    yield return selector;
+                }
             }
         }
     }
@@ -121,10 +148,11 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
             }
 
             var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            // Properties are deliberately absent: a computed property can hand back a fresh
+            // instance per access (`AppDbContext Db => new()`), which is not sharing at all.
             ITypeSymbol? type = symbol switch
             {
                 IFieldSymbol field => field.Type,
-                IPropertySymbol property => property.Type,
                 ILocalSymbol local when IsDeclaredOutside(local, concurrentBody) => local.Type,
                 IParameterSymbol parameter when IsDeclaredOutside(parameter, concurrentBody) =>
                     parameter.Type,

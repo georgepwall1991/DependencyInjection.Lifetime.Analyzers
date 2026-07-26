@@ -200,4 +200,87 @@ public class DI035_ConcurrentFanOutSharedServiceAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ContextUsedOnlyInWherePredicate_NoDiagnostic()
+    {
+        // A Where predicate runs during enumeration, one element at a time.
+        var source =
+            Usings
+            + """
+                public class OrderProcessor
+                {
+                    private readonly AppDbContext _db;
+
+                    public OrderProcessor(AppDbContext db)
+                    {
+                        _db = db;
+                    }
+
+                    private bool IsUsable(AppDbContext db) => true;
+
+                    public async Task ProcessAsync(IEnumerable<int> orderIds)
+                    {
+                        await Task.WhenAll(
+                            orderIds.Where(id => IsUsable(_db)).Select(id => Task.CompletedTask));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI035_ConcurrentFanOutSharedServiceAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ContextCreatedPerTaskAndUsedByNestedLambda_NoDiagnostic()
+    {
+        // The context belongs to one task; the nested lambda is part of that same task.
+        var source =
+            Usings
+            + """
+                public class OrderProcessor
+                {
+                    public async Task ProcessAsync(IEnumerable<int> orderIds)
+                    {
+                        await Task.WhenAll(orderIds.Select(async id =>
+                        {
+                            var db = new AppDbContext();
+                            var ids = new[] { id };
+                            foreach (var item in ids.Select(x => x))
+                            {
+                                await db.CountAsync(item);
+                            }
+                        }));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI035_ConcurrentFanOutSharedServiceAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ContextFromComputedProperty_NoDiagnostic()
+    {
+        // A computed property can hand back a fresh instance per access.
+        var source =
+            Usings
+            + """
+                public class OrderProcessor
+                {
+                    private AppDbContext Db => new AppDbContext();
+
+                    public async Task ProcessAsync(IEnumerable<int> orderIds)
+                    {
+                        await Task.WhenAll(orderIds.Select(id => Db.CountAsync(id)));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI035_ConcurrentFanOutSharedServiceAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
