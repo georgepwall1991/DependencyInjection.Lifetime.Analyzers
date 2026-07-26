@@ -22,7 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent. Capture tracking follows any number of hops (scope → provider → service) and covers method
   groups and delegate locals as well as inline lambdas, while values that cannot hold the scope's
   graph — primitives, enums, strings such as `scope.GetHashCode()` — a local reassigned to something
-  not scope-derived, and `nameof(service)` all stay quiet.
+  not scope-derived, and `nameof(service)` all stay quiet. Both the declared type and the
+  initializer's own type are checked, so `object hash = scope.GetHashCode()` is a boxed int rather
+  than a live capture, and a state argument whose value cannot hold the scope graph is skipped.
+  Replacement is position-aware: work started *before* the local was overwritten still reports.
 
 ## [3.0.2] - 2026-07-26
 

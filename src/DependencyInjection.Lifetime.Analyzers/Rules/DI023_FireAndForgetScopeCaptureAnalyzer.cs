@@ -69,6 +69,12 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         }
 
         var capturedLocals = CollectCapturedLocals(executableBody, semanticModel, scopeLocals);
+        var replacementPositions = CollectReplacementPositions(
+            executableBody,
+            semanticModel,
+            scopeLocals,
+            capturedLocals
+        );
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
@@ -86,6 +92,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                     invocation,
                     semanticModel,
                     capturedLocals,
+                    replacementPositions,
                     out var capturedName
                 )
             )
@@ -207,6 +214,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                     || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
                     || captured.ContainsKey(local)
                     || !CanKeepScopeAlive(local.Type)
+                    || !CanKeepScopeAlive(semanticModel.GetTypeInfo(initializer).Type)
                 )
                 {
                     continue;
@@ -220,8 +228,24 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             }
         } while (addedThisPass);
 
-        // A local reassigned to something that is not scope-derived no longer holds anything the
-        // scope owns, so capturing it afterwards is harmless.
+        return captured;
+    }
+
+    /// <summary>
+    /// The first position at which each tracked local is overwritten with something that is not
+    /// scope-derived. Work started before that point still captured the scoped value; work started
+    /// after it captured the replacement. Branch-insensitive by design — a conditional replacement
+    /// leaves the earliest position, keeping the diagnostic rather than guessing.
+    /// </summary>
+    private static Dictionary<ILocalSymbol, int> CollectReplacementPositions(
+        SyntaxNode executableBody,
+        SemanticModel semanticModel,
+        HashSet<ILocalSymbol> scopeLocals,
+        Dictionary<ILocalSymbol, string> captured
+    )
+    {
+        var replacedAt = new Dictionary<ILocalSymbol, int>(SymbolEqualityComparer.Default);
+
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(executableBody))
         {
             if (
@@ -236,10 +260,16 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            captured.Remove(assigned);
+            if (
+                !replacedAt.TryGetValue(assigned, out var existing)
+                || assignment.SpanStart < existing
+            )
+            {
+                replacedAt[assigned] = assignment.SpanStart;
+            }
         }
 
-        return captured;
+        return replacedAt;
     }
 
     /// <summary>
@@ -374,6 +404,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         Dictionary<ILocalSymbol, string> capturedLocals,
+        Dictionary<ILocalSymbol, int> replacementPositions,
         out string capturedName
     )
     {
@@ -383,6 +414,21 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
         // locals all reach the background work the same way: through an argument.
         foreach (var argument in invocation.ArgumentList.Arguments)
         {
+            // A state argument is evaluated synchronously; if its value cannot hold the scope
+            // graph (a boxed int, a string), the started work retains nothing from the scope.
+            if (
+                argument.Expression is not (
+                    LambdaExpressionSyntax
+                    or AnonymousMethodExpressionSyntax
+                    or IdentifierNameSyntax
+                    or MemberAccessExpressionSyntax
+                )
+                && !CanKeepScopeAlive(semanticModel.GetTypeInfo(argument.Expression).Type)
+            )
+            {
+                continue;
+            }
+
             foreach (
                 var identifier in argument
                     .Expression.DescendantNodesAndSelf()
@@ -397,6 +443,10 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 if (
                     semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
                     && capturedLocals.TryGetValue(local, out var name)
+                    && !(
+                        replacementPositions.TryGetValue(local, out var replacedAt)
+                        && replacedAt < invocation.SpanStart
+                    )
                 )
                 {
                     capturedName = name;

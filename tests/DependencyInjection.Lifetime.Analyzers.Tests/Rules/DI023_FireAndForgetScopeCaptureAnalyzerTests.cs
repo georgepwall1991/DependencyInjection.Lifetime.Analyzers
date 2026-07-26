@@ -510,4 +510,84 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
 
         await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+    [Fact]
+    public async Task ScopeDerivedValueWidenedToObject_NoDiagnostic()
+    {
+        // The declared type is object, but the value is a boxed int — it holds no scope graph.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    object hash = scope.GetHashCode();
+                    _ = Task.Run(() => Console.WriteLine(hash));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopeDerivedValueAsStateArgument_NoDiagnostic()
+    {
+        // The state argument is evaluated synchronously and carries only a boxed int.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyClass(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    Task.Factory.StartNew(state => Console.WriteLine(state), scope.GetHashCode());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ScopedLocalReassignedAfterCapture_ReportsDiagnostic()
+    {
+        // The reassignment happens after the background work already captured the scoped value.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    _ = {|DI023:Task.Run(() => service.DoWork())|};
+                    service = _singleton;
+                    service.DoWork();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }
