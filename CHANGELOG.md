@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-07-26
+
+### Added
+
+- **DI035 shared service across a fan-out** (Warning) — closes the concurrent-sharing leg of the
+  fan-out slot that DI021 documented as out of scope and DI023 did not cover. `Task.WhenAll` starts
+  every task before awaiting any of them, so a non-thread-safe service captured by the projection is
+  used by all of them at once: EF Core throws "A second operation was started on this context", and
+  ADO.NET connections, commands, transactions, and readers corrupt state or throw. The catalog is
+  the one DI021 already uses, so both rules speak about the same types. Only values declared
+  *outside* the concurrent body count — a context resolved inside the lambda belongs to that one
+  task — and thread-safe services, `nameof`, and sequential `foreach` loops stay silent.
+
 ## [3.4.0] - 2026-07-26
 
 ### Added

@@ -115,6 +115,12 @@ public static class DiagnosticIds
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 
     /// <summary>
+    /// DI035: One non-thread-safe service is shared by every task of a Task.WhenAll fan-out, so
+    /// the tasks operate on the same instance concurrently.
+    /// </summary>
+    public const string ConcurrentFanOutSharedService = "DI035";
+
+    /// <summary>
     /// DI034: HttpContext reaches fire-and-forget background work, which keeps running after
     /// ASP.NET Core has recycled the context.
     /// </summary>

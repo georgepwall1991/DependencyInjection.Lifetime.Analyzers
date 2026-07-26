@@ -45,6 +45,7 @@ For the latest full rule content, see:
 | [DI032](#di032-service-implements-only-iasyncdisposable) | Service implements only IAsyncDisposable | Warning | No |
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
 | [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
+| [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 
 ---
 
@@ -1263,6 +1264,37 @@ public void Handle(HttpContext context)
 **Guardrails:** a task that is awaited, returned, stored in a local, or waited on synchronously keeps the request alive until the work completes and stays silent, as does background work that touches no context. Reading the accessor *inside* the work is reported too, since by then the `AsyncLocal` has already moved on.
 
 **Code Fix:** No — which values to hoist out of the context is a decision about what the background work actually needs.
+
+---
+
+## DI035: Non-Thread-Safe Service Shared Across a Fan-Out
+
+**What it catches:** a documented non-thread-safe service — an EF Core `DbContext` or a derived context, `IDbContextTransaction`, or an ADO.NET connection, command, transaction, or reader — declared outside a `Task.WhenAll` projection and used inside every one of its tasks.
+
+**Why it matters:** `Task.WhenAll` starts every task before awaiting any of them, so the projection's lambda runs concurrently on one shared instance. `DbContext` detects it and throws *"A second operation was started on this context before a previous operation completed"*; the ADO.NET types are less forgiving and can corrupt connection state instead. The code reads like a clean parallel speed-up, which is exactly why it survives review.
+
+**Problem:**
+
+```csharp
+await Task.WhenAll(orderIds.Select(id => _db.LoadAsync(id)));  // DI035
+```
+
+**Better pattern:** give each task its own scope, and therefore its own context.
+
+```csharp
+await Task.WhenAll(orderIds.Select(async id =>
+{
+    await using var scope = _scopeFactory.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.LoadAsync(id);
+}));
+```
+
+Processing the work sequentially with a `foreach` and `await` is equally correct when the parallelism is not worth a scope per item.
+
+**Guardrails:** only values declared *outside* the concurrent body count — a context created or resolved inside the lambda belongs to that one task. Thread-safe services are untouched, `nameof` is not a use, and a sequential `foreach` never fans out. `Parallel.For`/`ForEach`/`ForEachAsync` bodies and framework message handlers are DI021's territory; this rule covers the `Task.WhenAll` leg it documented as out of scope.
+
+**Code Fix:** No — the repair is a choice between a scope per task and sequential processing, with different throughput consequences.
 
 ---
 
