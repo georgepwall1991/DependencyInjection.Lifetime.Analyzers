@@ -27,7 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DI023 and are fixed in both: `Wait(timeout)` and `Wait(cancellationToken)` can return while the
   work is still running, so completion is proved only by a parameterless `Wait()`, an infinite
   timeout (`Timeout.Infinite`, `-1`, `Timeout.InfiniteTimeSpan`, with or without a token argument),
-  or a lone cancellation token — `millisecondsTimeout: default` is zero, not infinite, and a constructed `TaskFactory<TResult>` is
+  or a token that can never be cancelled. Arguments are bound to their parameters rather than read
+  positionally, so named and reordered arguments classify correctly: `millisecondsTimeout: default`
+  is zero rather than infinite, `cancellationToken: default` is a non-cancelable token, and a real
+  cancelable token means the wait can end while the work continues, and a constructed `TaskFactory<TResult>` is
   matched through its original definition instead of its display string. An escaped `@nameof(...)`
   call is a real method and no longer treated as the `nameof` operator. Accepted false negative: a
   `Wait(timeout)` result stored in a local or returned still suppresses, because the suppression is

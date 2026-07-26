@@ -297,4 +297,46 @@ public class DI034_HttpContextOffRequestAnalyzerTests
 
         await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task WaitWithReorderedNamedArguments_NoDiagnostic()
+    {
+        // Named arguments in either order bind to the same parameters.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine(context.TraceIdentifier))
+                            .Wait(
+                                cancellationToken: System.Threading.CancellationToken.None,
+                                millisecondsTimeout: System.Threading.Timeout.Infinite);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task WaitWithCancelableToken_ReportsDiagnostic()
+    {
+        // A cancelable token can end the wait while the work keeps running.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context, System.Threading.CancellationToken token)
+                    {
+                        Task.Run(() => Console.WriteLine({|DI034:context|}.TraceIdentifier))
+                            .Wait(System.Threading.Timeout.Infinite, token);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }

@@ -75,7 +75,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             if (
                 node is not InvocationExpressionSyntax invocation
                 || !IsBackgroundWorkStart(invocation, semanticModel)
-                || !IsFireAndForget(invocation)
+                || !IsFireAndForget(invocation, semanticModel)
             )
             {
                 continue;
@@ -519,11 +519,15 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     /// work completes.
     /// </summary>
     /// <summary>
-    /// Whether this <c>Wait</c> blocks until the work actually finishes. A finite timeout can
-    /// return with the work still running; <c>Timeout.Infinite</c>, <c>-1</c>, and a plain
-    /// cancellation token cannot.
+    /// Whether this <c>Wait</c> blocks until the work actually finishes. Arguments are bound to
+    /// their parameters rather than read positionally, so named and reordered arguments classify
+    /// correctly: a finite timeout can return with the work still running, and a cancelable token
+    /// can abort the wait while the task keeps going.
     /// </summary>
-    private static bool WaitsForCompletion(MemberAccessExpressionSyntax waitAccess)
+    private static bool WaitsForCompletion(
+        MemberAccessExpressionSyntax waitAccess,
+        SemanticModel semanticModel
+    )
     {
         if (waitAccess.Parent is not InvocationExpressionSyntax waitCall)
         {
@@ -536,22 +540,52 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        // Wait(timeout, token) blocks for the timeout, so the first argument decides.
-        if (arguments.Count > 2)
+        if (semanticModel.GetSymbolInfo(waitCall).Symbol is not IMethodSymbol waitMethod)
         {
             return false;
         }
 
-        var first = arguments[0].Expression.ToString();
-        if (IsInfiniteTimeout(first))
+        foreach (var argument in arguments)
         {
-            return true;
+            IParameterSymbol? parameter;
+            if (argument.NameColon?.Name.Identifier.ValueText is { } named)
+            {
+                parameter = waitMethod.Parameters.FirstOrDefault(p => p.Name == named);
+            }
+            else
+            {
+                var ordinal = arguments.IndexOf(argument);
+                parameter = ordinal < waitMethod.Parameters.Length
+                    ? waitMethod.Parameters[ordinal]
+                    : null;
+            }
+
+            if (parameter is null)
+            {
+                return false;
+            }
+
+            var value = argument.Expression.ToString();
+            var proves = parameter.Name switch
+            {
+                "millisecondsTimeout" or "timeout" => IsInfiniteTimeout(value),
+                // A cancelable token can end the wait while the work continues; only a token that
+                // can never be cancelled leaves completion as the sole exit.
+                "cancellationToken" => value
+                    is "CancellationToken.None"
+                        or "System.Threading.CancellationToken.None"
+                        or "default"
+                        or "default(CancellationToken)",
+                _ => false,
+            };
+
+            if (!proves)
+            {
+                return false;
+            }
         }
 
-        // A lone cancellation token has no timeout at all. `default` is deliberately absent: it
-        // could bind to the millisecondsTimeout overload, where it means zero.
-        return arguments.Count == 1
-            && first is "CancellationToken.None" or "System.Threading.CancellationToken.None";
+        return true;
     }
 
     private static bool IsInfiniteTimeout(string argument) =>
@@ -562,7 +596,10 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 or "Timeout.InfiniteTimeSpan"
                 or "System.Threading.Timeout.InfiniteTimeSpan";
 
-    private static bool IsFireAndForget(InvocationExpressionSyntax invocation)
+    private static bool IsFireAndForget(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel
+    )
     {
         // Task.Run(...).ContinueWith(...) / .Wait() / .GetAwaiter().GetResult() — the chain, not
         // the Task.Run call, decides the lifetime, so classify from the outermost expression.
@@ -581,7 +618,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             // Wait() blocks until the work finishes; Wait(timeout) can return while it is still
             // running. The infinite and cancellation-free overloads block just as the
             // parameterless one does.
-            if (memberName == "Wait" && WaitsForCompletion(memberAccess))
+            if (memberName == "Wait" && WaitsForCompletion(memberAccess, semanticModel))
             {
                 return false;
             }
