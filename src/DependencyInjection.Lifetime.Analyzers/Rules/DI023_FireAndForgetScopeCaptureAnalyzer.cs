@@ -247,6 +247,37 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        // A write earlier in the capture's own statement dominates it too:
+        // `StartNew(..., (local = detached, local))`.
+        if (captureSite.FirstAncestorOrSelf<StatementSyntax>() is { } captureStatement)
+        {
+            AssignmentExpressionSyntax? lastPreceding = null;
+            foreach (
+                var assignment in captureStatement
+                    .DescendantNodes()
+                    .OfType<AssignmentExpressionSyntax>()
+            )
+            {
+                if (
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    && assignment.Span.End <= captureSite.SpanStart
+                    && SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                        local
+                    )
+                    && !IsConditionallyEvaluated(assignment, captureStatement)
+                )
+                {
+                    lastPreceding = assignment;
+                }
+            }
+
+            if (lastPreceding is not null)
+            {
+                return !ReferencesTrackedLocal(lastPreceding.Right, semanticModel, captured);
+            }
+        }
+
         // Walk outward from the capture. At each block, a preceding sibling statement that
         // replaces the local dominates it.
         for (
@@ -300,6 +331,7 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
     )
     {
         replacesWithDetachedValue = false;
+        var foundAssignment = false;
 
         foreach (var assignment in statement.DescendantNodes().OfType<AssignmentExpressionSyntax>())
         {
@@ -318,15 +350,16 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            // Keep scanning: `Consume(local = scoped, local = detached)` leaves the LAST write.
             replacesWithDetachedValue = !ReferencesTrackedLocal(
                 assignment.Right,
                 semanticModel,
                 captured
             );
-            return true;
+            foundAssignment = true;
         }
 
-        return false;
+        return foundAssignment;
     }
 
     private static bool IsConditionallyEvaluated(SyntaxNode node, SyntaxNode boundary)
@@ -337,10 +370,21 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             current = current.Parent
         )
         {
+            // `(service = x)?.Use()` always evaluates its receiver; only the WhenNotNull side is
+            // conditional.
+            if (
+                current.Parent is ConditionalAccessExpressionSyntax conditionalAccess
+                && conditionalAccess.WhenNotNull == current
+            )
+            {
+                return true;
+            }
+
             if (
                 current
-                is ConditionalAccessExpressionSyntax
-                    or ConditionalExpressionSyntax
+                is ConditionalExpressionSyntax
+                    or SwitchExpressionSyntax
+                    or SwitchExpressionArmSyntax
                     or BinaryExpressionSyntax
                     or LambdaExpressionSyntax
                     or AnonymousMethodExpressionSyntax

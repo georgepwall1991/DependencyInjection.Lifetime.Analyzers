@@ -784,4 +784,99 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
 
         await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task ReplacementInSwitchExpressionArm_ReportsDiagnostic()
+    {
+        // Only one arm runs, so the assignment in it is not a definite replacement.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle(int mode)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    var label = mode switch
+                    {
+                        0 => "zero",
+                        _ => ((service = _singleton) is null) ? "null" : "set",
+                    };
+
+                    Console.WriteLine(label);
+                    _ = {|DI023:Task.Run(() => service.DoWork())|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ReplacementInConditionalAccessReceiver_NoDiagnostic()
+    {
+        // The receiver of ?. always evaluates, so the replacement definitely happens.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                    (service = _singleton)?.DoWork();
+                    _ = Task.Run(() => service.DoWork());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task LastWriteInStatementWins_NoDiagnostic()
+    {
+        // Two writes in one statement: the surviving value is the detached one.
+        var source = Usings + """
+            public class MyClass
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private readonly IMyService _singleton;
+
+                public MyClass(IServiceScopeFactory scopeFactory, IMyService singleton)
+                {
+                    _scopeFactory = scopeFactory;
+                    _singleton = singleton;
+                }
+
+                private static void Consume(IMyService first, IMyService second) { }
+
+                public void Handle()
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    IMyService service;
+                    Consume(service = scope.ServiceProvider.GetRequiredService<IMyService>(), service = _singleton);
+                    _ = Task.Run(() => service.DoWork());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 }

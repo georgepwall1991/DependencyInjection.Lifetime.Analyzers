@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block (or the overwrite in an enclosing one) with the overwrite first, so work started before the
   local was replaced still reports, a replacement on a branch the capture is not part of proves
   nothing, and a conditionally evaluated assignment (`receiver?.Use(service = other)`) decides
-  nothing. An identifier on the left of an assignment is a write target rather than a capture.
+  nothing, while a conditional-access *receiver* (`(service = other)?.Use()`) always evaluates and does.
+  Within one statement the last write wins, a write earlier in the capture's own statement counts, and
+  an identifier on the left of an assignment is a write target rather than a capture.
 
 ## [3.0.2] - 2026-07-26
 
