@@ -536,20 +536,31 @@ public sealed class DI023_FireAndForgetScopeCaptureAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (arguments.Count > 1)
+        // Wait(timeout, token) blocks for the timeout, so the first argument decides.
+        if (arguments.Count > 2)
         {
             return false;
         }
 
-        var argument = arguments[0].Expression.ToString();
-        return argument
+        var first = arguments[0].Expression.ToString();
+        if (IsInfiniteTimeout(first))
+        {
+            return true;
+        }
+
+        // A lone cancellation token has no timeout at all. `default` is deliberately absent: it
+        // could bind to the millisecondsTimeout overload, where it means zero.
+        return arguments.Count == 1
+            && first is "CancellationToken.None" or "System.Threading.CancellationToken.None";
+    }
+
+    private static bool IsInfiniteTimeout(string argument) =>
+        argument
             is "Timeout.Infinite"
                 or "System.Threading.Timeout.Infinite"
                 or "-1"
-                or "CancellationToken.None"
-                or "System.Threading.CancellationToken.None"
-                or "default";
-    }
+                or "Timeout.InfiniteTimeSpan"
+                or "System.Threading.Timeout.InfiniteTimeSpan";
 
     private static bool IsFireAndForget(InvocationExpressionSyntax invocation)
     {

@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **DI023 background-work recognition** — the same two gaps found while reviewing DI034 apply to
   DI023 and are fixed in both: `Wait(timeout)` and `Wait(cancellationToken)` can return while the
-  work is still running, so only a parameterless `Wait()`, `Wait(Timeout.Infinite)`, `Wait(-1)`, or a
-  cancellation-token overload now proves completion, and a constructed `TaskFactory<TResult>` is
+  work is still running, so completion is proved only by a parameterless `Wait()`, an infinite
+  timeout (`Timeout.Infinite`, `-1`, `Timeout.InfiniteTimeSpan`, with or without a token argument),
+  or a lone cancellation token — `millisecondsTimeout: default` is zero, not infinite, and a constructed `TaskFactory<TResult>` is
   matched through its original definition instead of its display string. An escaped `@nameof(...)`
   call is a real method and no longer treated as the `nameof` operator. Accepted false negative: a
   `Wait(timeout)` result stored in a local or returned still suppresses, because the suppression is

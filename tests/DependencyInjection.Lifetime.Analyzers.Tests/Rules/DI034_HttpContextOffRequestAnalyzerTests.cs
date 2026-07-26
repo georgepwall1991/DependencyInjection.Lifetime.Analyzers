@@ -257,4 +257,44 @@ public class DI034_HttpContextOffRequestAnalyzerTests
 
         await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task WaitWithInfiniteTimeoutAndToken_NoDiagnostic()
+    {
+        // The timeout decides; an infinite one blocks regardless of the token argument.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine(context.TraceIdentifier))
+                            .Wait(System.Threading.Timeout.Infinite, System.Threading.CancellationToken.None);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task WaitWithNamedDefaultTimeout_ReportsDiagnostic()
+    {
+        // `millisecondsTimeout: default` is zero, not infinite.
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        Task.Run(() => Console.WriteLine({|DI034:context|}.TraceIdentifier))
+                            .Wait(millisecondsTimeout: default);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }
