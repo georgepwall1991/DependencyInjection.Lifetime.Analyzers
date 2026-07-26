@@ -19,7 +19,10 @@ re-verified against current main, re-implemented on top of it, and mutation-test
   `ICoalesceOperation.ValueConversion`. A user-defined conversion there therefore looked like an
   identity flow, so `services?.BuildServiceProvider() ?? new Wrapper()` transferred ownership to a
   wrapper that never disposes the provider, and the rule stayed silent. The coalesce arm now checks
-  the operation's own conversion.
+  the operation's own conversion. This matches how the rule already treats a user-defined conversion
+  in a ternary arm, an assignment, and a return: the wrapper is opaque, so ownership cannot be
+  proven to transfer. A wrapper that genuinely forwards `Dispose()` to the provider is therefore
+  reported here as it already was in those positions — deliberate, and unchanged in this release.
 - **DI021 lock on a `System.Threading.Timer` state parameter** (false positive) — a handler
   parameter is normally a fresh object per invocation, so locking it guards nothing. A timer
   callback is the exception: every invocation receives the same state object registered at
