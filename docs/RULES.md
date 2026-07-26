@@ -33,6 +33,7 @@ For the latest full rule content, see:
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
+| [DI023](#di023-fire-and-forget-background-work-captures-a-scope) | Fire-and-forget background work captures a scope | Warning | No |
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 | [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 | [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) | Event subscription on scoped publisher without unsubscribe | Info | Yes |
@@ -906,6 +907,44 @@ DI021 stays quiet for scopes created inside the handler, `IDbContextFactory<TCon
 Manually constructed instances are never reported by the scoped tier — the single-origin scan covers field initializers, assignments, and property initializers (`private EmailSender Email { get; } = new EmailSender();`).
 
 **Code Fix:** Yes. Same scope-per-invocation rewrite as DI021.
+
+## DI023: Fire-and-Forget Background Work Captures a Scope
+
+**What it catches:** a `using` scope, a local bound to its `ServiceProvider`, or any local resolved from it, captured by background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away — an expression statement or a `_ =` discard.
+
+**Why it matters:** `using` disposes the scope the instant the starting method returns, which for a discarded task is almost always before the work has finished. The background work then resolves from, or calls into, a disposed scope: `ObjectDisposedException` at best, and at worst a service that quietly operates on torn-down state such as a closed `DbContext` connection. The failure is timing-dependent, so it passes locally and fails under load.
+
+**Problem:**
+
+```csharp
+public void Handle(int orderId)
+{
+    using var scope = _scopeFactory.CreateScope();
+    var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+
+    _ = Task.Run(async () => await archiver.ArchiveAsync(orderId));  // DI023
+}   // <- scope disposed here, while ArchiveAsync is still running
+```
+
+**Better pattern:** give the background work a scope of its own, or await it before leaving.
+
+```csharp
+public void Handle(int orderId)
+{
+    _ = Task.Run(async () =>
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+        await archiver.ArchiveAsync(orderId);
+    });
+}
+```
+
+**Guardrails:** capture tracking follows any number of hops (`scope` → `provider` → `service`) and covers method groups and delegate locals, not just inline lambdas. Values that cannot hold the scope's graph stay quiet: primitives, enums, and strings derived from it (`scope.GetHashCode()`), a local proved to be reassigned to something not scope-derived before the capture (same-block dominance; a branch-only or conditionally evaluated overwrite still reports), assignment targets, and `nameof(service)`. The scope must be disposed by a `using` in the same method — an undisposed scope has no proven teardown point here and is DI001's finding instead. A task that is awaited, returned, stored in a local, or waited on synchronously (`.Wait()`, `.GetAwaiter().GetResult()`) keeps the frame alive and stays silent, as does background work that captures nothing scope-derived.
+
+**Code Fix:** No — the repair is a design choice between awaiting the task and moving scope creation inside the background work, and the two produce different execution semantics.
+
+---
 
 ## DI024: Hosted Service Creates Scope Outside Execution Loop
 

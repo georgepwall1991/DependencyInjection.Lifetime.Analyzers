@@ -297,6 +297,20 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI023: Fire-and-forget background work captures a scope that is disposed when the
+    /// starting method returns.
+    /// </summary>
+    public static readonly DiagnosticDescriptor FireAndForgetScopeCapture = new(
+        id: DiagnosticIds.FireAndForgetScopeCapture,
+        title: "Do not capture a using scope in fire-and-forget background work",
+        messageFormat: "Background work started here captures '{0}', but the scope is disposed as soon as '{1}' returns",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A scope declared with 'using' is disposed the moment the enclosing method returns, while work handed to the thread pool keeps running. The background work then uses services from a disposed scope, which throws ObjectDisposedException or silently operates on torn-down state. Await the task before leaving the method, or create and dispose a scope inside the background work itself."
+    );
+
+    /// <summary>
     /// DI021: Non-thread-safe service shared across concurrent handler invocations.
     /// </summary>
     public static readonly DiagnosticDescriptor ConcurrentHandlerSharedState = new(

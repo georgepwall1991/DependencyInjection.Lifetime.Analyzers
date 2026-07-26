@@ -115,6 +115,13 @@ public static class DiagnosticIds
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 
     /// <summary>
+    /// DI023: Fire-and-forget background work (Task.Run, TaskFactory.StartNew) captures a scope,
+    /// a scope's provider, or a service resolved from one. The scope is disposed when the
+    /// starting method returns while the thread-pool work is still running.
+    /// </summary>
+    public const string FireAndForgetScopeCapture = "DI023";
+
+    /// <summary>
     /// DI024: Hosted service creates a scope (or resolves a scoped service) outside its
     /// long-running execution loop instead of once per iteration.
     /// </summary>

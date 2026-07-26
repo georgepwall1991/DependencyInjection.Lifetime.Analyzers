@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-07-26
+
+### Added
+
+- **DI023 fire-and-forget scope capture** (Warning) — claims the ID reserved since 2.x for background
+  fan-out. A `using` scope is disposed the instant the starting method returns, so background work
+  started with `Task.Run` or `TaskFactory.StartNew` and then thrown away — an expression statement or
+  a `_ =` discard — is still running when the scope it captured is torn down. The rule reports when
+  such work captures the scope local itself, a local bound to its `ServiceProvider`, or any local
+  resolved from it. Guardrails: the scope must be disposed by a `using` in the same method (an
+  undisposed scope is DI001's finding), and a task that is awaited, returned, stored in a local, or
+  waited on synchronously (`.Wait()`, `.GetAwaiter().GetResult()`) keeps the frame alive and stays
+  silent. Capture tracking follows any number of hops (scope → provider → service) and covers method
+  groups and delegate locals as well as inline lambdas, while values that cannot hold the scope's
+  graph — primitives, enums, strings such as `scope.GetHashCode()` — a local reassigned to something
+  not scope-derived, and `nameof(service)` all stay quiet. Both the declared type and the
+  initializer's own type are checked, so `object hash = scope.GetHashCode()` is a boxed int rather
+  than a live capture, and a state argument whose value cannot hold the scope graph is skipped.
+  Replacement suppression is proved by dominance: the overwrite and the capture must sit in the same
+  block (or the overwrite in an enclosing one) with the overwrite first, so work started before the
+  local was replaced still reports, a replacement on a branch the capture is not part of proves
+  nothing, and a conditionally evaluated assignment (`receiver?.Use(service = other)`) decides
+  nothing, while a conditional-access *receiver* (`(service = other)?.Use()`) always evaluates and does.
+  Within one statement the last write wins, a write earlier in the capture's own statement counts, and
+  an identifier on the left of an assignment is a write target rather than a capture.
+
 ## [3.0.2] - 2026-07-26
 
 ### Fixed

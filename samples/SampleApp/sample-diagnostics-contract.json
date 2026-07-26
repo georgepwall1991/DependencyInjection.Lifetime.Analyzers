@@ -678,6 +678,47 @@
       "approvedSecondaryDiagnostics": []
     },
     {
+      "folder": "DI023",
+      "ruleId": "DI023",
+      "claims": [
+        {
+          "filePathContains": "DI023/FireAndForgetScopeCaptureExamples.cs",
+          "anchor": "_ = Task.Run(async () => await archiver.ArchiveAsync(orderId));",
+          "occurrence": 1,
+          "ruleId": "DI023",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI023/FireAndForgetScopeCaptureExamples.cs",
+          "anchor": "var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI023/FireAndForgetScopeCaptureExamples.cs",
+          "anchor": "var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        },
+        {
+          "filePathContains": "DI023/FireAndForgetScopeCaptureExamples.cs",
+          "anchor": "services.AddScoped<Bad_FireAndForgetScopeCapture>();",
+          "ruleId": "DI011",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI023/FireAndForgetScopeCaptureExamples.cs",
+          "anchor": "services.AddScoped<Good_ScopeInsideBackgroundWork>();",
+          "ruleId": "DI011",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
       "folder": "DI024",
       "ruleId": "DI024",
       "claims": [
