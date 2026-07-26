@@ -171,6 +171,19 @@ const ruleSampleConfig = {
       { label: "Sample app per-message pattern", symbol: "Good_ConnectionPerMessage" },
     ],
   },
+  DI023: {
+    samplePath: "samples/SampleApp/Diagnostics/DI023/FireAndForgetScopeCaptureExamples.cs",
+    highlights: [
+      {
+        label: "Sample app fire-and-forget scope-capture warning",
+        symbol: "Bad_FireAndForgetScopeCapture",
+      },
+      {
+        label: "Sample app scope-inside-background-work pattern",
+        symbol: "Good_ScopeInsideBackgroundWork",
+      },
+    ],
+  },
   DI024: {
     samplePath: "samples/SampleApp/Diagnostics/DI024/HostedServiceScopePerIterationExamples.cs",
     highlights: [

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-07-26
+
+### Added
+
+- **DI023 fire-and-forget scope capture** (Warning) — claims the ID reserved since 2.x for background
+  fan-out. A `using` scope is disposed the instant the starting method returns, so background work
+  started with `Task.Run` or `TaskFactory.StartNew` and then thrown away — an expression statement or
+  a `_ =` discard — is still running when the scope it captured is torn down. The rule reports when
+  such work captures the scope local itself, a local bound to its `ServiceProvider`, or any local
+  resolved from it. Guardrails: the scope must be disposed by a `using` in the same method (an
+  undisposed scope is DI001's finding), and a task that is awaited, returned, stored in a local, or
+  waited on synchronously keeps the frame alive and stays silent.
+
 ## [3.0.2] - 2026-07-26
 
 ### Fixed

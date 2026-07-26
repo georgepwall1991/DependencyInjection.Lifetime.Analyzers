@@ -48,13 +48,13 @@ This analyser package is designed for **ASP.NET Core**, **worker services**, **c
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.0.2
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.1.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.0.2">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.1.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -62,7 +62,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.0.2" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.1.0" />
 ```
 
 Then reference it from the project file:
@@ -180,6 +180,7 @@ For a rollout checklist and a starter severity policy, see [docs/ADOPTION.md](do
 | [DI020](#di020-middleware-captures-scoped-service-in-constructor) | Middleware captures scoped service in constructor | Warning | No |
 | [DI021](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations) | Non-thread-safe service shared across concurrent handler invocations | Warning | Yes |
 | [DI022](#di022-service-instance-reused-across-handler-invocations) | Service instance reused across handler invocations | Info | Yes |
+| [DI023](#di023-fire-and-forget-background-work-captures-a-scope) | Fire-and-forget background work captures a scope | Warning | No |
 | [DI024](#di024-hosted-service-creates-scope-outside-execution-loop) | Hosted service creates scope outside execution loop | Warning | No |
 | [DI025](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe) | Event subscription on longer-lived publisher without unsubscribe | Warning | Yes |
 | [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) | Event subscription on scoped publisher without unsubscribe | Info | Yes |
