@@ -238,7 +238,15 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
             return 0;
         }
 
-        return left.SourceSpan.Start.CompareTo(right.SourceSpan.Start);
+        var byStart = left.SourceSpan.Start.CompareTo(right.SourceSpan.Start);
+        if (byStart != 0)
+        {
+            return byStart;
+        }
+
+        // A chained call shares its receiver's start (`services.Add...().RemoveAll...()`); the
+        // outer link ends later and runs later.
+        return left.SourceSpan.End.CompareTo(right.SourceSpan.End);
     }
 
     private sealed class ImplementationGroupComparer

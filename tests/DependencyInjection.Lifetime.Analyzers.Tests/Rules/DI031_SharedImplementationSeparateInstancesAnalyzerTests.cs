@@ -417,4 +417,32 @@ public class DI031_SharedImplementationSeparateInstancesAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ChainedRemovalAfterRegistration_NoDiagnostic()
+    {
+        // The removal is the outer link of the same chain, so it runs after the registration it
+        // shares a start position with.
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IReader { }
+            public interface IWriter { }
+            public class Store : IReader, IWriter { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IReader, Store>().RemoveAll<IReader>();
+                    services.AddSingleton<IWriter, Store>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
