@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body, and a removal that precedes both registrations does not withdraw the claim. Accepted edges,
   all false-negative direction: a service-collection parameter reassigned to a different collection
   between two registrations still groups as one flow, and an open-generic registration paired with a
-  closed one (`Store<>` plus `Store<int>`) is not matched.
+  closed one (`Store<>` plus `Store<int>`) is not matched, and a fluent chain that removes a service
+  type and then re-registers it in the same expression keeps the removal's suppression.
 
 ## [3.1.0] - 2026-07-26
 
