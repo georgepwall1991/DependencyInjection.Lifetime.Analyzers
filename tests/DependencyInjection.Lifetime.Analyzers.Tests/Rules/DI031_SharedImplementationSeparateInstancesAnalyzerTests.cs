@@ -364,4 +364,57 @@ public class DI031_SharedImplementationSeparateInstancesAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task TopLevelStatements_ReportsDiagnostic()
+    {
+        // Top-level statements are one program body even though each is its own syntax node.
+        var source = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            IServiceCollection services = null!;
+            services.AddSingleton<IReader, Store>();
+            {|DI031:services.AddSingleton<IWriter, Store>()|};
+
+            public interface IReader { }
+            public interface IWriter { }
+            public class Store : IReader, IWriter { }
+            """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsConsoleApplicationAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RemovalBeforeBothRegistrations_ReportsDiagnostic()
+    {
+        // The removal ran before either descriptor was added, so it took away something else and
+        // both registrations still coexist.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection.Extensions
+                {
+                    public static class ServiceCollectionDescriptorExtensions
+                    {
+                        public static IServiceCollection RemoveAll<T>(this IServiceCollection services) => services;
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IReader>(services);
+                        services.AddSingleton<IReader, Store>();
+                        {|DI031:services.AddSingleton<IWriter, Store>()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

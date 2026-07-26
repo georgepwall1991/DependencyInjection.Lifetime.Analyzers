@@ -24,8 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GenericStore<string>` are not conflated; a `RemoveAll`/`Replace` on either service type withdraws
   the claim; and the two registrations must sit in the same executable body, since an uninvoked
   local function adds no descriptor. Report positions are ordered by source location so the
-  diagnostic lands on the same registration every run. Accepted edge: a service-collection parameter
-  reassigned to a different collection between two registrations still groups as one flow.
+  diagnostic lands on the same registration every run. Top-level statements count as one program
+  body, and a removal that precedes both registrations does not withdraw the claim. Accepted edges,
+  all false-negative direction: a service-collection parameter reassigned to a different collection
+  between two registrations still groups as one flow, and an open-generic registration paired with a
+  closed one (`Store<>` plus `Store<int>`) is not matched.
 
 ## [3.1.0] - 2026-07-26
 

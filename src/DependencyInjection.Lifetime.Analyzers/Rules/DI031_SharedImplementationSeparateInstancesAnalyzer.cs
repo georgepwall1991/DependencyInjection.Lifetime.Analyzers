@@ -84,11 +84,7 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
             ImplementationGroupComparer.Instance
         );
 
-        var mutatedServiceTypes = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-        foreach (var mutation in registrationCollector.OrderedMutations)
-        {
-            mutatedServiceTypes.Add(mutation.ServiceType);
-        }
+        var mutations = registrationCollector.OrderedMutations.ToList();
 
         foreach (var group in groups)
         {
@@ -106,11 +102,18 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
                 continue;
             }
 
-            // A RemoveAll or Replace on any of these service types means the descriptors may
-            // never coexist, so the two-instance claim cannot be made.
+            // A RemoveAll or Replace can only withdraw the claim if it runs after the descriptor
+            // it removes was added. A removal that precedes every registration here took away
+            // something else.
             if (
                 distinctByServiceType.Any(registration =>
-                    mutatedServiceTypes.Contains(registration.ServiceType)
+                    mutations.Any(mutation =>
+                        SymbolEqualityComparer.Default.Equals(
+                            mutation.ServiceType,
+                            registration.ServiceType
+                        )
+                        && ComparePositions(mutation.Location, registration.Location) > 0
+                    )
                 )
             )
             {
@@ -198,8 +201,14 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
                     or LocalFunctionStatementSyntax
                     or MethodDeclarationSyntax
                     or ConstructorDeclarationSyntax
-                    or GlobalStatementSyntax
             )
+            {
+                return current;
+            }
+
+            // Top-level statements are separate GlobalStatementSyntax nodes but one program body,
+            // so the compilation unit is their shared container.
+            if (current is CompilationUnitSyntax)
             {
                 return current;
             }
@@ -208,11 +217,29 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
         return null;
     }
 
-    private static (string Path, int Position) SourcePositionOf(ServiceRegistration registration) =>
+    private static (string Path, int Start, int End, string ServiceType) SourcePositionOf(
+        ServiceRegistration registration
+    ) =>
         (
             registration.Location.SourceTree?.FilePath ?? string.Empty,
-            registration.Location.SourceSpan.Start
+            registration.Location.SourceSpan.Start,
+            registration.Location.SourceSpan.End,
+            registration.ServiceType.ToDisplayString()
         );
+
+    /// <summary>
+    /// Source order across two locations: negative when the first precedes the second. Locations in
+    /// different files are incomparable and reported as equal, which keeps the claim.
+    /// </summary>
+    private static int ComparePositions(Location left, Location right)
+    {
+        if (left.SourceTree?.FilePath != right.SourceTree?.FilePath)
+        {
+            return 0;
+        }
+
+        return left.SourceSpan.Start.CompareTo(right.SourceSpan.Start);
+    }
 
     private sealed class ImplementationGroupComparer
         : IEqualityComparer<(
