@@ -115,6 +115,12 @@ public static class DiagnosticIds
     public const string ConcurrentHandlerConfigGatedSharedState = "DI022";
 
     /// <summary>
+    /// DI031: One implementation type is registered under several service types with a shared
+    /// lifetime, so the container builds a separate instance for each registration.
+    /// </summary>
+    public const string SharedImplementationSeparateInstances = "DI031";
+
+    /// <summary>
     /// DI023: Fire-and-forget background work (Task.Run, TaskFactory.StartNew) captures a scope,
     /// a scope's provider, or a service resolved from one. The scope is disposed when the
     /// starting method returns while the thread-pool work is still running.

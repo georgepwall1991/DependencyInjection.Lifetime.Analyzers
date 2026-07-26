@@ -229,6 +229,13 @@ const ruleSampleConfig = {
       { label: "Sample app injected-factory pattern", symbol: "Good_InjectedFactory" },
     ],
   },
+  DI031: {
+    samplePath: "samples/SampleApp/Diagnostics/DI031/SharedImplementationExamples.cs",
+    highlights: [
+      { label: "Sample app shared-implementation note", symbol: "ConfigureBad" },
+      { label: "Sample app forwarded-registration pattern", symbol: "ConfigureGood" },
+    ],
+  },
   DI030: {
     samplePath: "samples/SampleApp/Diagnostics/DI030/UnboundedSingletonCacheExamples.cs",
     highlights: [

@@ -82,6 +82,21 @@ public static class AnalyzerVerifier<TAnalyzer>
     }
 
     /// <summary>
+    /// Verifies the analyzer's diagnostics for executable-style source, so top-level statements
+    /// compile as the program body rather than as stray statements in a library.
+    /// </summary>
+    public static async Task VerifyDiagnosticsAsConsoleApplicationAsync(
+        string source,
+        params DiagnosticResult[] expected
+    )
+    {
+        var test = CreateTest(source);
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        test.ExpectedDiagnostics.AddRange(expected);
+        await test.RunAsync();
+    }
+
+    /// <summary>
     /// Verifies that the analyzer produces no diagnostics for executable-style source.
     /// </summary>
     public static async Task VerifyNoDiagnosticsAsConsoleApplicationAsync(string source)

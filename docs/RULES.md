@@ -41,6 +41,7 @@ For the latest full rule content, see:
 | [DI028](#di028-discarded-callback-registration-on-a-longer-lived-source) | Discarded callback registration on a longer-lived source | Warning | No |
 | [DI029](#di029-httpclient-lifetime-misuse) | HttpClient lifetime misuse | Warning | No |
 | [DI030](#di030-unbounded-singleton-or-static-cache) | Unbounded singleton or static cache | Info | No |
+| [DI031](#di031-shared-implementation-registered-under-several-service-types) | Shared implementation registered under several service types | Info | No |
 
 ---
 
@@ -1139,6 +1140,33 @@ Both the instance form (`monitor.OnChange(h)`) and the static extension form (`O
 **Guardrails:** the subscriber must be registered and shorter-lived than the source, so a **singleton** or hosted-service subscriber registering on `ApplicationStopping` — the idiomatic, correct pattern — never fires. Method-parameter tokens stay silent (an ASP.NET `RequestAborted` registration is request-scoped and correct), as do locally created `CancellationTokenSource` tokens, `IOptionsSnapshot` sources above scoped subscribers, and any scoped-on-scoped or equal-lifetime pair. Discard proof mirrors DI027 exactly: only an ignored expression statement, a `_ =` discard, a never-referenced non-`using` local, or an otherwise-unused private field report. Chained sources are followed only through provably stable projections; the metadata-only framework projections `CancellationTokenSource.Token` and `IHostApplicationLifetime.ApplicationStopping`/`ApplicationStarted`/`ApplicationStopped` are accepted only as a contiguous suffix, so nothing can be laundered through them. Known false negatives: the common `var linked = CreateLinkedTokenSource(...); await X(linked.Token);` shape stays silent because the local is referenced (proving it needs DI014-class disposal analysis); static-held `CancellationTokenSource` fields, `IChangeToken` reached through a field or local, and non-trivial `ChangeToken.OnChange` producer lambdas are also silent.
 
 **Code Fix:** No — planned. Introducing `IDisposable` on a transient subscriber recreates the DI008 disposable-transient shape, the linked-source arm needs a different repair from the registration arm, and `CancellationTokenRegistration` is a struct with defensive-copy pitfalls.
+
+---
+
+## DI031: Shared Implementation Registered Under Several Service Types
+
+**What it catches:** one implementation type registered under two or more different service types with the same singleton or scoped lifetime, as plain type registrations on the same service-collection flow.
+
+**Why it matters:** each registration is its own descriptor, and the container builds one instance per descriptor. `AddSingleton<IReader, Store>()` followed by `AddSingleton<IWriter, Store>()` reads like one shared `Store` but produces two: state written through one interface is invisible through the other, and anything the implementation owns — a timer, a connection, a cache — exists twice. The bug is silent, because both resolutions succeed and return a perfectly valid object.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<IFeatureReader, FeatureStore>();
+services.AddSingleton<IFeatureWriter, FeatureStore>();  // DI031: a second FeatureStore
+```
+
+**Better pattern:** register the implementation once, then forward.
+
+```csharp
+services.AddSingleton<FeatureStore>();
+services.AddSingleton<IFeatureReader>(sp => sp.GetRequiredService<FeatureStore>());
+services.AddSingleton<IFeatureWriter>(sp => sp.GetRequiredService<FeatureStore>());
+```
+
+**Guardrails:** transient registrations are exempt — a fresh instance per resolution is the contract, so there is no shared instance to lose. Registrations with different lifetimes, keyed registrations, factory registrations, pre-built instances, and registrations on different service-collection flows are all left alone, as is the same service type registered twice (that is DI012's duplicate registration). Registrations guarded by an `if`, `switch`, loop, or `try` never both run, so no two-instance claim is made, and neither do registrations in different executable bodies. Grouping is by constructed type, so `GenericStore<int>` and `GenericStore<string>` are distinct, and a `RemoveAll` or `Replace` that runs after the registration it removes withdraws the claim (a removal earlier in the method does not). Known false negatives: an open-generic registration paired with a closed one, and a fluent chain that removes a service type and then re-registers it in the same expression. Reported at Info: separate instances are occasionally deliberate, and the forwarding fix is a design decision.
+
+**Code Fix:** No — the repair chooses which service type keeps the concrete registration and rewrites the rest as factories, which changes registration order and is better made deliberately.
 
 ---
 

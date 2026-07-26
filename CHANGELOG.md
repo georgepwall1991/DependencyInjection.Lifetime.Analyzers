@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-07-26
+
+### Added
+
+- **DI031 shared implementation, separate instances** (Info) — one implementation type registered
+  under two or more service types with the same singleton or scoped lifetime produces one instance
+  per descriptor, not one shared instance. `AddSingleton<IReader, Store>()` followed by
+  `AddSingleton<IWriter, Store>()` reads like a single `Store` but builds two, so state written
+  through one interface is invisible through the other and anything the implementation owns exists
+  twice. The fix is to register the implementation once and forward the remaining service types to
+  it with a factory. Exempt by design: transient registrations, mixed lifetimes, keyed registrations,
+  factory registrations, pre-built instances, separate service-collection flows, the same service
+  type registered twice (DI012's duplicate), and registrations guarded by a branch that means they
+  never both run. Grouping uses the constructed types, so `GenericStore<int>` and
+  `GenericStore<string>` are not conflated; a `RemoveAll`/`Replace` on either service type withdraws
+  the claim; and the two registrations must sit in the same executable body, since an uninvoked
+  local function adds no descriptor. Report positions are ordered by source location so the
+  diagnostic lands on the same registration every run. Top-level statements count as one program
+  body, and a removal that precedes both registrations does not withdraw the claim. Accepted edges,
+  all false-negative direction: a service-collection parameter reassigned to a different collection
+  between two registrations still groups as one flow, and an open-generic registration paired with a
+  closed one (`Store<>` plus `Store<int>`) is not matched, and a fluent chain that removes a service
+  type and then re-registers it in the same expression keeps the removal's suppression.
+
 ## [3.1.0] - 2026-07-26
 
 ### Added

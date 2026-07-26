@@ -116,3 +116,10 @@ Rule ID | Category | Severity | Notes
 DI028 | DependencyInjection | Warning | Shorter-lived service registers a callback on a longer-lived registration source and discards the returned registration
 DI029 | DependencyInjection | Warning | HttpClient or a pooling handler constructed per invocation, or an HttpClient registered as a singleton or held in a static member
 DI030 | DependencyInjection | Info | Singleton-owned or static collection grows with request-derived keys and is never evicted, or an IMemoryCache entry has neither expiration nor size
+
+## Release 3.1.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI023 | DependencyInjection | Warning | Fire-and-forget background work captures a using scope, its provider, or a service resolved from it
