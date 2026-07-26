@@ -229,4 +229,65 @@ public class DI032_AsyncOnlyDisposableRegistrationAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task FactoryWithUserDefinedConversion_NoDiagnostic()
+    {
+        // The converted result is what the container holds; the constructed temporary is not
+        // registered at all, so its disposal story is irrelevant.
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public class Worker
+            {
+                public static implicit operator Worker(AsyncOnlyConvertible source) => new Worker();
+            }
+
+            public class AsyncOnlyConvertible : IAsyncDisposable
+            {
+                public ValueTask DisposeAsync() => default;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<Worker>(sp => new AsyncOnlyConvertible());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task TargetTypedAndParenthesizedFactory_ReportsDiagnostic()
+    {
+        // `new()` and a parenthesised creation are still single object creations.
+        var source =
+            Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        {|DI032:services.AddSingleton<AsyncWorker>(sp => new())|};
+                        {|DI032:services.AddScoped<AsyncWorker>(sp => (new AsyncWorker()))|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

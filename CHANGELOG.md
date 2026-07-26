@@ -23,8 +23,12 @@ disposes this, and can they.
   registrations count — the container creates and tracks whatever a factory returns — when the
   lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A
   descriptor removed or replaced after it was added never reaches the provider and is not reported.
-  The claim is conditional on the service actually being resolved, which is what makes the disposal
-  path run at all; the message says so.
+  Target-typed `new()` and parenthesised creations count; a factory whose result reaches the service
+  type through a user-defined conversion does not, because the container never holds the constructed
+  object. The claim is conditional on the service actually being resolved, which is what makes the
+  disposal path run at all; the message says so. Removal suppression is deliberately coarse — it
+  matches on service type and source order, so an unrelated conditional or keyed mutation can
+  suppress a live descriptor. That errs toward silence rather than toward a wrong claim.
 - **DI033 externally owned disposable instance** (Info) — a disposable handed to the container as an
   existing object (`AddSingleton<TService>(new Thing())` or a descriptor's implementation instance).
   The container disposes only what it creates, so the provider never touches it and its handles live
