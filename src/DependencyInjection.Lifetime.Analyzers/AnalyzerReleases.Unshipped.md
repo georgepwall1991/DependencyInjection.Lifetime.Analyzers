@@ -4,5 +4,4 @@
 ### New Rules
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI032 | DependencyInjection | Warning | Container-created service implements only IAsyncDisposable, so synchronous provider or scope disposal throws
-DI033 | DependencyInjection | Info | Disposable instance registered as a pre-built singleton, which the container never disposes
+DI034 | DependencyInjection | Warning | HttpContext reaches fire-and-forget background work that outlives the request

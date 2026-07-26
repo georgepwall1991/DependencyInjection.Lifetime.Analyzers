@@ -890,6 +890,20 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI034",
+      "ruleId": "DI034",
+      "claims": [
+        {
+          "filePathContains": "DI034/HttpContextOffRequestExamples.cs",
+          "anchor": "_ = Task.Run(() => Console.WriteLine(context.GetHashCode()));",
+          "occurrence": 1,
+          "ruleId": "DI034",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

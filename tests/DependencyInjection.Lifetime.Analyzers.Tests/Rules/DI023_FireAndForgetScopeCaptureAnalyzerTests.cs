@@ -879,4 +879,60 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
 
         await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task WaitWithTimeout_ReportsDiagnostic()
+    {
+        // Wait(timeout) can return while the work is still running, so it does not keep the scope
+        // alive.
+        var source =
+            Usings
+            + """
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public void Handle()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        {|DI023:Task.Run(() => service.DoWork())|}.Wait(0);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task GenericTaskFactory_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public void Handle()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        {|DI023:new TaskFactory<int>().StartNew(() => service.Id)|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
 }
