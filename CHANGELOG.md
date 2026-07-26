@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a token that can never be cancelled. Arguments are bound to their parameters rather than read
   positionally, so named and reordered arguments classify correctly: `millisecondsTimeout: default`
   is zero rather than infinite, `cancellationToken: default` is a non-cancelable token, and a real
-  cancelable token means the wait can end while the work continues, and a constructed `TaskFactory<TResult>` is
+  cancelable token means the wait can end while the work continues. Non-cancelable tokens are recognised by their literal forms (`CancellationToken.None`, `default`, `new CancellationToken(false)` and their fully-qualified spellings); a token reached any other way is not assumed safe, and a constructed `TaskFactory<TResult>` is
   matched through its original definition instead of its display string. An escaped `@nameof(...)`
   call is a real method and no longer treated as the `nameof` operator. Accepted false negative: a
   `Wait(timeout)` result stored in a local or returned still suppresses, because the suppression is

@@ -296,7 +296,12 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
                     is "CancellationToken.None"
                         or "System.Threading.CancellationToken.None"
                         or "default"
-                        or "default(CancellationToken)",
+                        or "default(CancellationToken)"
+                        or "default(System.Threading.CancellationToken)"
+                        or "new CancellationToken()"
+                        or "new CancellationToken(false)"
+                        or "new System.Threading.CancellationToken()"
+                        or "new System.Threading.CancellationToken(false)",
                 _ => false,
             };
 
