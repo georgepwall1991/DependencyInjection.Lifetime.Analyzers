@@ -20,7 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it with a factory. Exempt by design: transient registrations, mixed lifetimes, keyed registrations,
   factory registrations, pre-built instances, separate service-collection flows, the same service
   type registered twice (DI012's duplicate), and registrations guarded by a branch that means they
-  never both run.
+  never both run. Grouping uses the constructed types, so `GenericStore<int>` and
+  `GenericStore<string>` are not conflated; a `RemoveAll`/`Replace` on either service type withdraws
+  the claim; and the two registrations must sit in the same executable body, since an uninvoked
+  local function adds no descriptor. Report positions are ordered by source location so the
+  diagnostic lands on the same registration every run. Accepted edge: a service-collection parameter
+  reassigned to a different collection between two registrations still groups as one flow.
 
 ## [3.1.0] - 2026-07-26
 

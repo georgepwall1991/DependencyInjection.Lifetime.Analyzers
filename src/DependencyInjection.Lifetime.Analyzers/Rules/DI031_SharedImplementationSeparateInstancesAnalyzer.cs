@@ -74,27 +74,45 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
         var groups = candidates.GroupBy(
             registration =>
                 (
-                    Implementation: (ISymbol)registration.ImplementationType!.OriginalDefinition,
+                    Implementation: (ISymbol)registration.ImplementationType!,
                     registration.Lifetime,
-                    registration.FlowKey
+                    registration.FlowKey,
+                    // Registrations reached through different bodies may not both execute -- an
+                    // uninvoked local function adds nothing -- so only same-body pairs are claimed.
+                    Container: ExecutionContainerOf(registration.Location)
                 ),
             ImplementationGroupComparer.Instance
         );
+
+        var mutatedServiceTypes = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var mutation in registrationCollector.OrderedMutations)
+        {
+            mutatedServiceTypes.Add(mutation.ServiceType);
+        }
 
         foreach (var group in groups)
         {
             var distinctByServiceType = group
                 .GroupBy(
-                    registration => (ISymbol)registration.ServiceType.OriginalDefinition,
+                    registration => (ISymbol)registration.ServiceType,
                     SymbolEqualityComparer.Default
                 )
-                .Select(serviceTypeGroup =>
-                    serviceTypeGroup.OrderBy(registration => registration.Order).First()
-                )
-                .OrderBy(registration => registration.Order)
+                .Select(serviceTypeGroup => serviceTypeGroup.OrderBy(SourcePositionOf).First())
+                .OrderBy(SourcePositionOf)
                 .ToList();
 
             if (distinctByServiceType.Count < 2)
+            {
+                continue;
+            }
+
+            // A RemoveAll or Replace on any of these service types means the descriptors may
+            // never coexist, so the two-instance claim cannot be made.
+            if (
+                distinctByServiceType.Any(registration =>
+                    mutatedServiceTypes.Contains(registration.ServiceType)
+                )
+            )
             {
                 continue;
             }
@@ -160,21 +178,78 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
         return true;
     }
 
+    /// <summary>
+    /// The syntax node whose execution the registration belongs to — the enclosing lambda, local
+    /// function, or method. Two registrations only provably coexist when the same body runs both.
+    /// </summary>
+    private static SyntaxNode? ExecutionContainerOf(Location location)
+    {
+        if (location.SourceTree?.GetRoot().FindNode(location.SourceSpan) is not { } node)
+        {
+            return null;
+        }
+
+        for (var current = node; current is not null; current = current.Parent)
+        {
+            if (
+                current
+                is LambdaExpressionSyntax
+                    or AnonymousMethodExpressionSyntax
+                    or LocalFunctionStatementSyntax
+                    or MethodDeclarationSyntax
+                    or ConstructorDeclarationSyntax
+                    or GlobalStatementSyntax
+            )
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
+
+    private static (string Path, int Position) SourcePositionOf(ServiceRegistration registration) =>
+        (
+            registration.Location.SourceTree?.FilePath ?? string.Empty,
+            registration.Location.SourceSpan.Start
+        );
+
     private sealed class ImplementationGroupComparer
-        : IEqualityComparer<(ISymbol Implementation, ServiceLifetime Lifetime, string? FlowKey)>
+        : IEqualityComparer<(
+            ISymbol Implementation,
+            ServiceLifetime Lifetime,
+            string? FlowKey,
+            SyntaxNode? Container
+        )>
     {
         public static readonly ImplementationGroupComparer Instance = new();
 
         public bool Equals(
-            (ISymbol Implementation, ServiceLifetime Lifetime, string? FlowKey) x,
-            (ISymbol Implementation, ServiceLifetime Lifetime, string? FlowKey) y
+            (
+                ISymbol Implementation,
+                ServiceLifetime Lifetime,
+                string? FlowKey,
+                SyntaxNode? Container
+            ) x,
+            (
+                ISymbol Implementation,
+                ServiceLifetime Lifetime,
+                string? FlowKey,
+                SyntaxNode? Container
+            ) y
         ) =>
             SymbolEqualityComparer.Default.Equals(x.Implementation, y.Implementation)
             && x.Lifetime == y.Lifetime
-            && x.FlowKey == y.FlowKey;
+            && x.FlowKey == y.FlowKey
+            && Equals(x.Container, y.Container);
 
         public int GetHashCode(
-            (ISymbol Implementation, ServiceLifetime Lifetime, string? FlowKey) obj
+            (
+                ISymbol Implementation,
+                ServiceLifetime Lifetime,
+                string? FlowKey,
+                SyntaxNode? Container
+            ) obj
         ) => SymbolEqualityComparer.Default.GetHashCode(obj.Implementation);
     }
 }

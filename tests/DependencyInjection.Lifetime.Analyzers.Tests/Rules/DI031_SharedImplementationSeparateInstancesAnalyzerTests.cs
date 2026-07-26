@@ -159,7 +159,7 @@ public class DI031_SharedImplementationSeparateInstancesAnalyzerTests
             + """
                 namespace Microsoft.Extensions.DependencyInjection
                 {
-                    public static class KeyedRegistrationExtensions
+                    public static class ServiceCollectionServiceExtensions
                     {
                         public static IServiceCollection AddKeyedSingleton<TService, TImplementation>(
                             this IServiceCollection services, object? serviceKey)
@@ -277,6 +277,90 @@ public class DI031_SharedImplementationSeparateInstancesAnalyzerTests
                 """;
 
         await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task DifferentClosedGenerics_NoDiagnostic()
+    {
+        // Store<int> and Store<string> are different runtime types, so each registration builds
+        // the instance it asked for.
+        var source =
+            Usings
+            + """
+                public interface IReader<T> { }
+                public interface IWriter<T> { }
+                public class GenericStore<T> : IReader<T>, IWriter<T> { }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddSingleton<IReader<int>, GenericStore<int>>();
+                        services.AddSingleton<IWriter<string>, GenericStore<string>>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationsInDifferentBodies_NoDiagnostic()
+    {
+        // Two bodies may not both run; only same-body pairs are claimed.
+        var source =
+            Usings
+            + """
+                public class Startup
+                {
+                    public void AddReading(IServiceCollection services)
+                    {
+                        services.AddSingleton<IReader, Store>();
+                    }
+
+                    public void AddWriting(IServiceCollection services)
+                    {
+                        services.AddSingleton<IWriter, Store>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RemovedServiceType_NoDiagnostic()
+    {
+        // The first descriptor is removed before the second is added, so they never coexist.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection.Extensions
+                {
+                    public static class ServiceCollectionDescriptorExtensions
+                    {
+                        public static IServiceCollection RemoveAll<T>(this IServiceCollection services) => services;
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddSingleton<IReader, Store>();
+                        Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IReader>(services);
+                        services.AddSingleton<IWriter, Store>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyNoDiagnosticsAsync(
             source
         );
     }
