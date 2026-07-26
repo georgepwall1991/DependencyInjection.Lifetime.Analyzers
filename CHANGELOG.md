@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent body: a `Where` predicate runs one element at a time during enumeration, and a lambda
   nested inside a selector belongs to that selector's single task. Properties are excluded because a
   computed property can return a fresh instance per access. The claim assumes the operation invoked
-  on the shared instance is genuinely asynchronous, which is what makes the tasks overlap.
+  on the shared instance is genuinely asynchronous, which is what makes the tasks overlap. Accepted
+  false negative: a `SelectMany` whose selector builds an inner projection
+  (`groups.SelectMany(g => { var db = new(); return g.Select(x => db.LoadAsync(x)); })`) fans out
+  from the inner selector, which this rule treats as part of the outer task.
 
 ## [3.4.0] - 2026-07-26
 
