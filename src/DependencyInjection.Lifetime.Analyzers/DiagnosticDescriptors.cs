@@ -297,6 +297,21 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI031: One implementation registered under several service types yields one instance per
+    /// registration, not one shared instance.
+    /// </summary>
+    public static readonly DiagnosticDescriptor SharedImplementationSeparateInstances = new(
+        id: DiagnosticIds.SharedImplementationSeparateInstances,
+        title: "Shared implementation registered under several service types",
+        messageFormat: "'{0}' is registered as {1} for both '{2}' and '{3}', so the container builds a separate instance for each",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Info,
+        isEnabledByDefault: true,
+        description: "Each registration is its own descriptor, so registering the same implementation type under two service types produces two instances rather than one shared instance. State kept in the implementation then diverges, and anything it owns exists twice. Register the implementation once and forward the other service types to it with a factory: services.AddSingleton<Impl>(); services.AddSingleton<IA>(sp => sp.GetRequiredService<Impl>());",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI023: Fire-and-forget background work captures a scope that is disposed when the
     /// starting method returns.
     /// </summary>

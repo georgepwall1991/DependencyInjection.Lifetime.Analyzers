@@ -4,4 +4,4 @@
 ### New Rules
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI023 | DependencyInjection | Warning | Fire-and-forget background work captures a using scope, its provider, or a service resolved from it
+DI031 | DependencyInjection | Info | One implementation type registered under several service types with a shared lifetime, producing a separate instance per registration

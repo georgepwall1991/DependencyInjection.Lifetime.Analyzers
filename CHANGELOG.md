@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-07-26
+
+### Added
+
+- **DI031 shared implementation, separate instances** (Info) — one implementation type registered
+  under two or more service types with the same singleton or scoped lifetime produces one instance
+  per descriptor, not one shared instance. `AddSingleton<IReader, Store>()` followed by
+  `AddSingleton<IWriter, Store>()` reads like a single `Store` but builds two, so state written
+  through one interface is invisible through the other and anything the implementation owns exists
+  twice. The fix is to register the implementation once and forward the remaining service types to
+  it with a factory. Exempt by design: transient registrations, mixed lifetimes, keyed registrations,
+  factory registrations, pre-built instances, separate service-collection flows, the same service
+  type registered twice (DI012's duplicate), and registrations guarded by a branch that means they
+  never both run.
+
 ## [3.1.0] - 2026-07-26
 
 ### Added

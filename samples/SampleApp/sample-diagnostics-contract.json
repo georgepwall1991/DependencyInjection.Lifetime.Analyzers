@@ -848,6 +848,20 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI031",
+      "ruleId": "DI031",
+      "claims": [
+        {
+          "filePathContains": "DI031/SharedImplementationExamples.cs",
+          "anchor": "services.AddSingleton<IFeatureWriter, FeatureStore>();",
+          "occurrence": 1,
+          "ruleId": "DI031",
+          "severity": "note"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],
