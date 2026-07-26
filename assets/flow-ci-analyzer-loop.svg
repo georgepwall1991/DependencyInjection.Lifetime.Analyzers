@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="380" viewBox="0 0 920 380" role="img" aria-labelledby="title desc">
+  <title id="title">DI Lifetime Analyzers product loop from package install to CI</title>
+  <desc id="desc">Install the analyzer package, get editor and build diagnostics, fix with code fixes where available, and keep the same rules in CI.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect width="920" height="380" rx="12" fill="url(#bg)"/>
+  <text x="36" y="42" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Product loop — package → editor/build → CI</text>
+  <text x="36" y="66" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">No runtime dependency · PrivateAssets="all" · same DI00x rules in Rider, VS, and dotnet build</text>
+
+  <!-- Step 1 -->
+  <rect x="36" y="100" width="190" height="160" rx="10" fill="#0b1220" stroke="#334155"/>
+  <text x="52" y="130" fill="#38bdf8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">1. Install</text>
+  <text x="52" y="158" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">PackageReference</text>
+  <text x="52" y="178" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">PrivateAssets=all</text>
+  <text x="52" y="210" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Development-only</text>
+  <text x="52" y="230" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">analyzer package</text>
+
+  <line x1="236" y1="180" x2="268" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2 -->
+  <rect x="280" y="100" width="190" height="160" rx="10" fill="#0b1220" stroke="#334155"/>
+  <text x="296" y="130" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">2. Diagnose</text>
+  <text x="296" y="158" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">DI001 scope leaks</text>
+  <text x="296" y="180" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">DI003 captive deps</text>
+  <text x="296" y="202" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">DI015/DI016/DI017…</text>
+  <text x="296" y="234" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Editor + build warnings</text>
+
+  <line x1="480" y1="180" x2="512" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3 -->
+  <rect x="524" y="100" width="190" height="160" rx="10" fill="#0b1220" stroke="#334155"/>
+  <text x="540" y="130" fill="#4ade80" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">3. Fix</text>
+  <text x="540" y="158" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Code fixes where safe</text>
+  <text x="540" y="180" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">using scope · lifetimes</text>
+  <text x="540" y="202" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">registration corrections</text>
+  <text x="540" y="234" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Stays quiet when unprovable</text>
+
+  <line x1="724" y1="180" x2="756" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4 -->
+  <rect x="768" y="100" width="124" height="160" rx="10" fill="#0b1220" stroke="#334155"/>
+  <text x="784" y="130" fill="#a78bfa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">4. CI</text>
+  <text x="784" y="162" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">dotnet build</text>
+  <text x="784" y="184" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">same rules</text>
+  <text x="784" y="218" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">No extra</text>
+  <text x="784" y="238" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">runtime host</text>
+
+  <rect x="36" y="288" width="856" height="56" rx="8" fill="#111827" stroke="#334155"/>
+  <text x="52" y="314" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">35 diagnostics for Microsoft.Extensions.DependencyInjection lifetime and activation bugs · ASP.NET Core, workers, console, libraries</text>
+  <text x="52" y="334" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Works in Rider, Visual Studio, and CI · docs: georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers</text>
+</svg>

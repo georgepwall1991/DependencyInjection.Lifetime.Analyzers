@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="440" viewBox="0 0 920 440" role="img" aria-labelledby="title desc">
+  <title id="title">Before and after DI003 captive dependency code fix</title>
+  <desc id="desc">Singleton capturing a scoped service (DI003) fixed by resolving the scoped dependency through IServiceScopeFactory.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="920" height="440" rx="12" fill="url(#bg)"/>
+  <text x="36" y="42" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">DI003 captive dependency — before / after</text>
+  <text x="36" y="66" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">From samples/SampleApp · code fix can change lifetime or introduce a scope factory</text>
+
+  <!-- Before panel -->
+  <rect x="24" y="88" width="420" height="300" rx="10" fill="#0b1220" stroke="#7f1d1d" stroke-width="1.5"/>
+  <rect x="24" y="88" width="420" height="40" rx="10" fill="#7f1d1d"/>
+  <rect x="24" y="118" width="420" height="10" fill="#7f1d1d"/>
+  <text x="40" y="114" fill="#fecaca" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Before · DI003 warning</text>
+  <text x="40" y="150" fill="#f87171" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">// singleton captures scoped</text>
+  <text x="40" y="176" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">services.AddSingleton&lt;</text>
+  <text x="40" y="196" fill="#fbbf24" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  BadSingletonWithScopedDependency&gt;();</text>
+  <text x="40" y="228" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">class BadSingletonWithScopedDependency</text>
+  <text x="40" y="248" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">{</text>
+  <text x="40" y="268" fill="#f87171" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  public BadSingleton...(IScopedService s)</text>
+  <text x="40" y="288" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  { _scoped = s; }</text>
+  <text x="40" y="308" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">}</text>
+  <text x="40" y="348" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Service 'BadSingletonWithScopedDependency'</text>
+  <text x="40" y="366" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">captures scoped dependency 'IScopedService'</text>
+
+  <!-- After panel -->
+  <rect x="476" y="88" width="420" height="300" rx="10" fill="#0b1220" stroke="#14532d" stroke-width="1.5"/>
+  <rect x="476" y="88" width="420" height="40" rx="10" fill="#14532d"/>
+  <rect x="476" y="118" width="420" height="10" fill="#14532d"/>
+  <text x="492" y="114" fill="#bbf7d0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">After · safe pattern</text>
+  <text x="492" y="150" fill="#4ade80" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">// resolve scoped inside a scope</text>
+  <text x="492" y="176" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">services.AddSingleton&lt;</text>
+  <text x="492" y="196" fill="#4ade80" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  GoodSingletonWithScopeFactory&gt;();</text>
+  <text x="492" y="228" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">class GoodSingletonWithScopeFactory</text>
+  <text x="492" y="248" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">{</text>
+  <text x="492" y="268" fill="#4ade80" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  public ...(IServiceScopeFactory f)</text>
+  <text x="492" y="288" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  { _factory = f; }</text>
+  <text x="492" y="308" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">  // using var scope = _factory.CreateScope();</text>
+  <text x="492" y="328" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">}</text>
+  <text x="492" y="360" fill="#86efac" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Scoped work stays inside a short-lived scope</text>
+
+  <text x="36" y="420" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">Honest product proof from SampleApp · DI003 code fixes include ChangeToScoped / UpgradeDependency / inject scope factory</text>
+</svg>
