@@ -157,11 +157,15 @@ These are durable design decisions, recorded so a future pass does not re-litiga
 
 ## Follow-Up Filed During 3.0.0
 
-- **DI002 `GetOrAdd` false negative.** `DI002_ScopeEscapeAnalyzer.CollectionMutationMethodNames` is
-  exactly `{Add, Insert, Enqueue, Push, TryAdd}` and its return-type gate accepts only
-  `void`/`bool`/`int`, so `_cache.GetOrAdd(key, _ => scope.ServiceProvider.GetRequiredService<T>())`
-  escapes detection. This is a DI002 hardening item — widening DI002's name set and return-type gate —
-  and deliberately not worked around in DI030.
+- **DI002 `GetOrAdd` false negative — CLOSED in 3.0.2.** `GetOrAdd` and `AddOrUpdate` now form a
+  second `ValueReturningStorageMutationMethodNames` set that is exempt from the void/bool/int
+  return-type gate (they store into the receiver and return the stored value). Both the direct value
+  argument and the value-factory spelling report; the factory leg is matched from the mutation side
+  because a lambda body is a separate executable boundary, and only a bare resolution body qualifies.
+  Every receiver guard is unchanged, so local dictionaries, non-collection receivers with a method
+  named `GetOrAdd`, and discarded `ImmutableList.Add` results stay quiet. Remaining accepted FN:
+  `ImmutableInterlocked.GetOrAdd(ref dict, ...)`, whose receiver is a static type rather than the
+  collection.
 - **DI028 linked-token-source disposal.** The dominant shape
   (`var linked = CreateLinkedTokenSource(...); await X(linked.Token);`) stays silent because the local
   is referenced. Closing it needs the reliable-disposal proof DI014 already has (branch ownership,

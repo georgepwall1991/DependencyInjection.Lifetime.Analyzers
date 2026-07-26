@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-07-26
+
+### Fixed
+
+- **DI002 value-returning storage mutations** — `ConcurrentDictionary.GetOrAdd` and `AddOrUpdate` now
+  count as escaping storage. They write the value into the receiver and return it, so the void/bool/int
+  return-type gate that keeps fluent immutable builders (`ImmutableList.Add`) quiet was exempting the
+  single most common cache-write shape. Both the direct value argument
+  (`_cache.GetOrAdd(key, scope.ServiceProvider.GetRequiredService<T>())`) and the value-factory
+  spelling (`_cache.GetOrAdd(key, _ => scope.ServiceProvider.GetRequiredService<T>())`) report. The
+  factory leg is matched from the mutation side because a lambda body is a separate executable
+  boundary, and only a bare resolution body qualifies. Every existing guard still applies: the receiver
+  must be enumerable-like and rooted in storage that outlives the scope, so local dictionaries, a
+  repository whose method merely happens to be named `GetOrAdd`, and discarded `ImmutableList.Add`
+  results all stay quiet.
+
 ## [3.0.1] - 2026-07-25
 
 ### Fixed

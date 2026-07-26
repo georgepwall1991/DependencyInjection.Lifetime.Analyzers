@@ -223,10 +223,7 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             // _cache.Add(scope.ServiceProvider.GetRequiredService<T>()) — the resolution is an
             // argument to a mutation method on a field/property-held container or caller-owned
             // collection parameter that outlives the scope.
-            if (consumption.Parent is ArgumentSyntax argumentShape &&
-                argumentShape.Parent is ArgumentListSyntax argumentList &&
-                argumentList.Parent is InvocationExpressionSyntax mutationInvocation &&
-                TryGetEscapingCollectionMutation(mutationInvocation, semanticModel, out var directContainerName))
+            if (TryGetStorageMutationSink(consumption, semanticModel, out var directContainerName))
             {
                 ReportDiagnostic(context, invocation, directContainerName, reportedSpans);
             }
@@ -414,6 +411,20 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
                     {
                         ReportDiagnostic(context, delegateCollectionSource, containerName, reportedSpans);
                     }
+                    else if (TryGetValueFactoryResolution(
+                                 argument.Expression,
+                                 semanticModel,
+                                 scopeVariables,
+                                 providerAliases,
+                                 registrationCollector,
+                                 wellKnownTypes,
+                                 out var factoryResolution))
+                    {
+                        // _cache.GetOrAdd(key, _ => scope.ServiceProvider.GetRequiredService<T>())
+                        // — the factory runs inside the mutation and its result is what the
+                        // container stores, so the escape is the same as passing the value.
+                        ReportDiagnostic(context, factoryResolution, containerName, reportedSpans);
+                    }
                 }
             }
 
@@ -441,10 +452,38 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         ImmutableHashSet.Create("Add", "Insert", "Enqueue", "Push", "TryAdd");
 
     /// <summary>
+    /// Storage mutations that hand the stored value back instead of returning void/bool/int.
+    /// <c>ConcurrentDictionary.GetOrAdd</c> and <c>AddOrUpdate</c> write into the receiver by
+    /// contract, so the value-returning gate that keeps fluent immutable builders quiet must not
+    /// exempt them.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ValueReturningStorageMutationMethodNames =
+        ImmutableHashSet.Create("GetOrAdd", "AddOrUpdate");
+
+    /// <summary>
     /// Matches mutation calls on containers held by fields, properties, or caller-owned
     /// parameters — storage that outlives the scope. Local containers and parameters definitely
     /// replaced with fresh local collections stay quiet unless they escape through another sink.
     /// </summary>
+    /// <summary>
+    /// Matches a resolution handed directly to a storage mutation as an argument, as in
+    /// <c>_cache.GetOrAdd(key, resolution)</c>. The value-factory spelling
+    /// (<c>_cache.GetOrAdd(key, _ =&gt; resolution)</c>) crosses a lambda boundary and is matched
+    /// from the mutation side instead.
+    /// </summary>
+    private static bool TryGetStorageMutationSink(
+        SyntaxNode consumption,
+        SemanticModel semanticModel,
+        out string containerName)
+    {
+        containerName = string.Empty;
+
+        return consumption.Parent is ArgumentSyntax argument
+            && argument.Parent is ArgumentListSyntax argumentList
+            && argumentList.Parent is InvocationExpressionSyntax mutation
+            && TryGetEscapingCollectionMutation(mutation, semanticModel, out containerName);
+    }
+
     private static bool TryGetEscapingCollectionMutation(
         InvocationExpressionSyntax call,
         SemanticModel semanticModel,
@@ -472,7 +511,14 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        if (!CollectionMutationMethodNames.Contains(methodName.Identifier.ValueText))
+        var invokedName = methodName.Identifier.ValueText;
+        var isValueReturningStorage = ValueReturningStorageMutationMethodNames.Contains(invokedName);
+        if (!isValueReturningStorage && !CollectionMutationMethodNames.Contains(invokedName))
+        {
+            return false;
+        }
+
+        if (semanticModel.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
         {
             return false;
         }
@@ -480,8 +526,10 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         // Mutating collection methods return void (List.Add, Insert, Enqueue, Push), bool
         // (ConcurrentDictionary.TryAdd), or int (non-generic IList.Add). Value-returning Add
         // shapes (ImmutableList.Add, fluent builders) hand back a new value instead of storing
-        // into the receiver, so the discarded result does not retain the service.
-        if (semanticModel.GetSymbolInfo(call).Symbol is not IMethodSymbol method ||
+        // into the receiver, so the discarded result does not retain the service. GetOrAdd and
+        // AddOrUpdate are exempt from that gate: they store into the receiver and return the
+        // stored value, so a non-void return is not evidence of copy-on-write.
+        if (!isValueReturningStorage &&
             !(method.ReturnsVoid ||
               method.ReturnType.SpecialType is SpecialType.System_Boolean or SpecialType.System_Int32))
         {
@@ -3186,6 +3234,48 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         return containingType.Name == "ServiceProviderServiceExtensions" &&
                containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
+    }
+
+    /// <summary>
+    /// Matches an expression-bodied value factory whose body is a scoped resolution, as in
+    /// <c>_cache.GetOrAdd(key, _ =&gt; scope.ServiceProvider.GetRequiredService&lt;T&gt;())</c>.
+    /// The factory is invoked by the mutation itself and its result is what the container
+    /// stores, so this is the same escape as handing the resolved value over directly. Only a
+    /// bare resolution body qualifies — anything composed on top is outside what this rule can
+    /// prove stores the service.
+    /// </summary>
+    private static bool TryGetValueFactoryResolution(
+        ExpressionSyntax argumentExpression,
+        SemanticModel semanticModel,
+        HashSet<ILocalSymbol> scopeVariables,
+        Dictionary<ILocalSymbol, ILocalSymbol> providerAliases,
+        RegistrationCollector registrationCollector,
+        WellKnownTypes wellKnownTypes,
+        out InvocationExpressionSyntax resolution)
+    {
+        resolution = null!;
+
+        if (argumentExpression is not LambdaExpressionSyntax { Body: InvocationExpressionSyntax body })
+        {
+            return false;
+        }
+
+        if (!TryGetResolutionLifetime(
+                body,
+                semanticModel,
+                scopeVariables,
+                providerAliases,
+                registrationCollector,
+                wellKnownTypes,
+                out var lifetime,
+                out _) ||
+            !ShouldReportScopedEscape(lifetime))
+        {
+            return false;
+        }
+
+        resolution = body;
+        return true;
     }
 
     private static bool TryGetResolutionLifetime(
