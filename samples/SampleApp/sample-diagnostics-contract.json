@@ -904,6 +904,27 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI035",
+      "ruleId": "DI035",
+      "claims": [
+        {
+          "filePathContains": "DI035/ConcurrentFanOutExamples.cs",
+          "anchor": "await Task.WhenAll(orderIds.Select(id => _db.LoadAsync(id)));",
+          "occurrence": 1,
+          "ruleId": "DI035",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI035/ConcurrentFanOutExamples.cs",
+          "anchor": "var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();",
+          "ruleId": "DI007",
+          "severity": "note"
+        }
+      ]
     }
   ],
   "fileClaims": [],

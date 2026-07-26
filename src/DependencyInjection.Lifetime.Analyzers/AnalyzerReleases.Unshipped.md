@@ -4,4 +4,4 @@
 ### New Rules
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI034 | DependencyInjection | Warning | HttpContext reaches fire-and-forget background work that outlives the request
+DI035 | DependencyInjection | Warning | One non-thread-safe service shared by every task of a Task.WhenAll fan-out

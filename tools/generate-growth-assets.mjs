@@ -229,6 +229,13 @@ const ruleSampleConfig = {
       { label: "Sample app injected-factory pattern", symbol: "Good_InjectedFactory" },
     ],
   },
+  DI035: {
+    samplePath: "samples/SampleApp/Diagnostics/DI035/ConcurrentFanOutExamples.cs",
+    highlights: [
+      { label: "Sample app shared-context fan-out warning", symbol: "Bad_SharedContextFanOut" },
+      { label: "Sample app scope-per-task pattern", symbol: "Good_ScopePerTaskFanOut" },
+    ],
+  },
   DI034: {
     samplePath: "samples/SampleApp/Diagnostics/DI034/HttpContextOffRequestExamples.cs",
     highlights: [

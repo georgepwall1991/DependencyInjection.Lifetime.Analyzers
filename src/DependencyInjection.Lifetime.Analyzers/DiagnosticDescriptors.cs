@@ -297,6 +297,19 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI035: One non-thread-safe service shared across a Task.WhenAll fan-out.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ConcurrentFanOutSharedService = new(
+        id: DiagnosticIds.ConcurrentFanOutSharedService,
+        title: "Do not share a non-thread-safe service across concurrent tasks",
+        messageFormat: "Every task of this fan-out shares '{0}', and {1} does not support concurrent use",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Task.WhenAll starts every task before awaiting any of them, so a service captured by the projection is used by all of them at once. EF Core's DbContext, ADO.NET connections, commands, readers, and transactions all forbid that: DbContext throws 'A second operation was started on this context', and the ADO.NET types corrupt state or throw. Create a scope per task and resolve the service inside it, or process the work sequentially with a foreach and await."
+    );
+
+    /// <summary>
     /// DI034: HttpContext captured by fire-and-forget background work.
     /// </summary>
     public static readonly DiagnosticDescriptor HttpContextUsedOffRequest = new(
