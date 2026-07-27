@@ -1,17 +1,16 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.17 — DI019 now preserves provider writes in switch
-governing expressions without treating conditionally evaluated sections or result arms as definite.
+**Current release candidate:** 3.5.18 — DI031's diagnostic description now satisfies Roslyn's
+sentence-punctuation requirement, removing the `RS1033` analyzer-project warning without changing
+diagnostic behavior.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.17
-**Base audited commit:** `8c1baae` (`origin/main`; release `v3.5.16` points to `8c1baae`)
-**Test result:** 2026-07-27 local Release build passed with 0 errors (78 existing intentional
-sample/analyzer warnings), and the Release suite passed 2,731 tests with 0 failed and 0 skipped.
-The focused DI019 analyzer suite passed 128 tests. Provider assignments in a switch statement or
-switch expression's always-evaluated governing expression retain path stability for later all-root
-conditional joins, while writes in sections, result arms, or nested conditional regions remain
-conservative because execution can skip them.
+**Package version:** 3.5.18
+**Base audited commit:** `692932f` (`origin/main`; release `v3.5.17` points to `692932f`)
+**Test result:** 2026-07-27 local Release build passed with 0 errors and 77 existing intentional
+sample/analyzer warnings, down from 78 after removing `RS1033`. The Release suite passed 2,731 tests
+with 0 failed and 0 skipped. The descriptor text change does not alter the diagnostic ID, title,
+message, severity, enablement, tags, or analyzer control flow.
 
 ## Historical Release Snapshots
 

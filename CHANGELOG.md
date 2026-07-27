@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.18] - 2026-07-27
+
+### Fixed
+
+- **DI031 descriptor metadata** — the shared-implementation diagnostic description now ends with sentence punctuation, satisfying Roslyn's `RS1033` descriptor-quality rule and removing an analyzer-project build warning without changing diagnostic behavior.
+
 ## [3.5.17] - 2026-07-27
 
 ### Fixed
