@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.5] - 2026-07-27
+
+### Fixed
+
+- **DI014 user-defined coalesce conversion inside `using`** (false negative) — a `using`
+  declaration or statement no longer proves disposal merely because it syntactically contains
+  `BuildServiceProvider()`. The same-instance ownership proof must reach the actual resource
+  expression, so a user-defined conversion from the provider to a disposable wrapper reports
+  instead of silently leaking the root provider. Direct provider resources and identity-conversion
+  coalesces remain silent.
+
 ## [3.5.4] - 2026-07-27
 
 ### Fixed
@@ -67,9 +78,8 @@ re-verified against current main, re-implemented on top of it, and mutation-test
   deliberately not propagated across a one-hop delegation lambda, which is free to pass the target
   method something fresh.
 
-  Accepted false negatives, both pre-existing and unchanged by this release: a coalesce inside a
-  `using` declaration short-circuits before the conversion check, and DI021's one-hop delegation
-  still does not flow lambda arguments into the target method's parameters.
+  The coalesce-inside-`using` false negative was closed in 3.5.5. DI021's one-hop delegation still
+  does not flow lambda arguments into the target method's parameters.
 
 ## [3.5.0] - 2026-07-26
 
