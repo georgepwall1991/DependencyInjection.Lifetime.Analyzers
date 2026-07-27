@@ -40,7 +40,7 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
 
         // The projection that produces the tasks — `items.Select(x => ...)` — is where the shared
         // instance is captured. Each element's lambda runs concurrently with all the others.
-        foreach (var projection in EnumerateTaskProjections(invocation))
+        foreach (var projection in EnumerateTaskProjections(invocation, context.SemanticModel))
         {
             if (
                 !TryGetSharedNonThreadSafeCapture(
@@ -83,7 +83,8 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
     /// selector's single task rather than being a fan-out of its own.
     /// </summary>
     private static IEnumerable<SyntaxNode> EnumerateTaskProjections(
-        InvocationExpressionSyntax whenAll
+        InvocationExpressionSyntax whenAll,
+        SemanticModel semanticModel
     )
     {
         foreach (var argument in whenAll.ArgumentList.Arguments)
@@ -94,14 +95,17 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
                 continue;
             }
 
-            foreach (var selector in EnumerateSelectorLambdas(argument.Expression))
+            foreach (var selector in EnumerateSelectorLambdas(argument.Expression, semanticModel))
             {
                 yield return selector;
             }
         }
     }
 
-    private static IEnumerable<SyntaxNode> EnumerateSelectorLambdas(ExpressionSyntax expression)
+    private static IEnumerable<SyntaxNode> EnumerateSelectorLambdas(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel
+    )
     {
         var selectors = new List<LambdaExpressionSyntax>();
 
@@ -131,9 +135,111 @@ public sealed class DI035_ConcurrentFanOutSharedServiceAnalyzer : DiagnosticAnal
         // Only the outermost selectors fan out. A Select nested inside another selector runs
         // within that selector's single task, so anything it captures is per-task, not shared.
         return selectors.Where(selector =>
-            !selectors.Any(other => other != selector && other.Span.Contains(selector.Span))
+            !selectors.Any(other =>
+                other != selector
+                && other.Span.Contains(selector.Span)
+                && !IsFlattenedTaskSelector(selector, other, semanticModel)
+            )
         );
     }
+
+    private static bool IsFlattenedTaskSelector(
+        LambdaExpressionSyntax selector,
+        LambdaExpressionSyntax containingSelector,
+        SemanticModel semanticModel
+    )
+    {
+        var selectorInvocation = selector
+            .Ancestors()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault(invocation => invocation.Span.Contains(selector.Span));
+        if (
+            selectorInvocation is null
+            || semanticModel.GetSymbolInfo(selectorInvocation).Symbol
+                is not IMethodSymbol selectorMethod
+            || selectorMethod.Name is not ("Select" or "SelectMany")
+            || selectorMethod.ContainingType?.ToDisplayString() != "System.Linq.Enumerable"
+        )
+        {
+            return false;
+        }
+
+        var containingInvocation = containingSelector
+            .Ancestors()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault(invocation => invocation.Span.Contains(containingSelector.Span));
+        if (
+            containingInvocation is null
+            || semanticModel.GetSymbolInfo(containingInvocation).Symbol
+                is not IMethodSymbol { Name: "SelectMany" } containingMethod
+            || containingMethod.ContainingType?.ToDisplayString() != "System.Linq.Enumerable"
+            || !IsDirectlyReturned(selectorInvocation, containingSelector)
+        )
+        {
+            return false;
+        }
+
+        return semanticModel.GetTypeInfo(selector).ConvertedType
+                is INamedTypeSymbol { DelegateInvokeMethod.ReturnType: { } returnType }
+            && IsTaskType(returnType);
+    }
+
+    private static bool IsDirectlyReturned(
+        InvocationExpressionSyntax invocation,
+        LambdaExpressionSyntax containingSelector
+    )
+    {
+        if (containingSelector.Body is ExpressionSyntax expression)
+        {
+            return UnwrapParentheses(expression) == invocation;
+        }
+
+        return containingSelector.Body is BlockSyntax block
+            && block
+                .DescendantNodes()
+                .OfType<ReturnStatementSyntax>()
+                .Any(returnStatement =>
+                    IsOwnedBySelector(returnStatement, containingSelector)
+                    && returnStatement.Expression is { } returned
+                    && UnwrapParentheses(returned) == invocation
+                );
+    }
+
+    private static bool IsOwnedBySelector(
+        ReturnStatementSyntax returnStatement,
+        LambdaExpressionSyntax selector
+    )
+    {
+        foreach (var ancestor in returnStatement.Ancestors())
+        {
+            if (ancestor == selector)
+            {
+                return true;
+            }
+
+            if (ancestor is LambdaExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static ExpressionSyntax UnwrapParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
+    }
+
+    private static bool IsTaskType(ITypeSymbol type) =>
+        type is INamedTypeSymbol namedType
+        && namedType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks"
+        && namedType.Name == "Task";
 
     /// <summary>
     /// A reference inside the concurrent body to a non-thread-safe value declared OUTSIDE it — a

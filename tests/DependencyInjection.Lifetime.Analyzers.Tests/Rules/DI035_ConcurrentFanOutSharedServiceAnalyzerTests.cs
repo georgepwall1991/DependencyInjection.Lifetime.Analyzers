@@ -262,6 +262,60 @@ public class DI035_ConcurrentFanOutSharedServiceAnalyzerTests
     }
 
     [Fact]
+    public async Task ContextCreatedPerGroupAndSharedByFlattenedTasks_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class OrderProcessor
+                {
+                    public async Task ProcessAsync(IEnumerable<IEnumerable<int>> orderGroups)
+                    {
+                        await Task.WhenAll(orderGroups.SelectMany(group =>
+                        {
+                            var db = new AppDbContext();
+                            return group.Select(id => {|DI035:db|}.CountAsync(id));
+                        }));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI035_ConcurrentFanOutSharedServiceAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task NestedSelectorReturnedOnlyFromUncalledLocalFunction_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class OrderProcessor
+                {
+                    public async Task ProcessAsync(IEnumerable<IEnumerable<int>> orderGroups)
+                    {
+                        await Task.WhenAll(orderGroups.SelectMany(group =>
+                        {
+                            var db = new AppDbContext();
+
+                            IEnumerable<Task<int>> Build()
+                            {
+                                return group.Select(id => db.CountAsync(id));
+                            }
+
+                            return Array.Empty<Task<int>>();
+                        }));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI035_ConcurrentFanOutSharedServiceAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
     public async Task ContextFromComputedProperty_NoDiagnostic()
     {
         // A computed property can hand back a fresh instance per access.

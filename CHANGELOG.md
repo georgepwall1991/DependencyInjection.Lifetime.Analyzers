@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.7] - 2026-07-27
+
+### Fixed
+
+- **DI035 nested `SelectMany` task projection** (false negative) — when a `SelectMany` collection
+  selector creates a non-thread-safe service and directly returns an inner LINQ projection, DI035
+  now treats the inner task-returning selector as the concurrent body. The tasks flattened into
+  `Task.WhenAll` can therefore no longer silently share one `DbContext` per outer group. The proof
+  requires exact `System.Linq.Enumerable` binding, an exact `Task` return, and a return owned by the
+  containing selector; unrelated nested selectors and returns inside local functions remain silent.
+
 ## [3.5.6] - 2026-07-27
 
 ### Fixed
