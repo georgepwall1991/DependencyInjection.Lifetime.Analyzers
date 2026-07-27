@@ -626,6 +626,20 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI029: HttpClient is registered directly as a scoped service instead of through the factory.
+    /// </summary>
+    public static readonly DiagnosticDescriptor HttpClientScopedRegistration = new(
+        id: DiagnosticIds.HttpClientLifetimeMisuse,
+        title: "Do not register HttpClient directly as a scoped service",
+        messageFormat: "HttpClient is registered directly as a scoped service{0}. Each scope creates and disposes its own handler, so sockets accumulate in TIME_WAIT under load; call AddHttpClient instead.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A direct scoped HttpClient registration creates a new handler and connection pool for every dependency-injection scope, then disposes that pool when the scope ends. The underlying sockets remain in TIME_WAIT after disposal, so request-scoped use can exhaust the ephemeral port range under load. AddHttpClient uses IHttpClientFactory to share and rotate handlers while still supplying HttpClient instances through dependency injection.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI029: An HttpClient is held in a static field or property.
     /// </summary>
     public static readonly DiagnosticDescriptor HttpClientStaleDnsStaticMember = new(

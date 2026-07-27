@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.6] - 2026-07-27
+
+### Fixed
+
+- **DI029 direct scoped `HttpClient` self-registration** (false negative) — exact type-backed
+  `AddScoped<HttpClient>()`, keyed equivalents, and
+  `ServiceDescriptor.Scoped<HttpClient, HttpClient>()` now report when `IHttpClientFactory` is
+  available. Each scope would otherwise create and dispose an independent handler pool, leaving
+  sockets in `TIME_WAIT` under load. Factory-backed registrations, derived clients, transient
+  registrations, and projects without the factory API remain silent.
+
 ## [3.5.5] - 2026-07-27
 
 ### Fixed

@@ -911,7 +911,89 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
-    public async Task AddScopedHttpClient_Silent()
+    public async Task AddScopedHttpClient_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        [|services.AddScoped<HttpClient>()|];
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ServiceDescriptorScopedHttpClient_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        [|services.Add(ServiceDescriptor.Scoped<HttpClient, HttpClient>())|];
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task AddKeyedScopedHttpClient_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        [|services.AddKeyedScoped<HttpClient>("github")|];
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task AddScopedHttpClientFactory_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddScoped<HttpClient>(_ => new HttpClient());
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task AddScopedDerivedHttpClient_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public class PooledClient : HttpClient { }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddScoped<PooledClient>();
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task AddScopedHttpClient_WithoutHttpClientFactoryReference_Silent()
     {
         var source =
             Prelude
@@ -923,7 +1005,7 @@ public class DI029_HttpClientLifetimeAnalyzerTests
                 }
                 """;
 
-        await VerifySilentAsync(source);
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]
