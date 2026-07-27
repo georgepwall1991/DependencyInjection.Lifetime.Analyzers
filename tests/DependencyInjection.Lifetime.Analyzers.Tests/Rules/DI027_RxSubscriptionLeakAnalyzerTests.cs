@@ -289,6 +289,29 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
     }
 
     [Fact]
+    public async Task AssignedLocalTokenNeverReferenced_Reports()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker) => _ticker = ticker;
+
+                public void Initialize()
+                {
+                    IDisposable subscription;
+                    subscription = [|_ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task TokenStoredInOtherwiseUnusedField_Reports()
     {
         var source = Prelude + SingletonTickerTransientHandler + """
@@ -547,6 +570,111 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AssignedLocalTokenDisposedLater_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker) => _ticker = ticker;
+
+                public void Initialize()
+                {
+                    IDisposable subscription;
+                    subscription = _ticker.Subscribe(OnTick);
+                    subscription.Dispose();
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AssignedLocalTokenReassignedLater_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker) => _ticker = ticker;
+
+                public void Initialize()
+                {
+                    IDisposable subscription;
+                    subscription = _ticker.Subscribe(OnTick);
+                    subscription = new Token();
+                }
+
+                private void OnTick(int value) { }
+
+                private sealed class Token : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AssignedLocalTokenReturnedByAssignmentExpression_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker) => _ticker = ticker;
+
+                public IDisposable Subscribe()
+                {
+                    IDisposable subscription;
+                    return subscription = _ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AssignedLocalTokenUsedAsUsingResource_Silent()
+    {
+        var source = Prelude + SingletonTickerTransientHandler + """
+            public class TickHandler
+            {
+                private readonly ITicker _ticker;
+
+                public TickHandler(ITicker ticker) => _ticker = ticker;
+
+                public void Initialize()
+                {
+                    IDisposable subscription;
+                    using (subscription = _ticker.Subscribe(OnTick))
+                    {
+                    }
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
     }
 
     [Fact]

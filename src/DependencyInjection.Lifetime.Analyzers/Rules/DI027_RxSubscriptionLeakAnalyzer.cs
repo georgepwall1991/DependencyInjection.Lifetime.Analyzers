@@ -259,12 +259,12 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// Proves the subscription token is discarded: an ignored expression statement, a discard
     /// assignment (<c>_ = obs.Subscribe(...)</c>), a local variable initialized with the Subscribe
-    /// result that is never referenced again in the enclosing body (and is not a <c>using</c>
-    /// declaration), or a private field declared on the subscriber and assigned the token but never
-    /// referenced anywhere else across the containing type's partial declarations. Anything that
-    /// touches the token later — a <c>.Dispose()</c>, a return, an argument, another field access, or
-    /// a <c>using</c> — stays silent because the token may be disposed on a path the analyzer does
-    /// not model.
+    /// result, a predeclared local assigned the result in a standalone statement, when that local is never otherwise
+    /// referenced in the enclosing body (and is not a <c>using</c> declaration), or a private field
+    /// declared on the subscriber and assigned the token but never referenced anywhere else across
+    /// the containing type's partial declarations. Anything that touches the token later — a
+    /// <c>.Dispose()</c>, a return, an argument, another field access, or a <c>using</c> — stays
+    /// silent because the token may be disposed on a path the analyzer does not model.
     /// </summary>
     private static bool TokenIsLeaked(
         InvocationExpressionSyntax invocation,
@@ -363,9 +363,35 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken)
     {
-        if (parent is not EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator } equals ||
-            equals.Value != node ||
-            declarator.Parent is not VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax localStatement })
+        VariableDeclaratorSyntax declarator;
+        IdentifierNameSyntax? assignmentTarget = null;
+        if (parent is EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax initializedDeclarator } equals &&
+            equals.Value == node)
+        {
+            declarator = initializedDeclarator;
+        }
+        else if (parent is AssignmentExpressionSyntax assignment &&
+                 assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                 assignment.Right == node &&
+                 assignment.Parent is ExpressionStatementSyntax &&
+                 assignment.Left is IdentifierNameSyntax identifier &&
+                 semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol is ILocalSymbol assignedLocal &&
+                 assignedLocal.RefKind == RefKind.None &&
+                 assignedLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(cancellationToken) is
+                     VariableDeclaratorSyntax assignedDeclarator)
+        {
+            declarator = assignedDeclarator;
+            assignmentTarget = identifier;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (declarator.Parent is not VariableDeclarationSyntax
+            {
+                Parent: LocalDeclarationStatementSyntax localStatement,
+            })
         {
             return false;
         }
@@ -392,7 +418,7 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         foreach (var identifier in body.DescendantNodes().OfType<IdentifierNameSyntax>())
         {
             if (identifier.Identifier.ValueText != local.Name ||
-                identifier.Parent is VariableDeclaratorSyntax)
+                ReferenceEquals(identifier, assignmentTarget))
             {
                 continue;
             }
