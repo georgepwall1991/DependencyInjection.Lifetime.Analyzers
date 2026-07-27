@@ -57,6 +57,19 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
 
         """;
 
+    [Fact]
+    public void DescriptorDescription_IncludesStaticReadonlyObservablePublishers()
+    {
+        var analyzer = new DI027_RxSubscriptionLeakAnalyzer();
+        var description = analyzer.SupportedDiagnostics[0].Description.ToString();
+
+        Assert.Contains("static readonly observable", description);
+        Assert.Contains("ignored expression statement", description);
+        Assert.Contains("discard assignment", description);
+        Assert.Contains("never-referenced local", description);
+        Assert.Contains("otherwise-unused private field", description);
+    }
+
     // ----------------------------------------------------------------
     // Positives
     // ----------------------------------------------------------------
@@ -302,6 +315,84 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
                 {
                     IDisposable subscription;
                     subscription = [|_ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableField_TransientSubscriber_Reports()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    [|GlobalTicks.Ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldWithMemberMutation_TransientSubscriber_Reports()
+    {
+        var source = Prelude + """
+            public sealed class MutableTicker : ITicker
+            {
+                public bool Enabled { get; set; }
+                public IDisposable Subscribe(IObserver<int> observer) => new Token();
+
+                private sealed class Token : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+
+            public static class GlobalTicks
+            {
+                public static readonly MutableTicker Ticker = new MutableTicker();
+
+                static GlobalTicks()
+                {
+                    Ticker.Enabled = true;
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    [|GlobalTicks.Ticker.Subscribe(OnTick)|];
                 }
 
                 private void OnTick(int value) { }
@@ -675,6 +766,494 @@ public class DI027_RxSubscriptionLeakAnalyzerTests
 
         await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
             .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MutableStaticObservableField_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static ITicker Ticker = new Ticker();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NullStaticReadonlyObservableField_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = null!;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldInitializedByAsConversion_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new object() as ITicker;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldInitializedByUserDefinedConversion_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public sealed class TickerFactory
+            {
+                public static implicit operator Ticker(TickerFactory value) => null!;
+            }
+
+            public static class GlobalTicks
+            {
+                public static readonly Ticker Ticker = new TickerFactory();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyStructObservableField_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public struct StructTicker : ITicker
+            {
+                public IDisposable Subscribe(IObserver<int> observer) => new Token();
+
+                private sealed class Token : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+
+            public static class GlobalTicks
+            {
+                public static readonly StructTicker Ticker = new StructTicker();
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldReassignedNullInStaticConstructor_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+
+                static GlobalTicks()
+                {
+                    Ticker = null!;
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldReassignedByDeconstruction_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+                public static readonly int Marker = 0;
+
+                static GlobalTicks()
+                {
+                    (Ticker, Marker) = (null!, 1);
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldPassedByRefInStaticConstructor_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+
+                static GlobalTicks() => Replace(ref Ticker);
+
+                private static void Replace(ref ITicker ticker) => ticker = null!;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldCompoundReassignedInStaticConstructor_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public sealed class ReassignableTicker : ITicker
+            {
+                public static ReassignableTicker operator +(ReassignableTicker left, int right) => null!;
+                public IDisposable Subscribe(IObserver<int> observer) => new Token();
+
+                private sealed class Token : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+
+            public static class GlobalTicks
+            {
+                public static readonly ReassignableTicker Ticker = new ReassignableTicker();
+
+                static GlobalTicks() => Ticker += 1;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldIncrementedInStaticConstructor_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public sealed class ReassignableTicker : ITicker
+            {
+                public static ReassignableTicker operator ++(ReassignableTicker value) => null!;
+                public IDisposable Subscribe(IObserver<int> observer) => new Token();
+
+                private sealed class Token : IDisposable
+                {
+                    public void Dispose() { }
+                }
+            }
+
+            public static class GlobalTicks
+            {
+                public static readonly ReassignableTicker Ticker = new ReassignableTicker();
+
+                static GlobalTicks() => Ticker++;
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldEscapedThroughRefLocal_TransientSubscriber_Silent()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+
+                static GlobalTicks()
+                {
+                    ref ITicker alias = ref Ticker;
+                    alias = null!;
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    GlobalTicks.Ticker.Subscribe(OnTick);
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldReadOnlyRefAlias_TransientSubscriber_Reports()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+
+                static GlobalTicks()
+                {
+                    ref readonly ITicker alias = ref Ticker;
+                    _ = alias;
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    [|GlobalTicks.Ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticReadonlyObservableFieldScopedReadOnlyRefAlias_TransientSubscriber_Reports()
+    {
+        var source = Prelude + """
+            public static class GlobalTicks
+            {
+                public static readonly ITicker Ticker = new Ticker();
+
+                static GlobalTicks()
+                {
+                    scoped ref readonly ITicker alias = ref Ticker;
+                    _ = alias;
+                }
+            }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddTransient<TickHandler>();
+                }
+            }
+
+            public class TickHandler
+            {
+                public TickHandler()
+                {
+                    [|GlobalTicks.Ticker.Subscribe(OnTick)|];
+                }
+
+                private void OnTick(int value) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI027_RxSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
     [Fact]

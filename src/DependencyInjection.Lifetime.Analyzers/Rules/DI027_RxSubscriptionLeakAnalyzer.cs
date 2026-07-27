@@ -203,7 +203,7 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         }
 
         var (receiverKind, receiverRoot, receiverSegments, publisherType) =
-            EventReceiverClassification.ClassifyReceiverExpression(
+            ClassifyObservableReceiver(
                 observableExpression, containingType, semanticModel, cancellationToken);
         if (receiverKind == EventReceiverKind.Unknown)
         {
@@ -223,6 +223,230 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             observableName,
             handlerDisplay,
             invocation.GetLocation()));
+    }
+
+    private static (
+        EventReceiverKind Kind,
+        ISymbol? Root,
+        ImmutableArray<ISymbol> Segments,
+        INamedTypeSymbol? PublisherType
+    ) ClassifyObservableReceiver(
+        ExpressionSyntax observableExpression,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (semanticModel.GetSymbolInfo(observableExpression, cancellationToken).Symbol is
+                IFieldSymbol { IsStatic: true, IsReadOnly: true, Type: INamedTypeSymbol fieldType } field &&
+            fieldType.IsReferenceType &&
+            StaticReadonlyPublisherIsProvablyNonNull(field, semanticModel, cancellationToken))
+        {
+            return (
+                EventReceiverKind.StaticPublisher,
+                field,
+                ImmutableArray<ISymbol>.Empty,
+                fieldType);
+        }
+
+        return EventReceiverClassification.ClassifyReceiverExpression(
+            observableExpression,
+            containingType,
+            semanticModel,
+            cancellationToken);
+    }
+
+    private static bool StaticReadonlyPublisherIsProvablyNonNull(
+        IFieldSymbol field,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (field.DeclaringSyntaxReferences.Length != 1 ||
+            field.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken) is not
+                VariableDeclaratorSyntax declarator)
+        {
+            return false;
+        }
+
+        foreach (var typeReference in field.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (typeReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax typeDeclaration)
+            {
+                continue;
+            }
+
+            var typeModel = FactoryAnalysis.GetSemanticModelForNode(typeDeclaration, semanticModel);
+            if (typeModel is null)
+            {
+                return false;
+            }
+
+            foreach (var assignment in typeDeclaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (AssignmentTargetWritesField(
+                        assignment.Left,
+                        field,
+                        typeModel,
+                        cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            foreach (var unary in typeDeclaration.DescendantNodes().OfType<PrefixUnaryExpressionSyntax>())
+            {
+                if ((unary.IsKind(SyntaxKind.PreIncrementExpression) ||
+                     unary.IsKind(SyntaxKind.PreDecrementExpression)) &&
+                    AssignmentTargetWritesField(
+                        unary.Operand,
+                        field,
+                        typeModel,
+                        cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            foreach (var unary in typeDeclaration.DescendantNodes().OfType<PostfixUnaryExpressionSyntax>())
+            {
+                if ((unary.IsKind(SyntaxKind.PostIncrementExpression) ||
+                     unary.IsKind(SyntaxKind.PostDecrementExpression)) &&
+                    AssignmentTargetWritesField(
+                        unary.Operand,
+                        field,
+                        typeModel,
+                        cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            foreach (var argument in typeDeclaration.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if ((argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                     argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)) &&
+                    AssignmentTargetWritesField(
+                        argument.Expression,
+                        field,
+                        typeModel,
+                        cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            foreach (var refExpression in typeDeclaration.DescendantNodes().OfType<RefExpressionSyntax>())
+            {
+                if (RefExpressionCreatesWritableReference(refExpression) &&
+                    AssignmentTargetWritesField(
+                        refExpression.Expression,
+                        field,
+                        typeModel,
+                        cancellationToken))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (declarator.Initializer?.Value is { } initializer)
+        {
+            var initializerModel = FactoryAnalysis.GetSemanticModelForNode(initializer, semanticModel);
+            return initializerModel is not null &&
+                IsProvablyNonNullObjectCreation(
+                    initializer,
+                    field.Type,
+                    initializerModel,
+                    cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static bool AssignmentTargetWritesField(
+        ExpressionSyntax target,
+        IFieldSymbol field,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        while (target is ParenthesizedExpressionSyntax parenthesized)
+        {
+            target = parenthesized.Expression;
+        }
+
+        if (target is TupleExpressionSyntax tuple)
+        {
+            return tuple.Arguments.Any(argument =>
+                AssignmentTargetWritesField(
+                    argument.Expression,
+                    field,
+                    semanticModel,
+                    cancellationToken));
+        }
+
+        return SymbolEqualityComparer.Default.Equals(
+            semanticModel.GetSymbolInfo(target, cancellationToken).Symbol,
+            field);
+    }
+
+    private static bool RefExpressionCreatesWritableReference(RefExpressionSyntax refExpression)
+    {
+        if (refExpression.Parent is not EqualsValueClauseSyntax
+            {
+                Parent: VariableDeclaratorSyntax
+                {
+                    Parent: VariableDeclarationSyntax
+                    {
+                        Type: { } declarationType
+                    }
+                }
+            })
+        {
+            return true;
+        }
+
+        if (declarationType is ScopedTypeSyntax scopedType)
+        {
+            declarationType = scopedType.Type;
+        }
+
+        return declarationType is not RefTypeSyntax refType ||
+            !refType.ReadOnlyKeyword.IsKind(SyntaxKind.ReadOnlyKeyword);
+    }
+
+    private static bool IsProvablyNonNullObjectCreation(
+        ExpressionSyntax expression,
+        ITypeSymbol targetType,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var initializerConversion = semanticModel.ClassifyConversion(expression, targetType);
+        if (!initializerConversion.Exists ||
+            initializerConversion.IsUserDefined ||
+            !(initializerConversion.IsIdentity ||
+              (initializerConversion.IsImplicit && initializerConversion.IsReference)))
+        {
+            return false;
+        }
+
+        var operation = semanticModel.GetOperation(expression, cancellationToken);
+        while (true)
+        {
+            switch (operation)
+            {
+                case IConversionOperation conversion
+                    when !conversion.IsTryCast &&
+                         !conversion.Conversion.IsUserDefined &&
+                         (conversion.Conversion.IsIdentity ||
+                          (conversion.IsImplicit && conversion.Conversion.IsReference)):
+                    operation = conversion.Operand;
+                    continue;
+                case IParenthesizedOperation parenthesized:
+                    operation = parenthesized.Operand;
+                    continue;
+                default:
+                    return operation is IObjectCreationOperation;
+            }
+        }
     }
 
     private static bool IsContainingInstanceObserver(
@@ -491,7 +715,9 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             }
 
             var lifetimeText = subscriberRank == RankOf(ServiceLifetime.Transient) ? "transient" : "scoped";
-            var publisherText = publisherRank == RankOf(ServiceLifetime.Singleton)
+            var publisherText = subscription.ReceiverKind == EventReceiverKind.StaticPublisher
+                ? $"the static observable '{subscription.ObservableName}'"
+                : publisherRank == RankOf(ServiceLifetime.Singleton)
                 ? $"the singleton service '{subscription.PublisherType?.Name}'"
                 : $"the scoped service '{subscription.PublisherType?.Name}'";
 
@@ -606,6 +832,11 @@ public sealed class DI027_RxSubscriptionLeakAnalyzer : DiagnosticAnalyzer
         List<ServiceRegistration> registrations,
         KnownServiceLifetimeClassifier lifetimeClassifier)
     {
+        if (subscription.ReceiverKind == EventReceiverKind.StaticPublisher)
+        {
+            return RankOf(ServiceLifetime.Singleton);
+        }
+
         if (subscription.PublisherType is null)
         {
             return null;

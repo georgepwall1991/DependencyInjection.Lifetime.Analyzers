@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.12
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.13
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.12">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.13">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.12" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.13" />
 ```
 
 Then reference it from the project file:
@@ -99,7 +99,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## 30-second path
 
-1. Reference the package with `PrivateAssets="all"` (version `3.5.9` above).
+1. Reference the package with `PrivateAssets="all"` (version `3.5.13` above).
 2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
 3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
 4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
@@ -1244,7 +1244,7 @@ DI027 recognizes both idiomatic receiver syntax (`source.Subscribe(handler)`) an
 
 The BCL observer overload is also covered when the subscriber passes itself directly (`source.Subscribe(this)`): the argument must bind to `IObserver<T>` and reduce semantically to the containing instance. Separate observer objects remain silent because they do not prove that the registered subscriber is retained.
 
-**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), a local initialized with the token or assigned it in a standalone statement and never otherwise referenced (and not a `using` declaration), or a simple assignment to a private field declared on the subscriber when that field has no other symbol-bound reference across any partial declaration. An assignment expression consumed by `return`, `using`, an argument, or another expression stays silent, as does a later disposal, return, argument pass, reassignment, or any other field access; inherited and public/internal/protected fields also stay silent because external handling cannot be ruled out. `using`/`using var`, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable`, and more complex field flows remain conservative. As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, separate observer objects, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, non-extension static helpers named `Subscribe`, and non-observer `Subscribe(this)` overloads all stay silent.
+**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), a local initialized with the token or assigned it in a standalone statement and never otherwise referenced (and not a `using` declaration), or a simple assignment to a private field declared on the subscriber when that field has no other symbol-bound reference across any partial declaration. An assignment expression consumed by `return`, `using`, an argument, or another expression stays silent, as does a later disposal, return, argument pass, reassignment, or any other field access; inherited and public/internal/protected fields also stay silent because external handling cannot be ruled out. A direct static readonly reference-type observable field counts as a process-lifetime publisher only when its declaration initializes it exactly once with an object creation through an identity or implicit reference conversion; mutating a member of that publisher or creating a `ref readonly` local alias does not change its identity. Mutable, value-type, null-initialized, static-constructor-assigned or reassigned fields—including deconstruction, compound, and increment/decrement writes—writable `ref`/`out` argument or ref-local escapes, null-producing conversions, and static properties remain conservative. `using`/`using var`, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable`, and more complex field flows remain conservative. As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, separate observer objects, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, non-extension static helpers named `Subscribe`, and non-observer `Subscribe(this)` overloads all stay silent.
 
 **Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.
 
