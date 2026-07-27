@@ -690,6 +690,10 @@ public sealed class RegistrationCollector
 
         var order = Interlocked.Increment(ref _registrationOrder);
         var flowKey = ServiceCollectionReachabilityAnalyzer.GetServiceCollectionReceiverKey(invocation, semanticModel);
+        var factoryConstructedType = ExtractFactoryConstructedType(
+            factoryExpression,
+            serviceType,
+            semanticModel);
         var serviceIdentifier = new ServiceIdentifier(serviceType, key, isKeyed);
         var hasEffectiveRegistration = _registrations.ContainsKey(serviceIdentifier);
         var orderedRegistration = new OrderedRegistration(
@@ -721,6 +725,7 @@ public sealed class RegistrationCollector
                 ? formattedKey
                 : null;
             var registration = new ServiceRegistration(
+                factoryConstructedType,
                 serviceType,
                 implementationType,
                 factoryExpression,
@@ -1105,6 +1110,10 @@ public sealed class RegistrationCollector
                 ? formattedKey
                 : null;
             var replacementRegistration = new ServiceRegistration(
+                ExtractFactoryConstructedType(
+                    factoryExpression,
+                    serviceType,
+                    semanticModel),
                 serviceType,
                 implementationType,
                 factoryExpression,
@@ -1124,6 +1133,42 @@ public sealed class RegistrationCollector
         }
 
         return true;
+    }
+
+    private static INamedTypeSymbol? ExtractFactoryConstructedType(
+        ExpressionSyntax? factoryExpression,
+        INamedTypeSymbol serviceType,
+        SemanticModel semanticModel)
+    {
+        if (factoryExpression is not LambdaExpressionSyntax lambda)
+        {
+            return null;
+        }
+
+        var returned = lambda.Body switch
+        {
+            ExpressionSyntax expressionBody => expressionBody,
+            BlockSyntax block
+                when block.Statements.Count == 1 &&
+                    block.Statements[0] is ReturnStatementSyntax { Expression: { } returnedValue } =>
+                returnedValue,
+            _ => null,
+        };
+
+        while (returned is ParenthesizedExpressionSyntax parenthesized)
+        {
+            returned = parenthesized.Expression;
+        }
+
+        if (returned is not BaseObjectCreationExpressionSyntax created ||
+            created.SyntaxTree != semanticModel.SyntaxTree ||
+            semanticModel.GetTypeInfo(created).Type is not INamedTypeSymbol createdType)
+        {
+            return null;
+        }
+
+        var conversion = semanticModel.Compilation.ClassifyConversion(createdType, serviceType);
+        return conversion.IsIdentity || conversion.IsReference ? createdType : null;
     }
 
     private static INamedTypeSymbol? ExtractRemoveAllServiceType(
@@ -2107,7 +2152,7 @@ public sealed class RegistrationCollector
             if (unwrapped is CastExpressionSyntax cast &&
                 semanticModel.GetTypeInfo(cast.Type).Type is { } castType &&
                 semanticModel.ClassifyConversion(cast.Expression, castType) is
-                    { IsIdentity: true } or { IsReference: true } or { IsBoxing: true })
+            { IsIdentity: true } or { IsReference: true } or { IsBoxing: true })
             {
                 unwrapped = cast.Expression;
                 continue;

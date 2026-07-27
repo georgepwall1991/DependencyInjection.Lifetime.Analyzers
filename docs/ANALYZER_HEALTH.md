@@ -1,16 +1,18 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.18 — DI031's diagnostic description now satisfies Roslyn's
-sentence-punctuation requirement, removing the `RS1033` analyzer-project warning without changing
-diagnostic behavior.
+**Current release candidate:** 3.5.19 — DI032 now captures direct factory-construction types while
+Roslyn's supplied syntax-action semantic model is active, removing the `RS1030` analyzer-project
+warning without changing the rule's diagnostic boundary.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.18
-**Base audited commit:** `692932f` (`origin/main`; release `v3.5.17` points to `692932f`)
-**Test result:** 2026-07-27 local Release build passed with 0 errors and 77 existing intentional
-sample/analyzer warnings, down from 78 after removing `RS1033`. The Release suite passed 2,731 tests
-with 0 failed and 0 skipped. The descriptor text change does not alter the diagnostic ID, title,
-message, severity, enablement, tags, or analyzer control flow.
+**Package version:** 3.5.19
+**Base audited commit:** `680dbba` (`origin/main`; release `v3.5.18` points to `a23fece`)
+**Test result:** 2026-07-27 local Release build passed with 0 errors and 76 existing intentional
+sample warnings, down from 77 after removing `RS1030`. The Release suite passed 2,732 tests with 0
+failed and 0 skipped. DI032's existing factory, target-typed creation, parenthesized creation, opaque
+factory, and user-defined-conversion tests remain green; a collector regression test now pins
+syntax-action capture of the constructed type. The public `ServiceRegistration` constructor is
+unchanged.
 
 ## Historical Release Snapshots
 
