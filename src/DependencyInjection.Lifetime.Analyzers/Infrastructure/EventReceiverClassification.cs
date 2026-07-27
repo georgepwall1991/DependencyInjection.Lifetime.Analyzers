@@ -17,6 +17,7 @@ internal enum EventReceiverKind
 {
     Unknown,
     StaticEvent,
+    StaticPublisher,
     InjectedMember,
     ConstructorParameter,
 }

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.13] - 2026-07-27
+
+### Fixed
+
+- **DI027 static readonly observables** (false negative) — direct static readonly reference fields
+  whose type implements `IObservable<T>` and that are
+  initialized exactly once with an object creation through an identity or implicit reference
+  conversion are now treated as process-lifetime publishers, so discarded subscriptions from
+  transient or scoped registered subscribers report. Mutable, null-initialized, directly,
+  deconstruction-, compound-, or increment/decrement-reassigned, writable-reference-escaped, and
+  null-producing-conversion fields remain silent; read-only reference aliases and publisher-member
+  mutation preserve the diagnostic. The shipped descriptor now documents this static publisher
+  tier.
+
 ## [3.5.12] - 2026-07-27
 
 ### Fixed
