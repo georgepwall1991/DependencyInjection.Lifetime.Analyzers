@@ -1775,6 +1775,140 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 .WithArguments("IScopedService", "IScopedService"));
     }
 
+    [Theory]
+    [InlineData("(candidate = root) is not null && evaluateOther")]
+    [InlineData("(candidate = root) is null || evaluateOther")]
+    [InlineData("(candidate = root) ?? root")]
+    public async Task ConditionalProviderAliasWithShortCircuitLeftRootWrite_ReportsDiagnostic(
+        string shortCircuitExpression)
+    {
+        var source = (Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool evaluateOther,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    var evaluated = SHORT_CIRCUIT_EXPRESSION;
+                    {|#0:(chooseCandidate ? candidate : root).GetRequiredService<IScopedService>()|};
+                }
+            }
+            """).Replace(
+                "SHORT_CIRCUIT_EXPRESSION",
+                shortCircuitExpression,
+                StringComparison.Ordinal);
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Theory]
+    [InlineData("evaluateLeft && (candidate = root) is not null")]
+    [InlineData("evaluateLeft || (candidate = root) is not null")]
+    [InlineData("maybeProvider ?? (candidate = root)")]
+    public async Task ConditionalProviderAliasWithShortCircuitRightRootWrite_NoDiagnostic(
+        string shortCircuitExpression)
+    {
+        var source = (Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool evaluateLeft,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    IServiceProvider? maybeProvider = scope.ServiceProvider;
+                    var evaluated = SHORT_CIRCUIT_EXPRESSION;
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """).Replace(
+                "SHORT_CIRCUIT_EXPRESSION",
+                shortCircuitExpression,
+                StringComparison.Ordinal);
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderAliasWithNullConditionalShortCircuitLeftWrite_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    object? maybe,
+                    bool evaluateOther,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    var evaluated = maybe?.Equals(candidate = root) == true && evaluateOther;
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalProviderAliasWithNullConditionalReceiverRootWrite_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool evaluateOther,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider? candidate = scope.ServiceProvider;
+                    var evaluated = (candidate = root)?.Equals(root) == true && evaluateOther;
+                    {|#0:(chooseCandidate ? candidate : root).GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
     [Fact]
     public async Task ConditionalProviderAliasCopiedFromBranchDependentWrite_NoDiagnostic()
     {

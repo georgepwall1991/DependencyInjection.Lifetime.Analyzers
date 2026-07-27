@@ -379,9 +379,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
 
         foreach (var tree in compilation.SyntaxTrees)
         {
-            #pragma warning disable RS1030
+#pragma warning disable RS1030
             var semanticModel = compilation.GetSemanticModel(tree);
-            #pragma warning restore RS1030
+#pragma warning restore RS1030
             var facts = new ProviderFacts();
             var root = tree.GetRoot();
             var gotoSkippedAssignmentPositions = GetGotoSkippedAssignmentPositions(root);
@@ -696,7 +696,7 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
                 return true;
             }
 
-            if (IsControlFlowDependentProviderWrite(ancestor))
+            if (IsControlFlowDependentProviderWrite(ancestor, assignment))
             {
                 return false;
             }
@@ -941,7 +941,9 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool IsControlFlowDependentProviderWrite(SyntaxNode ancestor) =>
+    private static bool IsControlFlowDependentProviderWrite(
+        SyntaxNode ancestor,
+        AssignmentExpressionSyntax assignment) =>
         ancestor is IfStatementSyntax or
             SwitchStatementSyntax or
             SwitchExpressionSyntax or
@@ -954,10 +956,13 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             LocalFunctionStatementSyntax or
             QueryExpressionSyntax or
             ConditionalExpressionSyntax ||
+        ancestor is ConditionalAccessExpressionSyntax conditionalAccess &&
+            conditionalAccess.WhenNotNull.Span.Contains(assignment.Span) ||
         ancestor is BinaryExpressionSyntax binary &&
-            binary.Kind() is SyntaxKind.LogicalAndExpression or
+            (binary.Kind() is SyntaxKind.LogicalAndExpression or
                 SyntaxKind.LogicalOrExpression or
-                SyntaxKind.CoalesceExpression;
+                SyntaxKind.CoalesceExpression) &&
+            binary.Right.Span.Contains(assignment.Span);
 
     private static ImmutableHashSet<INamedTypeSymbol> GetSingletonImplementationTypes(
         RegistrationCollector registrationCollector)

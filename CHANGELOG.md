@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.15] - 2026-07-27
+
+### Fixed
+
+- **DI019 short-circuit left-operand provider writes** (false negative) — provider assignments in the always-evaluated left operand of `&&`, `||`, or `??` now retain path stability for later all-root conditional joins. Assignments in the conditionally evaluated right operand remain conservative, so a root write that may be skipped cannot create a false positive. A nested null-conditional `WhenNotNull` region remains conditional even inside a short-circuit left operand, while an assignment in the null-conditional receiver remains definite.
+
 ## [3.5.14] - 2026-07-27
 
 ### Fixed
