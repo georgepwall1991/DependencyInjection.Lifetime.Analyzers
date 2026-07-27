@@ -1775,6 +1775,68 @@ public class DI019_RootScopedResolutionAnalyzerTests
                 .WithArguments("IScopedService", "IScopedService"));
     }
 
+    [Fact]
+    public async Task ConditionalProviderAliasWithTernaryConditionRootWrite_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services, bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    var evaluated = (candidate = root) is not null ? 1 : 0;
+                    {|#0:(chooseCandidate ? candidate : root).GetRequiredService<IScopedService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService"));
+    }
+
+    [Theory]
+    [InlineData("promote ? (candidate = root) : root")]
+    [InlineData("promote ? root : (candidate = root)")]
+    public async Task ConditionalProviderAliasWithTernaryArmRootWrite_NoDiagnostic(
+        string conditionalExpression)
+    {
+        var source = (Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class Startup
+            {
+                public void Configure(
+                    IServiceCollection services,
+                    bool promote,
+                    bool chooseCandidate)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    using var root = services.BuildServiceProvider();
+                    using var scope = root.CreateScope();
+                    IServiceProvider candidate = scope.ServiceProvider;
+                    var evaluated = CONDITIONAL_EXPRESSION;
+                    (chooseCandidate ? candidate : root).GetRequiredService<IScopedService>();
+                }
+            }
+            """).Replace(
+                "CONDITIONAL_EXPRESSION",
+                conditionalExpression,
+                StringComparison.Ordinal);
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     [Theory]
     [InlineData("(candidate = root) is not null && evaluateOther")]
     [InlineData("(candidate = root) is null || evaluateOther")]

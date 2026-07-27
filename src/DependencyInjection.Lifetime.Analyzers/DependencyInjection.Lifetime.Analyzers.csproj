@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.5.15</Version>
+    <Version>3.5.16</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI019 now preserves path stability for provider assignments in the always-evaluated left operand of &amp;&amp;, ||, or ??, so later all-root conditional provider joins still report scoped resolutions from root. Writes in the conditionally evaluated right operand remain conservative and do not create false root-provider facts. Nested null-conditional WhenNotNull writes remain conditional, while writes in the null-conditional receiver remain definite.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI019 now preserves path stability for provider assignments in a ternary expression's always-evaluated condition, so later all-root conditional provider joins still report scoped resolutions from root. Writes in either ternary result arm remain conservative because only one arm executes.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>
