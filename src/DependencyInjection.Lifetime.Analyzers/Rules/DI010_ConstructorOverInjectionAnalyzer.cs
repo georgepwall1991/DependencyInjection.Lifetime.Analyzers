@@ -102,14 +102,18 @@ public sealed class DI010_ConstructorOverInjectionAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            var activationType = implementationType.IsUnboundGenericType
+                ? implementationType.OriginalDefinition
+                : implementationType;
+
             var constructors = ConstructorSelection.GetLikelyActivationConstructors(
-                implementationType,
+                activationType,
                 parameter => IsResolvableConstructorParameter(parameter, resolutionEngine));
 
             ReportIfAnyConstructorOverInjected(
                 context,
                 registration.Location,
-                implementationType.Name,
+                activationType.Name,
                 constructors,
                 wellKnownTypes,
                 maxDependencies);

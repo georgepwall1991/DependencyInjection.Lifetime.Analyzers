@@ -59,6 +59,49 @@ public class DI010_ConstructorOverInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task OpenGenericConstructor_WithFiveDependencies_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IDep1 { }
+            public class Dep1 : IDep1 { }
+            public interface IDep2 { }
+            public class Dep2 : IDep2 { }
+            public interface IDep3 { }
+            public class Dep3 : IDep3 { }
+            public interface IDep4 { }
+            public class Dep4 : IDep4 { }
+            public interface IDep5 { }
+            public class Dep5 : IDep5 { }
+
+            public interface IRepository<T> { }
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IDep1 d1, IDep2 d2, IDep3 d3, IDep4 d4, IDep5 d5) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDep1, Dep1>();
+                    services.AddScoped<IDep2, Dep2>();
+                    services.AddScoped<IDep3, Dep3>();
+                    services.AddScoped<IDep4, Dep4>();
+                    services.AddScoped<IDep5, Dep5>();
+                    {|#0:services.AddScoped(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI010_ConstructorOverInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ConstructorOverInjection)
+                .WithLocation(0)
+                .WithArguments("Repository", 5));
+    }
+
+    [Fact]
     public async Task Constructor_WithSixDependencies_ReportsDiagnostic()
     {
         var source = Usings + """
