@@ -2041,6 +2041,34 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
     }
 
     [Fact]
+    public async Task OpenGenericSingleton_RemovedByClear_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IScopedService { }
+
+            public class Repository<T> : IRepository<T>
+            {
+                public Repository(IScopedService scoped) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                    services.Clear();
+                }
+            }
+
+            public class ScopedService : IScopedService { }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task OpenGenericSingleton_ReactivatedScopedDependency_ReportsDiagnostic()
     {
         var source = Usings + """

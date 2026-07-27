@@ -417,18 +417,20 @@ public sealed class RegistrationCollector
 
         var isExtension = IsServiceCollectionExtensionMethod(methodSymbol);
         var isAddMethod = IsServiceCollectionAddMethod(methodSymbol);
+        var isClearMethod = IsServiceCollectionClearMethod(methodSymbol);
         var isInsertMethod = IsServiceCollectionInsertMethod(methodSymbol);
 
         // Check if this is an extension method on IServiceCollection or a descriptor
         // mutation exposed through the collection interfaces it inherits.
-        if (!isExtension && !isAddMethod && !isInsertMethod)
+        if (!isExtension && !isAddMethod && !isClearMethod && !isInsertMethod)
         {
             return;
         }
 
         // Instance collection methods are shared by other descriptor collections, so
         // verify that the actual receiver is IServiceCollection before recording them.
-        if ((isAddMethod || isInsertMethod) && !IsReceiverServiceCollection(invocation, semanticModel))
+        if ((isAddMethod || isClearMethod || isInsertMethod) &&
+            !IsReceiverServiceCollection(invocation, semanticModel))
         {
             return;
         }
@@ -924,6 +926,53 @@ public sealed class RegistrationCollector
         return false;
     }
 
+    private bool IsServiceCollectionClearMethod(IMethodSymbol method)
+    {
+        if (method.Name != "Clear" ||
+            method.IsStatic ||
+            !method.ReturnsVoid ||
+            method.Parameters.Length != 0)
+        {
+            return false;
+        }
+
+        if (IsServiceDescriptorCollectionType(method.ContainingType))
+        {
+            return true;
+        }
+
+        // As with Insert, trust the BCL interface member and metadata implementations,
+        // but do not assume a source-defined same-shaped method has collection semantics.
+        if (method.Locations.Any(location => location.IsInSource))
+        {
+            return false;
+        }
+
+        foreach (var interfaceType in method.ContainingType.AllInterfaces)
+        {
+            if (!IsServiceDescriptorCollectionType(interfaceType))
+            {
+                continue;
+            }
+
+            foreach (var interfaceMember in interfaceType.GetMembers("Clear").OfType<IMethodSymbol>())
+            {
+                if (method.ContainingType.FindImplementationForInterfaceMember(interfaceMember) is IMethodSymbol implementation &&
+                    SymbolEqualityComparer.Default.Equals(implementation, method))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsServiceDescriptorCollectionType(INamedTypeSymbol type) =>
+        type.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_ICollection_T &&
+        type.TypeArguments.Length == 1 &&
+        IsServiceDescriptorType(type.TypeArguments[0]);
+
     private bool IsServiceDescriptorListType(INamedTypeSymbol type) =>
         type.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IList_T &&
         type.TypeArguments.Length == 1 &&
@@ -1034,7 +1083,14 @@ public sealed class RegistrationCollector
         bool isKeyed = false;
         RegistrationMutationKind kind;
 
-        if (methodName == "RemoveAll")
+        if (methodName == "Clear")
+        {
+            kind = RegistrationMutationKind.Clear;
+            // Clear has no per-service target. The collection type is retained as a non-null
+            // marker for older consumers that intentionally understand only typed mutations.
+            serviceType = _serviceCollectionType;
+        }
+        else if (methodName == "RemoveAll")
         {
             kind = RegistrationMutationKind.RemoveAll;
             serviceType = ExtractRemoveAllServiceType(methodSymbol, invocation, semanticModel);

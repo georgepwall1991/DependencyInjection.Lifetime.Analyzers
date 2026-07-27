@@ -90,7 +90,9 @@ internal sealed class DefinitelyRemovedRegistrationSet
                 {
                     removedRegistrations.ApplyMutation(mutation, activeRegistrations);
                 }
-                else if (mutation.Kind == RegistrationMutationKind.RemoveAll)
+                else if (mutation.Kind is
+                         RegistrationMutationKind.Clear or
+                         RegistrationMutationKind.RemoveAll)
                 {
                     possibleRemovals.Add(mutation);
                 }
@@ -242,7 +244,9 @@ internal sealed class DefinitelyRemovedRegistrationSet
         OrderedRegistrationMutation mutation,
         List<ServiceRegistration> activeRegistrations)
     {
-        if (mutation.Kind == RegistrationMutationKind.RemoveAll)
+        if (mutation.Kind is
+            RegistrationMutationKind.Clear or
+            RegistrationMutationKind.RemoveAll)
         {
             for (var i = activeRegistrations.Count - 1; i >= 0; i--)
             {
@@ -282,15 +286,18 @@ internal sealed class DefinitelyRemovedRegistrationSet
         OrderedRegistrationMutation mutation,
         ServiceRegistration registration) =>
         string.Equals(mutation.FlowKey, registration.FlowKey, StringComparison.Ordinal) &&
-        SymbolEqualityComparer.Default.Equals(mutation.ServiceType, registration.ServiceType) &&
-        mutation.IsKeyed == registration.IsKeyed &&
-        Equals(mutation.Key, registration.Key);
+        (mutation.Kind == RegistrationMutationKind.Clear ||
+         (SymbolEqualityComparer.Default.Equals(mutation.ServiceType, registration.ServiceType) &&
+          mutation.IsKeyed == registration.IsKeyed &&
+          Equals(mutation.Key, registration.Key)));
 
     private bool CanPotentiallyReactivate(
         OrderedRegistrationMutation mutation,
         ServiceRegistration registration)
     {
-        if (mutation.Kind != RegistrationMutationKind.RemoveAll ||
+        if (mutation.Kind is not (
+                RegistrationMutationKind.Clear or
+                RegistrationMutationKind.RemoveAll) ||
             !CanMutationTargetRegistration(mutation, registration) ||
             !IsSameExecutionScope(mutation.Location, registration.Location))
         {
@@ -398,7 +405,9 @@ internal sealed class DefinitelyRemovedRegistrationSet
         OrderedRegistrationMutation mutation,
         ServiceRegistration registration)
     {
-        if (mutation.Kind != RegistrationMutationKind.RemoveAll ||
+        if (mutation.Kind is not (
+                RegistrationMutationKind.Clear or
+                RegistrationMutationKind.RemoveAll) ||
             !CanMutationTargetRegistration(mutation, registration) ||
             !IsSameExecutionScope(mutation.Location, registration.Location))
         {

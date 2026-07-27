@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.19
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.20
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.19">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.20">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.19" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.20" />
 ```
 
 Then reference it from the project file:
@@ -99,7 +99,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## 30-second path
 
-1. Reference the package with `PrivateAssets="all"` (version `3.5.19` above).
+1. Reference the package with `PrivateAssets="all"` (version `3.5.20` above).
 2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
 3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
 4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
