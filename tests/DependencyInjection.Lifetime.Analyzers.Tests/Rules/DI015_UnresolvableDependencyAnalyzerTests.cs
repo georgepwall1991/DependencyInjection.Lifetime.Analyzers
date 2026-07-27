@@ -1704,6 +1704,53 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task ClosedAnyKeyDependencyPrecedesExactKeyOpenGeneric_NoDiagnostic()
+    {
+        var source = GoatUsings + """
+            public interface ISelector<T> { }
+            public interface IMissing { }
+
+            public sealed class ClosedSelector : ISelector<string> { }
+
+            public sealed class BrokenSelector<T> : ISelector<T>
+            {
+                public BrokenSelector(IMissing missing) { }
+            }
+
+            public interface IRootService { }
+            public sealed class RootService : IRootService
+            {
+                public RootService(
+                    [FromKeyedServices("primary")]
+                    ISelector<string> selector) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedSingleton<ISelector<string>, ClosedSelector>(
+                        KeyedService.AnyKey);
+                    services.AddKeyedTransient(
+                        typeof(ISelector<>),
+                        "primary",
+                        typeof(BrokenSelector<>));
+                    services.AddSingleton<IRootService, RootService>();
+                }
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI015_UnresolvableDependencyAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies =
+                AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>
+                    .ReferenceAssembliesWithLatestDi,
+        };
+        await test.RunAsync();
+    }
+
+    [Fact]
     public async Task RegisteredService_RemovedByRemoveAll_NoDiagnostic()
     {
         var source = Usings + """

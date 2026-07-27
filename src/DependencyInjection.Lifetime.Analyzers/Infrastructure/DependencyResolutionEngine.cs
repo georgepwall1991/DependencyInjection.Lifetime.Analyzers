@@ -409,34 +409,109 @@ internal sealed class DependencyResolutionEngine
         object? key,
         bool isKeyed)
     {
-        foreach (var registration in _availableRegistrations)
+        var candidates = GetCandidateRegistrationsForServiceAndKey(
+                dependencyType,
+                key,
+                isKeyed)
+            .ToArray();
+        foreach (var registration in candidates)
         {
-            if (registration.IsKeyed != isKeyed ||
-                !IsMatchingKey(registration.Key, key))
-            {
-                continue;
-            }
+            yield return registration;
+        }
 
-            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, dependencyType))
+        if (candidates.Length > 0)
+        {
+            yield break;
+        }
+
+        var hasConcreteKey =
+            isKeyed &&
+            !SyntaxValueHelpers.IsKeyedServiceAnyKey(key);
+        if (hasConcreteKey)
+        {
+            candidates = GetCandidateRegistrationsForServiceAndKey(
+                    dependencyType,
+                    KeyedServiceAnyKey.Instance,
+                    isKeyed: true)
+                .ToArray();
+            foreach (var registration in candidates)
             {
                 yield return registration;
-                continue;
             }
 
-            if (dependencyType is not INamedTypeSymbol namedDependencyType ||
-                !namedDependencyType.IsGenericType ||
-                namedDependencyType.IsUnboundGenericType)
+            if (candidates.Length > 0)
             {
-                continue;
+                yield break;
             }
+        }
 
-            var openDependencyType = namedDependencyType.ConstructUnboundGenericType();
-            if (SymbolEqualityComparer.Default.Equals(registration.ServiceType, openDependencyType))
+        if (
+            dependencyType is not INamedTypeSymbol namedDependencyType ||
+            !namedDependencyType.IsGenericType ||
+            namedDependencyType.IsUnboundGenericType)
+        {
+            yield break;
+        }
+
+        var openDependencyType = namedDependencyType.ConstructUnboundGenericType();
+        candidates = GetCandidateRegistrationsForServiceAndKey(
+                openDependencyType,
+                key,
+                isKeyed)
+            .ToArray();
+        foreach (var registration in candidates)
+        {
+            yield return registration;
+        }
+
+        if (candidates.Length > 0 || !hasConcreteKey)
+        {
+            yield break;
+        }
+
+        foreach (var registration in GetCandidateRegistrationsForServiceAndKey(
+                     openDependencyType,
+                     KeyedServiceAnyKey.Instance,
+                     isKeyed: true))
+        {
+            yield return registration;
+        }
+    }
+
+    private IEnumerable<ServiceRegistration> GetCandidateRegistrationsForServiceAndKey(
+        ITypeSymbol serviceType,
+        object? key,
+        bool isKeyed)
+    {
+        var matchingRegistrations = _availableRegistrations
+            .Where(registration =>
+                registration.IsKeyed == isKeyed &&
+                Equals(registration.Key, key) &&
+                SymbolEqualityComparer.Default.Equals(
+                    registration.ServiceType,
+                    serviceType))
+            .ToList();
+        var selectedRegistration =
+            SelectEffectiveSingleServiceRegistration(matchingRegistrations);
+        if (selectedRegistration is not null)
+        {
+            yield return selectedRegistration;
+
+            foreach (var opaqueCandidate in matchingRegistrations.Where(
+                         registration =>
+                             !ReferenceEquals(registration, selectedRegistration) &&
+                             registration.FactoryExpression is not null))
             {
-                yield return registration;
+                yield return opaqueCandidate;
             }
         }
     }
+
+    internal static ServiceRegistration? SelectEffectiveSingleServiceRegistration(
+        IReadOnlyList<ServiceRegistration> registrations) =>
+        registrations.LastOrDefault(static registration =>
+            !registration.PrependToCollection) ??
+        registrations.FirstOrDefault();
 
     private static INamedTypeSymbol? TryGetClosedImplementationTypeForDependency(
         ITypeSymbol dependencyType,
@@ -559,17 +634,6 @@ internal sealed class DependencyResolutionEngine
         bool hasInheritedKey,
         string? inheritedKeyLiteral) =>
         KeyedServiceHelpers.GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
-
-    private static bool IsMatchingKey(object? registrationKey, object? requestKey)
-    {
-        if (Equals(registrationKey, requestKey))
-        {
-            return true;
-        }
-
-        return !SyntaxValueHelpers.IsKeyedServiceAnyKey(requestKey) &&
-               SyntaxValueHelpers.IsKeyedServiceAnyKey(registrationKey);
-    }
 
     private static bool IsServiceImplementationCompatible(
         INamedTypeSymbol serviceType,

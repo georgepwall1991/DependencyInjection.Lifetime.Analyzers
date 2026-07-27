@@ -431,6 +431,33 @@ DI009 follows the single likely activation constructor the container can actuall
 
 Dependency lifetimes are looked up against user registrations first and then fall back to the shared known-framework classifier, so open-generic singletons that capture `IOptionsSnapshot<T>` are reported as scoped captures even when the application does not register Options manually. `IOptions<T>` and `IOptionsMonitor<T>` keep their singleton lifetime and stay quiet.
 
+For `IEnumerable<T>`, the container includes every matching exact closed and applicable open-generic
+registration. DI009 therefore takes the worst lifetime across both sets: an exact closed singleton
+element cannot hide an additional scoped or transient open-generic element. Matching keyed
+registrations use the same rule. A concrete-key enumerable uses only registrations for that exact
+key; `KeyedService.AnyKey` descriptors do not participate. The final effective
+`AnyKey`-registered consumer with parameterless `[FromKeyedServices]` runs constructor selection
+and lifetime evaluation against every concrete key where an exact registration for the same
+service does not shadow it, reporting each constructor parameter once at its worst
+lifetime across those keys and again without including the `AnyKey` descriptor. The unknown-key
+fallback keeps an empty enumerable rather than reaggregating concrete keys already shadowed for
+that consumer. Ordinary single-service resolution still uses
+`AnyKey` as a fallback only when no exact-key registration exists. Constructor-resolvability
+analysis follows the same precedence, so a broken exact-key registration cannot be bypassed by a
+resolvable `AnyKey` registration when selecting the activation constructor. Within the selected
+exact or `AnyKey` tier, the final effective descriptor wins, so an earlier resolvable registration
+cannot bypass a later broken registration. Open-generic
+implementations whose runtime generic constraints
+reject the requested element type are excluded, while an unconstrained consumer type parameter
+remains a potential match unless its class, struct, base-type, interface, constructor, dependent, or
+composite constraints prove the sets disjoint. Nested service and implementation types include
+containing-type arguments or parameters in runtime closure order, and nested invariant generic constraints keep their concrete
+generic shape instead of treating an entire composite argument as a wildcard. Concrete base-class
+constraints are disjoint from `struct` constraints except for CLR value-type bases such as `Enum`.
+Ordinary single-service resolution is unchanged and
+selects the final effective descriptor from the first available runtime tier: closed exact key,
+closed `AnyKey`, open-generic exact key, then open-generic `AnyKey`.
+
 **Code Fix:** Yes. Can adjust lifetime for open generic registrations.
 
 ---
