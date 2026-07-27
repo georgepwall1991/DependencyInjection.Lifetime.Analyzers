@@ -988,4 +988,46 @@ public class DI021_ScopePerInvocationCodeFixTests
                     .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
                 EquivalenceKey);
     }
+
+    [Fact]
+    public async Task ThreadingTimer_ForwardedStateParameter_NoFixOffered()
+    {
+        // The unsafe use is in a delegated method that can have callers unrelated to the timer.
+        // Rewriting that method would change those callers, so the fix must stay unavailable.
+        var source = Usings + Stubs + """
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private Timer _timer;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                    _timer = null;
+                }
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Handle, db, 0, 1000);
+                }
+
+                private void Handle(object state)
+                {
+                    Consume((AppDbContext)state);
+                }
+
+                private void Consume(AppDbContext db)
+                {
+                    {|DI021:db|}.SaveChanges();
+                }
+            }
+            """;
+
+        await CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+            .VerifyCodeFixNotOfferedAsync(
+                source,
+                CodeFixVerifier<DI021_ConcurrentHandlerSharedStateAnalyzer, DI021_ScopePerInvocationCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ConcurrentHandlerSharedState),
+                EquivalenceKey);
+    }
 }

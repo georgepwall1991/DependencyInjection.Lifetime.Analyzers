@@ -39,7 +39,7 @@ public sealed class DI021_ScopePerInvocationCodeFixProvider : CodeFixProvider
     {
         var diagnostic = context.Diagnostics[0];
         if (!diagnostic.Properties.TryGetValue("CaptureKind", out var captureKind) ||
-            captureKind is null or "ScopeResolution" ||
+            captureKind is null or "ScopeResolution" or "SharedHandlerParameter" ||
             !diagnostic.Properties.TryGetValue("ServiceTypeName", out var serviceTypeName) ||
             serviceTypeName is null ||
             !diagnostic.Properties.TryGetValue("SymbolName", out var symbolName) ||
@@ -444,18 +444,18 @@ public sealed class DI021_ScopePerInvocationCodeFixProvider : CodeFixProvider
 
             case AnonymousFunctionExpressionSyntax anonymous when
                 anonymous.Body is ExpressionSyntax expression:
-            {
-                // Convert the expression-bodied lambda to a block so the scope statements fit.
-                StatementSyntax bodyStatement = plan.ExpressionBodyNeedsReturn
-                    ? SyntaxFactory.ReturnStatement(expression.WithoutTrivia())
-                    : SyntaxFactory.ExpressionStatement(expression.WithoutTrivia());
-                var newBlock = SyntaxFactory.Block(
-                    insertedStatements[0],
-                    insertedStatements[1],
-                    bodyStatement.WithAdditionalAnnotations(Formatter.Annotation));
-                return WithLambdaBlockBody(anonymous, newBlock)
-                    ?.WithAdditionalAnnotations(Formatter.Annotation);
-            }
+                {
+                    // Convert the expression-bodied lambda to a block so the scope statements fit.
+                    StatementSyntax bodyStatement = plan.ExpressionBodyNeedsReturn
+                        ? SyntaxFactory.ReturnStatement(expression.WithoutTrivia())
+                        : SyntaxFactory.ExpressionStatement(expression.WithoutTrivia());
+                    var newBlock = SyntaxFactory.Block(
+                        insertedStatements[0],
+                        insertedStatements[1],
+                        bodyStatement.WithAdditionalAnnotations(Formatter.Annotation));
+                    return WithLambdaBlockBody(anonymous, newBlock)
+                        ?.WithAdditionalAnnotations(Formatter.Annotation);
+                }
 
             default:
                 return null;

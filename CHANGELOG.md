@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.9] - 2026-07-27
+
+### Fixed
+
+- **DI021 one-hop timer-state provenance** (false negative and false positive) — exact shared
+  `System.Threading.Timer` state parameters now retain their shared identity through one same-type
+  thin delegation hop, including constructed generic callbacks and targets and object-typed target
+  parameters. Unsafe `DbContext` use or captured-provider resolution in the delegated target
+  reports, while locking the exact forwarded shared gate suppresses the diagnostic. A provably
+  null timer state no longer creates false shared-service provenance.
+  Transformed arguments, deeper chains, and cross-type targets remain silent. The
+  scope-per-invocation fixer is deliberately unavailable for forwarded handler parameters because
+  rewriting the delegated method could affect unrelated callers.
+
 ## [3.5.8] - 2026-07-27
 
 ### Fixed
