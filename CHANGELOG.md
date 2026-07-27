@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.19] - 2026-07-27
+
+### Fixed
+
+- **DI032 analyzer-context compliance** — direct factory-construction types are now captured while the registration syntax action's supplied semantic model is active, so compilation-end analysis no longer calls `Compilation.GetSemanticModel`. This removes Roslyn warning `RS1030` without changing DI032's direct-object-creation, conversion, or disposal boundaries.
+
 ## [3.5.18] - 2026-07-27
 
 ### Fixed

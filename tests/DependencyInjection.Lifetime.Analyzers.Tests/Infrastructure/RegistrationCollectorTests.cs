@@ -78,9 +78,19 @@ public class RegistrationCollectorTests
     [
         MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(IServiceProvider).Assembly.Location),
+        MetadataReference.CreateFromFile(GetTrustedPlatformAssemblyPath("System.Runtime.dll")),
         MetadataReference.CreateFromFile(typeof(Microsoft.Extensions.DependencyInjection.IServiceScope).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions).Assembly.Location)
     ];
+
+    private static string GetTrustedPlatformAssemblyPath(string fileName) =>
+        ((string)System.AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(System.IO.Path.PathSeparator)
+            .Single(path =>
+                string.Equals(
+                    System.IO.Path.GetFileName(path),
+                    fileName,
+                    System.StringComparison.OrdinalIgnoreCase));
 
     private static (Compilation compilation, SemanticModel semanticModel, InvocationExpressionSyntax[] invocations)
         CreateCompilationWithInvocations(string source, bool includeDiReferences = true)
@@ -209,6 +219,38 @@ public class RegistrationCollectorTests
         Assert.NotNull(registration.ImplementationType);
         Assert.Equal("MyService", registration.ImplementationType.Name);
         Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
+    }
+
+    [Fact]
+    public void AnalyzeInvocation_FactoryObjectCreation_RecordsConstructedType()
+    {
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            public interface IMyService { }
+            public class MyService : IMyService { }
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService>((IServiceProvider _) => new MyService());
+                }
+            }
+            """;
+        var (compilation, semanticModel, invocations) = CreateCompilationWithInvocations(source);
+        var errors = compilation.GetDiagnostics()
+            .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.True(errors.Length == 0, string.Join(System.Environment.NewLine, errors));
+        var collector = RegistrationCollector.Create(compilation)!;
+
+        foreach (var invocation in invocations)
+        {
+            collector.AnalyzeInvocation(invocation, semanticModel);
+        }
+
+        var registration = Assert.Single(collector.Registrations);
+        Assert.Equal("MyService", registration.FactoryConstructedType?.Name);
     }
 
     [Fact]

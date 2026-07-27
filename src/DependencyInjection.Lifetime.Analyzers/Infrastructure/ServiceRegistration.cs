@@ -25,6 +25,12 @@ public sealed class ServiceRegistration
     public ExpressionSyntax? FactoryExpression { get; }
 
     /// <summary>
+    /// Gets the concrete type directly constructed by a factory lambda when the factory body is
+    /// a single object creation compatible with <see cref="ServiceType"/>.
+    /// </summary>
+    internal INamedTypeSymbol? FactoryConstructedType { get; }
+
+    /// <summary>
     /// Gets whether this registration is backed by a pre-built implementation instance.
     /// </summary>
     public bool HasImplementationInstance { get; }
@@ -125,10 +131,53 @@ public sealed class ServiceRegistration
         ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes = default,
         bool prependToCollection = false
     )
+        : this(
+            factoryConstructedType: null,
+            serviceType,
+            implementationType,
+            factoryExpression,
+            hasImplementationInstance,
+            key,
+            isKeyed,
+            lifetime,
+            location,
+            keyLiteral,
+            flowKey,
+            order,
+            skipIfAlreadyRegistered,
+            isTryAdd,
+            skipIfSameImplementationAlreadyRegistered,
+            implementationInstanceTypeIsExact,
+            factoryProvidedParameterTypes,
+            prependToCollection)
+    {
+    }
+
+    internal ServiceRegistration(
+        INamedTypeSymbol? factoryConstructedType,
+        INamedTypeSymbol serviceType,
+        INamedTypeSymbol? implementationType,
+        ExpressionSyntax? factoryExpression,
+        bool hasImplementationInstance,
+        object? key,
+        bool isKeyed,
+        ServiceLifetime lifetime,
+        Location location,
+        string? keyLiteral = null,
+        string? flowKey = null,
+        int order = 0,
+        bool skipIfAlreadyRegistered = false,
+        bool isTryAdd = false,
+        bool skipIfSameImplementationAlreadyRegistered = false,
+        bool implementationInstanceTypeIsExact = true,
+        ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes = default,
+        bool prependToCollection = false
+    )
     {
         ServiceType = serviceType;
         ImplementationType = implementationType;
         FactoryExpression = factoryExpression;
+        FactoryConstructedType = factoryConstructedType;
         HasImplementationInstance = hasImplementationInstance;
         Key = key;
         KeyLiteral = keyLiteral;

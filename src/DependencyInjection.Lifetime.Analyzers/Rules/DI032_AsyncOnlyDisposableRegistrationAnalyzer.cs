@@ -75,11 +75,7 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                     // registration, so a lambda that constructs a known type counts too.
                     var implementationType =
                         registration.ImplementationType
-                        ?? GetConstructedFactoryType(
-                            registration.FactoryExpression,
-                            registration.ServiceType,
-                            endContext.Compilation
-                        );
+                        ?? registration.FactoryConstructedType;
                     if (implementationType is null)
                     {
                         continue;
@@ -118,56 +114,6 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                 }
             });
         });
-    }
-
-    /// <summary>
-    /// The type a factory lambda constructs when its body is a single object creation. Anything
-    /// less direct — a branch, a helper call, a builder — is left alone.
-    /// </summary>
-    private static INamedTypeSymbol? GetConstructedFactoryType(
-        ExpressionSyntax? factoryExpression,
-        INamedTypeSymbol serviceType,
-        Compilation compilation
-    )
-    {
-        if (factoryExpression is not LambdaExpressionSyntax lambda)
-        {
-            return null;
-        }
-
-        var returned = lambda.Body switch
-        {
-            ExpressionSyntax expressionBody => expressionBody,
-            BlockSyntax block
-                when block.Statements.Count == 1
-                    && block.Statements[0]
-                        is ReturnStatementSyntax { Expression: { } returnedValue } => returnedValue,
-            _ => null,
-        };
-
-        // Parentheses preserve the value; `new()` is target-typed but still an object creation.
-        while (returned is ParenthesizedExpressionSyntax parenthesized)
-        {
-            returned = parenthesized.Expression;
-        }
-
-        var created = returned as BaseObjectCreationExpressionSyntax;
-
-        if (created is null || !compilation.ContainsSyntaxTree(created.SyntaxTree))
-        {
-            return null;
-        }
-
-        var semanticModel = compilation.GetSemanticModel(created.SyntaxTree);
-        if (semanticModel.GetTypeInfo(created).Type is not INamedTypeSymbol createdType)
-        {
-            return null;
-        }
-
-        // A user-defined conversion means the container never holds the constructed object at
-        // all, so its disposal story says nothing about the registered service.
-        var conversion = compilation.ClassifyConversion(createdType, serviceType);
-        return conversion.IsIdentity || conversion.IsReference ? createdType : null;
     }
 
     /// <summary>Source order, treating locations in different files as incomparable.</summary>
