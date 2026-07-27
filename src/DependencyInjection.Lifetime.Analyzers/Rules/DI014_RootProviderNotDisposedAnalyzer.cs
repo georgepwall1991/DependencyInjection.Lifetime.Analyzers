@@ -69,7 +69,10 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(diagnostic);
     }
 
-    private static bool IsProperlyDisposed(IInvocationOperation invocation, SemanticModel semanticModel)
+    internal static bool IsProperlyDisposed(
+        IInvocationOperation invocation,
+        SemanticModel semanticModel
+    )
     {
         // Case 1: Result is used in a using statement or declaration
         if (IsInUsingContext(invocation))
@@ -1998,6 +2001,13 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
     {
         targetSymbol = null;
 
+        if (semanticModel.GetOperation(invocationSyntax) is not IInvocationOperation invocation ||
+            invocation.TargetMethod.IsExtensionMethod ||
+            invocation.TargetMethod.Parameters.Length != 0)
+        {
+            return false;
+        }
+
         if (invocationSyntax.Expression is MemberAccessExpressionSyntax memberAccess)
         {
             if (memberAccess.Name.Identifier.Text is not ("Dispose" or "DisposeAsync"))
@@ -2005,7 +2015,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            targetSymbol = semanticModel.GetSymbolInfo(memberAccess.Expression).Symbol;
+            targetSymbol = GetSameInstanceTargetSymbol(memberAccess.Expression, semanticModel);
             return targetSymbol is not null;
         }
 
@@ -2013,11 +2023,41 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             memberBinding.Name.Identifier.Text is "Dispose" or "DisposeAsync" &&
             invocationSyntax.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
         {
-            targetSymbol = semanticModel.GetSymbolInfo(conditionalAccess.Expression).Symbol;
+            targetSymbol = GetSameInstanceTargetSymbol(conditionalAccess.Expression, semanticModel);
             return targetSymbol is not null;
         }
 
         return false;
+    }
+
+    private static ISymbol? GetSameInstanceTargetSymbol(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel)
+    {
+        while (true)
+        {
+            if (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+                continue;
+            }
+
+            if (expression is PostfixUnaryExpressionSyntax suppression &&
+                suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                expression = suppression.Operand;
+                continue;
+            }
+
+            if (expression is CastExpressionSyntax cast &&
+                IsSameInstanceCast(cast, semanticModel))
+            {
+                expression = cast.Expression;
+                continue;
+            }
+
+            return semanticModel.GetSymbolInfo(expression).Symbol;
+        }
     }
 
     private static bool SharesExecutableBoundary(SyntaxNode candidateSyntax, SyntaxNode creationSyntax)

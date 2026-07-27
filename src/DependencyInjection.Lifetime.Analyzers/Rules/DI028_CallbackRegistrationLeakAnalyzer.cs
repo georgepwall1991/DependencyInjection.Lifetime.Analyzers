@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
 
@@ -266,7 +267,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         }
 
         // Leg D: only a provably discarded registration reports.
-        if (!RegistrationIsDiscarded(invocation, semanticModel, cancellationToken))
+        if (!RegistrationIsDiscarded(invocation, mechanism, semanticModel, cancellationToken))
         {
             return;
         }
@@ -679,22 +680,59 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
 
     private static bool RegistrationIsDiscarded(
         InvocationExpressionSyntax invocation,
+        RegistrationMechanism mechanism,
         SemanticModel semanticModel,
         System.Threading.CancellationToken cancellationToken
     )
     {
         ExpressionSyntax node = invocation;
         var parent = invocation.Parent;
+        var linkedSourceTokenExtracted = false;
+        var linkedSourceRemainsDirectReceiver = true;
 
         // A chained call such as CreateLinkedTokenSource(...).Token.Register(H) consumes the outer
         // value; whether the whole statement is discarded is decided by the outermost expression.
         while (
-            parent
-                is ParenthesizedExpressionSyntax
-                    or MemberAccessExpressionSyntax
-                    or InvocationExpressionSyntax
+            parent is ExpressionSyntax parentExpression
+            && (
+                parent
+                    is MemberAccessExpressionSyntax
+                        or InvocationExpressionSyntax
+                        or ConditionalAccessExpressionSyntax
+                || IsTransparentOuterExpression(
+                    node,
+                    parentExpression,
+                    semanticModel,
+                    cancellationToken
+                )
+                || IsOwnershipPreservingOuterExpression(
+                    node,
+                    parentExpression,
+                    semanticModel,
+                    cancellationToken
+                )
+            )
         )
         {
+            var isTransparentOuterExpression = IsTransparentOuterExpression(
+                node,
+                parentExpression,
+                semanticModel,
+                cancellationToken
+            );
+            var directlyExtractsToken =
+                parent is MemberAccessExpressionSyntax tokenAccess
+                    && tokenAccess.Expression == node
+                    && tokenAccess.Name.Identifier.ValueText == "Token"
+                || parent is ConditionalAccessExpressionSyntax conditionalAccess
+                    && conditionalAccess.Expression == node
+                    && ConditionalAccessStartsWithTokenProjection(conditionalAccess);
+            linkedSourceTokenExtracted |=
+                mechanism == RegistrationMechanism.LinkedTokenSource
+                && linkedSourceRemainsDirectReceiver
+                && directlyExtractsToken;
+            linkedSourceRemainsDirectReceiver &= isTransparentOuterExpression;
+
             // `token.Register(OnStop).Dispose();` disposes the registration in the same expression.
             // Without this the promotion below would classify the whole statement as discarded and
             // the rule would warn on one of the remediations it recommends.
@@ -705,19 +743,38 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     is "Dispose"
                         or "DisposeAsync"
                         or "Unregister"
+                && disposalAccess.Parent is InvocationExpressionSyntax disposalInvocation
+                && disposalInvocation.Expression == disposalAccess
             )
             {
-                return false;
+                if (
+                    IsActualParameterlessInstanceCall(
+                        disposalInvocation,
+                        semanticModel,
+                        cancellationToken
+                    )
+                )
+                {
+                    return linkedSourceTokenExtracted;
+                }
+
+                if (mechanism == RegistrationMechanism.LinkedTokenSource && node == invocation)
+                {
+                    // An extension method that merely borrows the source is not disposal proof.
+                    return true;
+                }
             }
 
-            if (parent is ExpressionSyntax parentExpression)
-            {
-                node = parentExpression;
-                parent = parent.Parent;
-                continue;
-            }
+            node = parentExpression;
+            parent = parent.Parent;
+        }
 
-            break;
+        // Extracting Token directly loses the only reference through which the linked source can be
+        // disposed, so its registration on the longer-lived parent remains attached regardless of
+        // how the token value itself is subsequently consumed or stored.
+        if (linkedSourceTokenExtracted)
+        {
+            return true;
         }
 
         if (parent is ExpressionStatementSyntax)
@@ -737,6 +794,21 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                 return true;
             }
 
+            if (
+                mechanism == RegistrationMechanism.LinkedTokenSource
+                && target is ILocalSymbol
+                && LinkedTokenSourceLocalNeedsDisposalDiagnostic(
+                    invocation,
+                    node,
+                    parent,
+                    semanticModel,
+                    cancellationToken
+                )
+            )
+            {
+                return true;
+            }
+
             return TargetIsOtherwiseUnusedPrivateField(
                 assignment,
                 target,
@@ -745,7 +817,91 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             );
         }
 
-        return RegistrationIsUnreferencedLocal(node, parent, semanticModel, cancellationToken);
+        return RegistrationIsUnreferencedLocal(
+                node,
+                parent,
+                semanticModel,
+                cancellationToken
+            )
+            || mechanism == RegistrationMechanism.LinkedTokenSource
+                && LinkedTokenSourceLocalNeedsDisposalDiagnostic(
+                    invocation,
+                    node,
+                    parent,
+                    semanticModel,
+                    cancellationToken
+                );
+    }
+
+    private static bool IsTransparentOuterExpression(
+        ExpressionSyntax inner,
+        ExpressionSyntax outer,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        if (outer is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return parenthesized.Expression == inner;
+        }
+
+        if (
+            outer is PostfixUnaryExpressionSyntax suppression
+            && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression)
+        )
+        {
+            return suppression.Operand == inner;
+        }
+
+        return outer is CastExpressionSyntax cast
+            && cast.Expression == inner
+            && SymbolEqualityComparer.Default.Equals(
+                semanticModel.GetTypeInfo(inner, cancellationToken).Type,
+                semanticModel.GetTypeInfo(cast.Type, cancellationToken).Type
+            );
+    }
+
+    private static bool IsOwnershipPreservingOuterExpression(
+        ExpressionSyntax inner,
+        ExpressionSyntax outer,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        if (
+            outer is ConditionalExpressionSyntax conditional
+            && (conditional.WhenTrue == inner || conditional.WhenFalse == inner)
+        )
+        {
+            return !semanticModel.GetConversion(inner, cancellationToken).IsUserDefined;
+        }
+
+        if (
+            outer is not BinaryExpressionSyntax coalesce
+            || !coalesce.IsKind(SyntaxKind.CoalesceExpression)
+            || (coalesce.Left != inner && coalesce.Right != inner)
+            || semanticModel.GetConversion(inner, cancellationToken).IsUserDefined
+        )
+        {
+            return false;
+        }
+
+        return coalesce.Right == inner
+            || semanticModel.GetOperation(coalesce, cancellationToken)
+                is ICoalesceOperation { ValueConversion.IsUserDefined: false };
+    }
+
+    private static bool IsActualParameterlessInstanceCall(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        return semanticModel.GetOperation(invocation, cancellationToken)
+                is IInvocationOperation operation
+            && !operation.TargetMethod.IsExtensionMethod
+            && operation.TargetMethod.ReducedFrom is null
+            && operation.TargetMethod.Parameters.Length == 0;
     }
 
     private static bool TargetIsOtherwiseUnusedPrivateField(
@@ -881,6 +1037,244 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         }
 
         return true;
+    }
+
+    private static bool LinkedTokenSourceLocalNeedsDisposalDiagnostic(
+        InvocationExpressionSyntax creation,
+        ExpressionSyntax node,
+        SyntaxNode? parent,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        ILocalSymbol? local = null;
+        SyntaxNode? referenceRoot = null;
+
+        if (
+            parent
+                is EqualsValueClauseSyntax
+                {
+                    Parent: VariableDeclaratorSyntax declarator
+                } equals
+            && equals.Value == node
+            && declarator.Parent
+                is VariableDeclarationSyntax
+                {
+                    Parent: LocalDeclarationStatementSyntax localStatement
+                }
+            && localStatement.UsingKeyword.IsKind(SyntaxKind.None)
+        )
+        {
+            local = semanticModel.GetDeclaredSymbol(declarator, cancellationToken) as ILocalSymbol;
+            referenceRoot = declarator;
+        }
+        else if (
+            parent is AssignmentExpressionSyntax assignment
+            && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+            && assignment.Right == node
+            && semanticModel.GetSymbolInfo(assignment.Left, cancellationToken).Symbol
+                is ILocalSymbol assignmentLocal
+        )
+        {
+            local = assignmentLocal;
+            referenceRoot = assignment;
+        }
+
+        if (local is null || referenceRoot is null)
+        {
+            return false;
+        }
+
+        if (
+            semanticModel.GetOperation(creation, cancellationToken) is IInvocationOperation operation
+            && DI014_RootProviderNotDisposedAnalyzer.IsProperlyDisposed(operation, semanticModel)
+        )
+        {
+            return false;
+        }
+
+        var body = EventReceiverClassification.ExecutableBodyOf(referenceRoot);
+        if (body is null)
+        {
+            return false;
+        }
+
+        var foundTokenRead =
+            referenceRoot is AssignmentExpressionSyntax assignmentExpression
+            && IsTokenReadOfExpression(
+                assignmentExpression,
+                semanticModel,
+                cancellationToken
+            );
+        foreach (var identifier in body.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (
+                identifier.Identifier.ValueText != local.Name
+                || identifier.Parent is VariableDeclaratorSyntax
+                || !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier, cancellationToken).Symbol,
+                    local
+                )
+            )
+            {
+                continue;
+            }
+
+            if (EventReceiverClassification.ExecutableBodyOf(identifier) != body)
+            {
+                // A captured local can be consumed or disposed when a nested function is invoked.
+                // DI014 deliberately refuses cross-boundary cleanup as a straight-line proof, so
+                // keep DI028 conservative rather than interpreting nested syntax as outer flow.
+                return false;
+            }
+
+            if (identifier.SpanStart <= node.Span.End)
+            {
+                // Assignment targets may have belonged to an older instance before this creation.
+                // Only references after the current value is stored describe this linked source.
+                continue;
+            }
+
+            var referenceExpression = GetTransparentReferenceExpression(
+                identifier,
+                semanticModel,
+                cancellationToken
+            );
+            var isTokenRead = IsTokenReadOfExpression(
+                referenceExpression,
+                semanticModel,
+                cancellationToken
+            );
+            var isDirectDisposalAttempt =
+                referenceExpression.Parent
+                    is MemberAccessExpressionSyntax
+                    {
+                        Expression: var disposalReceiver,
+                        Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
+                    }
+                && disposalReceiver == referenceExpression;
+            var isConditionalDisposalAttempt =
+                referenceExpression.Parent
+                    is ConditionalAccessExpressionSyntax
+                    {
+                        Expression: var conditionalDisposalReceiver,
+                        WhenNotNull: InvocationExpressionSyntax
+                        {
+                            Expression: MemberBindingExpressionSyntax
+                            {
+                                Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
+                            }
+                        }
+                    }
+                && conditionalDisposalReceiver == referenceExpression;
+            var isDisposalAttempt = isDirectDisposalAttempt || isConditionalDisposalAttempt;
+            var isReassignment =
+                identifier.Parent is AssignmentExpressionSyntax assignment
+                && assignment.Left == identifier;
+
+            if (!isTokenRead && !isDisposalAttempt && !isReassignment)
+            {
+                return false;
+            }
+
+            foundTokenRead |= isTokenRead;
+        }
+
+        return foundTokenRead;
+    }
+
+    private static ExpressionSyntax GetTransparentReferenceExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var current = expression;
+        while (current.Parent is ExpressionSyntax parent)
+        {
+            if (
+                parent is ParenthesizedExpressionSyntax parenthesized
+                && parenthesized.Expression == current
+            )
+            {
+                current = parenthesized;
+                continue;
+            }
+
+            if (
+                parent is PostfixUnaryExpressionSyntax suppression
+                && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression)
+                && suppression.Operand == current
+            )
+            {
+                current = suppression;
+                continue;
+            }
+
+            if (
+                parent is CastExpressionSyntax cast
+                && cast.Expression == current
+                && SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetTypeInfo(current, cancellationToken).Type,
+                    semanticModel.GetTypeInfo(cast.Type, cancellationToken).Type
+                )
+            )
+            {
+                current = cast;
+                continue;
+            }
+
+            break;
+        }
+
+        return current;
+    }
+
+    private static bool IsTokenReadOfExpression(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var referenceExpression = GetTransparentReferenceExpression(
+            expression,
+            semanticModel,
+            cancellationToken
+        );
+        return referenceExpression.Parent
+                is MemberAccessExpressionSyntax
+                {
+                    Expression: var tokenReceiver,
+                    Name.Identifier.ValueText: "Token"
+                }
+                && tokenReceiver == referenceExpression
+            || referenceExpression.Parent
+                is ConditionalAccessExpressionSyntax conditionalAccess
+                && conditionalAccess.Expression == referenceExpression
+                && ConditionalAccessStartsWithTokenProjection(conditionalAccess);
+    }
+
+    private static bool ConditionalAccessStartsWithTokenProjection(
+        ConditionalAccessExpressionSyntax conditionalAccess
+    )
+    {
+        ExpressionSyntax current = conditionalAccess.WhenNotNull;
+        while (true)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    continue;
+                case MemberAccessExpressionSyntax memberAccess:
+                    current = memberAccess.Expression;
+                    continue;
+                case MemberBindingExpressionSyntax memberBinding:
+                    return memberBinding.Name.Identifier.ValueText == "Token";
+                default:
+                    return false;
+            }
+        }
     }
 
     // ----------------------------------------------------------------
