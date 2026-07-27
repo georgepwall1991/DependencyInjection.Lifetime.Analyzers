@@ -268,6 +268,12 @@ public sealed class RegistrationCollector
     public IEnumerable<ServiceRegistration> AllRegistrations => GetSourceOrderedRegistrations();
 
     /// <summary>
+    /// Gets every source-ordered registration candidate before TryAdd-style filtering.
+    /// </summary>
+    internal IEnumerable<ServiceRegistration> RegistrationCandidates =>
+        GetSourceOrderedRegistrationCandidates();
+
+    /// <summary>
     /// Tries to get the registration for a specific service type and key.
     /// </summary>
     public bool TryGetRegistration(INamedTypeSymbol serviceType, object? key, bool isKeyed, out ServiceRegistration? registration)
@@ -308,35 +314,10 @@ public sealed class RegistrationCollector
 
     private IEnumerable<ServiceRegistration> GetSourceOrderedRegistrations()
     {
-        var ordered = _allRegistrations
-            .Select(registration =>
-            {
-                var lineSpan = registration.Location.GetLineSpan();
-                var path = lineSpan.Path;
-
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    path = registration.Location.SourceTree?.FilePath ?? string.Empty;
-                }
-
-                return new
-                {
-                    Registration = registration,
-                    Path = path ?? string.Empty,
-                    Line = lineSpan.StartLinePosition.Line,
-                    Column = lineSpan.StartLinePosition.Character,
-                    DiscoveryOrder = registration.Order
-                };
-            })
-            .OrderBy(item => item.Path, System.StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Line)
-            .ThenBy(item => item.Column)
-            .ThenBy(item => item.DiscoveryOrder)
-            .Select(item => item.Registration);
-
         var seen = new HashSet<ServiceIdentifier>(ServiceIdentifierComparer.Instance);
-        var seenImplementations = new HashSet<ServiceImplementationIdentifier>(ServiceImplementationIdentifierComparer.Instance);
-        foreach (var registration in ordered)
+        var seenImplementations = new HashSet<ServiceImplementationIdentifier>(
+            ServiceImplementationIdentifierComparer.Instance);
+        foreach (var registration in GetSourceOrderedRegistrationCandidates())
         {
             var identifier = new ServiceIdentifier(registration.ServiceType, registration.Key, registration.IsKeyed);
             if (registration.SkipIfSameImplementationAlreadyRegistered)
@@ -378,6 +359,35 @@ public sealed class RegistrationCollector
 
             yield return registration;
         }
+    }
+
+    private IEnumerable<ServiceRegistration> GetSourceOrderedRegistrationCandidates()
+    {
+        return _allRegistrations
+            .Select(registration =>
+            {
+                var lineSpan = registration.Location.GetLineSpan();
+                var path = lineSpan.Path;
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    path = registration.Location.SourceTree?.FilePath ?? string.Empty;
+                }
+
+                return new
+                {
+                    Registration = registration,
+                    Path = path ?? string.Empty,
+                    Line = lineSpan.StartLinePosition.Line,
+                    Column = lineSpan.StartLinePosition.Character,
+                    DiscoveryOrder = registration.Order
+                };
+            })
+            .OrderBy(item => item.Path, System.StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Line)
+            .ThenBy(item => item.Column)
+            .ThenBy(item => item.DiscoveryOrder)
+            .Select(item => item.Registration);
     }
 
     /// <summary>
@@ -702,10 +712,10 @@ public sealed class RegistrationCollector
         // but DI012 now applies a stable source-location ordering when it evaluates duplicates.
         if (implementationType is not null || factoryExpression is not null || hasImplementationInstance)
         {
-            if (isTryAdd && !isTryAddEnumerable && hasEffectiveRegistration)
-            {
-                return;
-            }
+            var isIgnoredTryAdd =
+                isTryAdd &&
+                !isTryAddEnumerable &&
+                hasEffectiveRegistration;
 
             var keyLiteral = SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var formattedKey)
                 ? formattedKey
@@ -731,7 +741,8 @@ public sealed class RegistrationCollector
 
             _allRegistrations.Add(registration);
 
-            if (!skipPrimaryIfAlreadyRegistered || !hasEffectiveRegistration)
+            if (!isIgnoredTryAdd &&
+                (!skipPrimaryIfAlreadyRegistered || !hasEffectiveRegistration))
             {
                 // Store by service type and key (later registrations override earlier ones, like DI container behavior)
                 _registrations[serviceIdentifier] = registration;

@@ -57,12 +57,14 @@ internal sealed class DependencyResolutionEngine
     public DependencyResolutionEngine(
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes,
-        Func<ServiceRegistration, bool>? isRegistrationAvailable = null)
+        Func<ServiceRegistration, bool>? isRegistrationAvailable = null,
+        IEnumerable<ServiceRegistration>? availableRegistrations = null)
     {
         _wellKnownTypes = wellKnownTypes;
         _knownLifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
         var registrationFilter = isRegistrationAvailable ?? (_ => true);
-        _availableRegistrations = registrationCollector.AllRegistrations
+        _availableRegistrations = (availableRegistrations ??
+                                   registrationCollector.AllRegistrations)
             .Where(registrationFilter)
             .ToImmutableArray();
     }

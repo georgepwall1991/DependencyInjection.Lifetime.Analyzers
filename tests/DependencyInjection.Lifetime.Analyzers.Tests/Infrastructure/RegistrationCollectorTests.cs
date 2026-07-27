@@ -128,6 +128,30 @@ public class RegistrationCollectorTests
         return (compilation, fileAnalyses);
     }
 
+    [Fact]
+    public void AliasAssignmentSyntaxIndex_ReusesSameTreeSnapshot()
+    {
+        var syntaxTree = CSharpSyntaxTree.ParseText(
+            """
+            public sealed class Example
+            {
+                public void Configure()
+                {
+                    object first = new();
+                    object second = new();
+                    first = second;
+                }
+            }
+            """);
+
+        var firstIndex = AliasAssignmentSyntaxIndex.GetOrCreate(syntaxTree);
+        var secondIndex = AliasAssignmentSyntaxIndex.GetOrCreate(syntaxTree);
+
+        Assert.Same(firstIndex, secondIndex);
+        Assert.Single(firstIndex.SimpleAssignments);
+        Assert.Equal(2, firstIndex.InitializedDeclarators.Length);
+    }
+
     #region Create Tests
 
     [Fact]

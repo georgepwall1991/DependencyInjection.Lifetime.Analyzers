@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
@@ -951,6 +953,29 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         flowKey = null!;
         receiver = UnwrapExpression(receiver);
 
+        if (receiver is InvocationExpressionSyntax fluentInvocation)
+        {
+            var method = semanticModel.GetSymbolInfo(fluentInvocation).Symbol as IMethodSymbol;
+            var originalMethod = method?.ReducedFrom ?? method;
+            if (originalMethod is not null &&
+                IsKnownServiceCollectionExtensionsTypeByName(
+                    originalMethod.ContainingType?.ToDisplayString()) &&
+                IsServiceCollectionTypeByName(originalMethod.ReturnType) &&
+                TryGetServiceCollectionReceiverExpression(
+                    fluentInvocation,
+                    semanticModel,
+                    out var fluentReceiver) &&
+                TryGetNormalizedServiceCollectionFlowKey(
+                    fluentReceiver,
+                    semanticModel,
+                    position,
+                    visitedSymbols,
+                    out flowKey))
+            {
+                return true;
+            }
+        }
+
         if (receiver is ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax)
         {
             flowKey = CreateExpressionFlowKey(receiver);
@@ -975,25 +1000,33 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         }
 
         var receiverSymbol = semanticModel.GetSymbolInfo(receiver).Symbol;
-        if (receiverSymbol is ILocalSymbol localSymbol)
+        if (receiverSymbol is ILocalSymbol or IParameterSymbol)
         {
-            if (!visitedSymbols.Add(localSymbol))
+            if (!visitedSymbols.Add(receiverSymbol))
             {
                 return false;
             }
 
-            if (TryGetLocalAliasSourceExpression(localSymbol, semanticModel, position, out var aliasSource) &&
-                TryGetNormalizedServiceCollectionFlowKey(
-                    aliasSource,
+            if (TryGetAliasSourceExpression(
+                    receiverSymbol,
                     semanticModel,
                     position,
-                    visitedSymbols,
-                    out flowKey))
+                    out var aliasSource,
+                    out var aliasPosition))
             {
-                return true;
+                visitedSymbols.Remove(receiverSymbol);
+                if (TryGetNormalizedServiceCollectionFlowKey(
+                        aliasSource,
+                        semanticModel,
+                        aliasPosition,
+                        visitedSymbols,
+                        out flowKey))
+                {
+                    return true;
+                }
             }
 
-            visitedSymbols.Remove(localSymbol);
+            visitedSymbols.Remove(receiverSymbol);
         }
 
         if (receiverSymbol is not null)
@@ -1006,13 +1039,15 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
         return true;
     }
 
-    private static bool TryGetLocalAliasSourceExpression(
-        ILocalSymbol localSymbol,
+    private static bool TryGetAliasSourceExpression(
+        ISymbol receiverSymbol,
         SemanticModel semanticModel,
         int position,
-        out ExpressionSyntax expression)
+        out ExpressionSyntax expression,
+        out int assignmentPosition)
     {
         expression = null!;
+        assignmentPosition = 0;
 
         var useEnclosingSymbol = NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(position) as IMethodSymbol);
         if (useEnclosingSymbol is null)
@@ -1020,37 +1055,38 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             return false;
         }
 
-        var latestAssignment = localSymbol.DeclaringSyntaxReferences
-            .Select(reference => reference.GetSyntax())
-            .OfType<VariableDeclaratorSyntax>()
-            .Where(declarator =>
-                declarator.Initializer is not null &&
-                declarator.SpanStart < position &&
+        var syntaxIndex =
+            AliasAssignmentSyntaxIndex.GetOrCreate(semanticModel.SyntaxTree);
+        var assignmentExpressions = syntaxIndex.SimpleAssignments
+            .Where(assignment =>
+                assignment.Right.SpanStart < position &&
                 SymbolEqualityComparer.Default.Equals(
-                    NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(declarator.SpanStart) as IMethodSymbol),
+                    semanticModel.GetSymbolInfo(assignment.Left).Symbol,
+                    receiverSymbol) &&
+                SymbolEqualityComparer.Default.Equals(
+                    NormalizeContainingMethod(
+                        semanticModel.GetEnclosingSymbol(
+                            assignment.SpanStart) as IMethodSymbol),
                     useEnclosingSymbol))
-            .Select(declarator => new
-            {
-                Expression = declarator.Initializer!.Value,
-                SpanStart = declarator.Initializer!.Value.SpanStart
-            })
-            .Concat(
-                semanticModel.SyntaxTree.GetRoot().DescendantNodes()
-                    .OfType<AssignmentExpressionSyntax>()
-                    .Where(assignment =>
-                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
-                        assignment.SpanStart < position &&
-                        SymbolEqualityComparer.Default.Equals(
-                            semanticModel.GetSymbolInfo(assignment.Left).Symbol,
-                            localSymbol) &&
-                        SymbolEqualityComparer.Default.Equals(
-                            NormalizeContainingMethod(semanticModel.GetEnclosingSymbol(assignment.SpanStart) as IMethodSymbol),
-                            useEnclosingSymbol))
-                    .Select(assignment => new
-                    {
-                        Expression = assignment.Right,
-                        SpanStart = assignment.Right.SpanStart
-                    }))
+            .Select(static assignment => assignment.Right);
+
+        var initializerExpressions = receiverSymbol is ILocalSymbol
+            ? syntaxIndex.InitializedDeclarators
+                .Where(declarator =>
+                    declarator.Initializer!.Value.SpanStart < position &&
+                    SymbolEqualityComparer.Default.Equals(
+                        semanticModel.GetDeclaredSymbol(declarator),
+                        receiverSymbol) &&
+                    SymbolEqualityComparer.Default.Equals(
+                        NormalizeContainingMethod(
+                            semanticModel.GetEnclosingSymbol(
+                                declarator.SpanStart) as IMethodSymbol),
+                        useEnclosingSymbol))
+                .Select(static declarator => declarator.Initializer!.Value)
+            : Enumerable.Empty<ExpressionSyntax>();
+
+        var latestAssignment = initializerExpressions
+            .Concat(assignmentExpressions)
             .OrderBy(candidate => candidate.SpanStart)
             .LastOrDefault();
 
@@ -1059,9 +1095,63 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             return false;
         }
 
-        expression = latestAssignment.Expression;
+        if (latestAssignment.Parent is AssignmentExpressionSyntax assignment &&
+            ReferenceEquals(assignment.Right, latestAssignment) &&
+            !IsStraightLineAliasAssignment(assignment))
+        {
+            return false;
+        }
+
+        expression = latestAssignment;
+        assignmentPosition = latestAssignment.SpanStart;
         return true;
     }
+
+    private static bool IsStraightLineAliasAssignment(
+        AssignmentExpressionSyntax assignment)
+    {
+        foreach (var ancestor in assignment.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case IfStatementSyntax:
+                case SwitchStatementSyntax:
+                case SwitchExpressionSyntax:
+                case ConditionalExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                case ForStatementSyntax:
+                case ForEachStatementSyntax:
+                case ForEachVariableStatementSyntax:
+                case WhileStatementSyntax:
+                case DoStatementSyntax:
+                case TryStatementSyntax:
+                case CatchClauseSyntax:
+                case FinallyClauseSyntax:
+                case LocalFunctionStatementSyntax:
+                case AnonymousFunctionExpressionSyntax:
+                    return false;
+                case BinaryExpressionSyntax binaryExpression
+                    when IsShortCircuiting(binaryExpression) &&
+                         binaryExpression.Right.Span.Contains(assignment.Span):
+                case AssignmentExpressionSyntax assignmentExpression
+                    when assignmentExpression.IsKind(
+                             SyntaxKind.CoalesceAssignmentExpression) &&
+                         assignmentExpression.Right.Span.Contains(assignment.Span):
+                    return false;
+                case BaseMethodDeclarationSyntax:
+                case AccessorDeclarationSyntax:
+                case CompilationUnitSyntax:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsShortCircuiting(BinaryExpressionSyntax expression) =>
+        expression.IsKind(SyntaxKind.CoalesceExpression) ||
+        expression.IsKind(SyntaxKind.LogicalAndExpression) ||
+        expression.IsKind(SyntaxKind.LogicalOrExpression);
 
     private static ExpressionSyntax UnwrapExpression(ExpressionSyntax expression)
     {
@@ -1393,4 +1483,41 @@ internal sealed class ServiceCollectionReachabilityAnalyzer
             };
         }
     }
+}
+
+internal sealed class AliasAssignmentSyntaxIndex
+{
+    private static readonly ConditionalWeakTable<SyntaxTree, AliasAssignmentSyntaxIndex>
+        Indexes = new();
+
+    private AliasAssignmentSyntaxIndex(SyntaxTree syntaxTree)
+    {
+        var assignments = ImmutableArray.CreateBuilder<AssignmentExpressionSyntax>();
+        var initializedDeclarators = ImmutableArray.CreateBuilder<VariableDeclaratorSyntax>();
+        foreach (var node in syntaxTree.GetRoot().DescendantNodes())
+        {
+            switch (node)
+            {
+                case AssignmentExpressionSyntax assignment
+                    when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                    assignments.Add(assignment);
+                    break;
+                case VariableDeclaratorSyntax { Initializer: not null } declarator:
+                    initializedDeclarators.Add(declarator);
+                    break;
+            }
+        }
+
+        SimpleAssignments = assignments.ToImmutable();
+        InitializedDeclarators = initializedDeclarators.ToImmutable();
+    }
+
+    public ImmutableArray<AssignmentExpressionSyntax> SimpleAssignments { get; }
+
+    public ImmutableArray<VariableDeclaratorSyntax> InitializedDeclarators { get; }
+
+    public static AliasAssignmentSyntaxIndex GetOrCreate(SyntaxTree syntaxTree) =>
+        Indexes.GetValue(
+            syntaxTree,
+            static tree => new AliasAssignmentSyntaxIndex(tree));
 }
