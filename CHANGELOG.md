@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.8] - 2026-07-27
+
+### Fixed
+
+- **DI028 static `CancellationTokenSource` callback retention** (false negative) — a discarded
+  `Register`/`UnsafeRegister` call on the exact `Token` property of an inline, parameterless, exact
+  private `static readonly CancellationTokenSource` field now treats that source as process-lifetime.
+  Transient and scoped subscribers can therefore no longer be silently rooted by static shutdown
+  tokens. Timed, factory-created, reassigned, explicitly canceled, or explicitly disposed sources
+  found anywhere in the compilation remain silent, while infinite `CancelAfter` values preserve
+  process lifetime. Mutable source fields, stored `CancellationToken` values, singleton subscribers,
+  public or otherwise escaping sources, and callbacks that do not capture the subscriber also
+  remain silent.
+
 ## [3.5.7] - 2026-07-27
 
 ### Fixed

@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.5.7</Version>
+    <Version>3.5.8</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI035 now reports a non-thread-safe service created per SelectMany group and shared by the inner tasks flattened into Task.WhenAll. Exact LINQ and task-return proofs preserve silence for unrelated nested selectors and local functions.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI028 now reports discarded callback registrations rooted by an inline parameterless private static readonly CancellationTokenSource.Token source whose visible uses preserve process lifetime. Timed, factory-created, reassigned, canceled, disposed, mutable, public, aliased, and stored-token sources remain silent.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

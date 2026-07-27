@@ -83,6 +83,10 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             var lifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
             var records = new ConcurrentBag<RegistrationRecord>();
             var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+            var staticSourceUsageIndex = new StaticSourceUsageIndex(
+                compilationContext.Compilation,
+                wellKnownTypes
+            );
 
             compilationContext.RegisterSyntaxNodeAction(
                 syntaxContext =>
@@ -100,7 +104,13 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             );
 
             compilationContext.RegisterSyntaxNodeAction(
-                syntaxContext => CollectRegistration(syntaxContext, wellKnownTypes, records),
+                syntaxContext =>
+                    CollectRegistration(
+                        syntaxContext,
+                        wellKnownTypes,
+                        records,
+                        staticSourceUsageIndex
+                    ),
                 SyntaxKind.InvocationExpression
             );
 
@@ -126,6 +136,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             ISymbol? receiverRoot,
             ImmutableArray<ISymbol> receiverSegments,
             INamedTypeSymbol? publisherType,
+            bool isStaticSource,
             string mechanismDisplay,
             string sourceDisplay,
             Location location,
@@ -138,6 +149,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             ReceiverRoot = receiverRoot;
             ReceiverSegments = receiverSegments;
             PublisherType = publisherType;
+            IsStaticSource = isStaticSource;
             MechanismDisplay = mechanismDisplay;
             SourceDisplay = sourceDisplay;
             Location = location;
@@ -150,10 +162,101 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         public ISymbol? ReceiverRoot { get; }
         public ImmutableArray<ISymbol> ReceiverSegments { get; }
         public INamedTypeSymbol? PublisherType { get; }
+        public bool IsStaticSource { get; }
         public string MechanismDisplay { get; }
         public string SourceDisplay { get; }
         public Location Location { get; }
         public TextSpanKey DedupKey { get; }
+    }
+
+    private sealed class StaticSourceUsageIndex
+    {
+        private readonly Compilation _compilation;
+        private readonly WellKnownTypes _wellKnownTypes;
+        private readonly object _gate = new();
+        private HashSet<IFieldSymbol>? _fieldsWithBoundedLifetimeEvidence;
+        private bool _scanFailed;
+
+        public StaticSourceUsageIndex(Compilation compilation, WellKnownTypes wellKnownTypes)
+        {
+            _compilation = compilation;
+            _wellKnownTypes = wellKnownTypes;
+        }
+
+        public bool HasBoundedLifetimeEvidence(
+            IFieldSymbol sourceField,
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken
+        )
+        {
+            lock (_gate)
+            {
+                if (_fieldsWithBoundedLifetimeEvidence is null && !_scanFailed)
+                {
+                    _fieldsWithBoundedLifetimeEvidence = BuildIndex(
+                        semanticModel,
+                        cancellationToken
+                    );
+                }
+
+                return _scanFailed
+                    || _fieldsWithBoundedLifetimeEvidence is null
+                    || _fieldsWithBoundedLifetimeEvidence.Contains(sourceField);
+            }
+        }
+
+        private HashSet<IFieldSymbol>? BuildIndex(
+            SemanticModel semanticModel,
+            System.Threading.CancellationToken cancellationToken
+        )
+        {
+            var fieldsWithBoundedLifetimeEvidence = new HashSet<IFieldSymbol>(
+                SymbolEqualityComparer.Default
+            );
+
+            foreach (var syntaxTree in _compilation.SyntaxTrees)
+            {
+                var syntaxRoot = syntaxTree.GetRoot(cancellationToken);
+                if (
+                    FactoryAnalysis.GetSemanticModelForNode(syntaxRoot, semanticModel)
+                        is not { } declarationModel
+                )
+                {
+                    _scanFailed = true;
+                    return null;
+                }
+
+                foreach (
+                    var identifier in syntaxRoot.DescendantNodes().OfType<IdentifierNameSyntax>()
+                )
+                {
+                    if (
+                        declarationModel.GetSymbolInfo(identifier, cancellationToken).Symbol
+                            is not IFieldSymbol
+                            {
+                                IsStatic: true,
+                                IsReadOnly: true,
+                                DeclaredAccessibility: Accessibility.Private,
+                            } sourceField
+                        || !_wellKnownTypes.IsCancellationTokenSource(sourceField.Type)
+                        || FieldReferencePreservesUnboundedLifetime(
+                            identifier,
+                            sourceField,
+                            declarationModel,
+                            _wellKnownTypes,
+                            cancellationToken
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
+                    fieldsWithBoundedLifetimeEvidence.Add(sourceField);
+                }
+            }
+
+            return fieldsWithBoundedLifetimeEvidence;
+        }
     }
 
     /// <summary>
@@ -199,7 +302,8 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
     private static void CollectRegistration(
         SyntaxNodeAnalysisContext context,
         WellKnownTypes wellKnownTypes,
-        ConcurrentBag<RegistrationRecord> records
+        ConcurrentBag<RegistrationRecord> records,
+        StaticSourceUsageIndex staticSourceUsageIndex
     )
     {
         var invocation = (InvocationExpressionSyntax)context.Node;
@@ -288,7 +392,15 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     cancellationToken
                 );
 
-            if (receiverKind == EventReceiverKind.Unknown)
+            var isStaticSource = IsUnboundedStaticReadonlyCancellationTokenSourceToken(
+                anchor,
+                mechanism,
+                semanticModel,
+                wellKnownTypes,
+                staticSourceUsageIndex,
+                cancellationToken
+            );
+            if (receiverKind == EventReceiverKind.Unknown && !isStaticSource)
             {
                 continue;
             }
@@ -301,6 +413,7 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                     receiverRoot,
                     receiverSegments,
                     publisherType,
+                    isStaticSource,
                     mechanismDisplay,
                     anchor.ToString(),
                     invocation.GetLocation(),
@@ -313,6 +426,246 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                 )
             );
         }
+    }
+
+    private static bool IsUnboundedStaticReadonlyCancellationTokenSourceToken(
+        ExpressionSyntax anchor,
+        RegistrationMechanism mechanism,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes,
+        StaticSourceUsageIndex staticSourceUsageIndex,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var unwrappedAnchor = UnwrapStaticSourceAnchor(anchor, semanticModel, cancellationToken);
+        if (
+            mechanism != RegistrationMechanism.CancellationTokenRegister
+            || unwrappedAnchor
+                is not MemberAccessExpressionSyntax
+                {
+                    Expression: { } sourceExpression,
+                    Name.Identifier.ValueText: "Token",
+                } tokenAccess
+            || semanticModel.GetSymbolInfo(tokenAccess, cancellationToken).Symbol
+                is not IPropertySymbol tokenProperty
+            || !wellKnownTypes.IsCancellationTokenSource(tokenProperty.ContainingType)
+        )
+        {
+            return false;
+        }
+
+        var unwrappedSourceExpression = UnwrapStaticSourceAnchor(
+            sourceExpression,
+            semanticModel,
+            cancellationToken
+        );
+        if (
+            semanticModel.GetSymbolInfo(unwrappedSourceExpression, cancellationToken).Symbol
+                is not IFieldSymbol
+                {
+                    IsStatic: true,
+                    IsReadOnly: true,
+                    DeclaredAccessibility: Accessibility.Private,
+                } sourceField
+            || !wellKnownTypes.IsCancellationTokenSource(sourceField.Type)
+            || sourceField.DeclaringSyntaxReferences.Length != 1
+            || sourceField.DeclaringSyntaxReferences[0].GetSyntax(cancellationToken)
+                is not VariableDeclaratorSyntax
+                {
+                    Initializer.Value: { } initializerValue,
+                }
+        )
+        {
+            return false;
+        }
+
+        var initializerModel = FactoryAnalysis.GetSemanticModelForNode(
+            initializerValue,
+            semanticModel
+        );
+        return initializerModel?.GetOperation(initializerValue, cancellationToken)
+                is IObjectCreationOperation { Arguments.Length: 0 } creation
+            && wellKnownTypes.IsCancellationTokenSource(creation.Type)
+            && !staticSourceUsageIndex.HasBoundedLifetimeEvidence(
+                sourceField,
+                semanticModel,
+                cancellationToken
+            );
+    }
+
+    private static ExpressionSyntax UnwrapStaticSourceAnchor(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        var current = expression;
+        while (true)
+        {
+            switch (current)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    continue;
+                case PostfixUnaryExpressionSyntax suppressed
+                    when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    current = suppressed.Operand;
+                    continue;
+                case CastExpressionSyntax cast
+                    when semanticModel.GetOperation(cast, cancellationToken)
+                        is IConversionOperation { Conversion.IsIdentity: true }:
+                    current = cast.Expression;
+                    continue;
+                default:
+                    return current;
+            }
+        }
+    }
+
+    private static bool FieldReferencePreservesUnboundedLifetime(
+        IdentifierNameSyntax identifier,
+        IFieldSymbol sourceField,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes,
+        System.Threading.CancellationToken cancellationToken
+    )
+    {
+        ExpressionSyntax fieldExpression =
+            identifier.Parent is MemberAccessExpressionSyntax fieldAccess
+            && fieldAccess.Name == identifier
+                ? fieldAccess
+                : identifier;
+        fieldExpression = GetTransparentReferenceExpression(
+            fieldExpression,
+            semanticModel,
+            cancellationToken
+        );
+
+        if (
+            fieldExpression.Parent
+                is MemberAccessExpressionSyntax
+            {
+                Expression: var tokenReceiver,
+                Name.Identifier.ValueText: "Token",
+            } tokenAccess
+            && tokenReceiver == fieldExpression
+        )
+        {
+            var tokenExpression = GetTransparentReferenceExpression(
+                tokenAccess,
+                semanticModel,
+                cancellationToken
+            );
+            return tokenExpression.Parent
+                    is MemberAccessExpressionSyntax
+            {
+                Expression: var registrationReceiver,
+                Name.Identifier.ValueText: "Register" or "UnsafeRegister",
+                Parent: InvocationExpressionSyntax registrationInvocation,
+            }
+                && registrationReceiver == tokenExpression
+                && semanticModel.GetOperation(registrationInvocation, cancellationToken)
+                    is IInvocationOperation registration
+                && wellKnownTypes.IsCancellationToken(
+                    registration.TargetMethod.ContainingType
+                )
+                && wellKnownTypes.IsCancellationTokenRegistration(
+                    registration.TargetMethod.ReturnType
+                );
+        }
+
+        return fieldExpression.Parent
+                is MemberAccessExpressionSyntax
+        {
+            Expression: var lifetimeReceiver,
+            Name.Identifier.ValueText:
+                        "Cancel" or "CancelAsync" or "CancelAfter" or "Dispose",
+            Parent: InvocationExpressionSyntax lifetimeInvocation,
+        }
+            && lifetimeReceiver == fieldExpression
+            && semanticModel.GetOperation(lifetimeInvocation, cancellationToken)
+                is IInvocationOperation operation
+            && operation.TargetMethod.Name == "CancelAfter"
+            && operation.TargetMethod.ReducedFrom is null
+            && SymbolEqualityComparer.Default.Equals(
+                operation.TargetMethod.ContainingType,
+                sourceField.Type
+            )
+            && operation.Arguments.Length == 1
+            && IsProvablyInfiniteTimeout(
+                operation.Arguments[0].Value,
+                sourceField.Type.ContainingAssembly
+            );
+    }
+
+    private static bool IsProvablyInfiniteTimeout(
+        IOperation operation,
+        IAssemblySymbol frameworkAssembly
+    )
+    {
+        var value = operation;
+        while (value is IConversionOperation conversion)
+        {
+            value = conversion.Operand;
+        }
+
+        if (value.ConstantValue.HasValue)
+        {
+            return value.ConstantValue.Value switch
+            {
+                int i => i == -1,
+                long l => l == -1,
+                uint u => u == uint.MaxValue,
+                _ => false,
+            };
+        }
+
+        if (
+            value is IFieldReferenceOperation fieldReference
+            && fieldReference.Field.Name is "Infinite" or "InfiniteTimeSpan"
+            && SymbolEqualityComparer.Default.Equals(
+                fieldReference.Field.ContainingType,
+                frameworkAssembly.GetTypeByMetadataName("System.Threading.Timeout")
+            )
+        )
+        {
+            return true;
+        }
+
+        return value is IInvocationOperation fromMilliseconds
+            && fromMilliseconds.TargetMethod.Name == "FromMilliseconds"
+            && SymbolEqualityComparer.Default.Equals(
+                fromMilliseconds.TargetMethod.ContainingType,
+                frameworkAssembly.GetTypeByMetadataName("System.TimeSpan")
+            )
+            && fromMilliseconds.Arguments.Length == 1
+            && IsConstantNegativeOne(fromMilliseconds.Arguments[0].Value);
+    }
+
+    private static bool IsConstantNegativeOne(IOperation operation)
+    {
+        var value = operation;
+        while (value is IConversionOperation conversion)
+        {
+            value = conversion.Operand;
+        }
+
+        if (value.ConstantValue is not { HasValue: true } constant)
+        {
+            return false;
+        }
+
+        return constant.Value switch
+        {
+            sbyte number => number == -1,
+            short number => number == -1,
+            int number => number == -1,
+            long number => number == -1,
+            float number => number == -1,
+            double number => number == -1,
+            decimal number => number == -1,
+            _ => false,
+        };
     }
 
     private static bool TryIdentifyMechanism(
@@ -382,94 +735,94 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
                 }
 
             case "RegisterChangeCallback":
-            {
-                if (invocation.Expression is not MemberAccessExpressionSyntax tokenAccess)
                 {
-                    return false;
-                }
+                    if (invocation.Expression is not MemberAccessExpressionSyntax tokenAccess)
+                    {
+                        return false;
+                    }
 
-                var tokenType = semanticModel
-                    .GetTypeInfo(tokenAccess.Expression, cancellationToken)
-                    .Type;
-                if (!wellKnownTypes.ImplementsChangeToken(tokenType))
-                {
-                    return false;
-                }
+                    var tokenType = semanticModel
+                        .GetTypeInfo(tokenAccess.Expression, cancellationToken)
+                        .Type;
+                    if (!wellKnownTypes.ImplementsChangeToken(tokenType))
+                    {
+                        return false;
+                    }
 
-                // A change token is single-shot and replaced on every reload, so only a token
-                // taken directly from a producer call has provable provenance and longevity. A
-                // token reached through a field or local stays silent.
-                if (
-                    tokenAccess.Expression is not InvocationExpressionSyntax producer
-                    || producer.Expression is not MemberAccessExpressionSyntax producerAccess
-                )
-                {
-                    return false;
-                }
+                    // A change token is single-shot and replaced on every reload, so only a token
+                    // taken directly from a producer call has provable provenance and longevity. A
+                    // token reached through a field or local stays silent.
+                    if (
+                        tokenAccess.Expression is not InvocationExpressionSyntax producer
+                        || producer.Expression is not MemberAccessExpressionSyntax producerAccess
+                    )
+                    {
+                        return false;
+                    }
 
-                anchors = ImmutableArray.Create(producerAccess.Expression);
-                mechanism = RegistrationMechanism.RegisterChangeCallback;
-                mechanismDisplay = "IChangeToken.RegisterChangeCallback";
-                return true;
-            }
+                    anchors = ImmutableArray.Create(producerAccess.Expression);
+                    mechanism = RegistrationMechanism.RegisterChangeCallback;
+                    mechanismDisplay = "IChangeToken.RegisterChangeCallback";
+                    return true;
+                }
 
             case "Register":
             case "UnsafeRegister":
-            {
-                if (
-                    !wellKnownTypes.IsCancellationToken(original.ContainingType)
-                    || !wellKnownTypes.IsCancellationTokenRegistration(method.ReturnType)
-                )
                 {
-                    return false;
-                }
+                    if (
+                        !wellKnownTypes.IsCancellationToken(original.ContainingType)
+                        || !wellKnownTypes.IsCancellationTokenRegistration(method.ReturnType)
+                    )
+                    {
+                        return false;
+                    }
 
-                if (invocation.Expression is not MemberAccessExpressionSyntax tokenAccess)
-                {
-                    return false;
-                }
+                    if (invocation.Expression is not MemberAccessExpressionSyntax tokenAccess)
+                    {
+                        return false;
+                    }
 
-                anchors = ImmutableArray.Create(tokenAccess.Expression);
-                mechanism = RegistrationMechanism.CancellationTokenRegister;
-                mechanismDisplay = $"CancellationToken.{name}";
-                return true;
-            }
+                    anchors = ImmutableArray.Create(tokenAccess.Expression);
+                    mechanism = RegistrationMechanism.CancellationTokenRegister;
+                    mechanismDisplay = $"CancellationToken.{name}";
+                    return true;
+                }
 
             case "CreateLinkedTokenSource":
-            {
-                if (!wellKnownTypes.IsCancellationTokenSource(original.ContainingType))
                 {
-                    return false;
-                }
-
-                // Linking registers a callback on every token it links; one provably long-lived
-                // token is enough to root the creator.
-                // Every token argument is a candidate anchor. Collecting all of them rather than
-                // the first keeps the verdict independent of argument order -- whichever token proves
-                // longest-lived decides -- and statement-level dedup collapses the rest into one
-                // diagnostic.
-                var tokenAnchors = ImmutableArray.CreateBuilder<ExpressionSyntax>();
-                foreach (var argument in invocation.ArgumentList.Arguments)
-                {
-                    var argumentType = semanticModel
-                        .GetTypeInfo(argument.Expression, cancellationToken)
-                        .Type;
-                    if (wellKnownTypes.IsCancellationToken(argumentType))
+                    if (!wellKnownTypes.IsCancellationTokenSource(original.ContainingType))
                     {
-                        tokenAnchors.Add(argument.Expression);
+                        return false;
                     }
-                }
 
-                if (tokenAnchors.Count == 0)
-                {
-                    return false;
-                }
+                    // Linking registers a callback on every token it links; one provably long-lived
+                    // token is enough to root the creator.
+                    // Every token argument is a candidate anchor. Collecting all of them rather than
+                    // the first keeps the verdict independent of argument order -- whichever token proves
+                    // longest-lived decides -- and statement-level dedup collapses the rest into one
+                    // diagnostic.
+                    var tokenAnchors = ImmutableArray.CreateBuilder<ExpressionSyntax>();
+                    foreach (var argument in invocation.ArgumentList.Arguments)
+                    {
+                        var argumentType = semanticModel
+                            .GetTypeInfo(argument.Expression, cancellationToken)
+                            .Type;
+                        if (wellKnownTypes.IsCancellationToken(argumentType))
+                        {
+                            tokenAnchors.Add(argument.Expression);
+                        }
+                    }
 
-                anchors = tokenAnchors.ToImmutable();
-                mechanism = RegistrationMechanism.LinkedTokenSource;
-                mechanismDisplay = "CancellationTokenSource.CreateLinkedTokenSource";
-                return true;
-            }
+                    if (tokenAnchors.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    anchors = tokenAnchors.ToImmutable();
+                    mechanism = RegistrationMechanism.LinkedTokenSource;
+                    mechanismDisplay = "CancellationTokenSource.CreateLinkedTokenSource";
+                    return true;
+                }
 
             default:
                 return false;
@@ -1053,15 +1406,15 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         if (
             parent
                 is EqualsValueClauseSyntax
-                {
-                    Parent: VariableDeclaratorSyntax declarator
-                } equals
+            {
+                Parent: VariableDeclaratorSyntax declarator
+            } equals
             && equals.Value == node
             && declarator.Parent
                 is VariableDeclarationSyntax
-                {
-                    Parent: LocalDeclarationStatementSyntax localStatement
-                }
+            {
+                Parent: LocalDeclarationStatementSyntax localStatement
+            }
             && localStatement.UsingKeyword.IsKind(SyntaxKind.None)
         )
         {
@@ -1148,24 +1501,24 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
             var isDirectDisposalAttempt =
                 referenceExpression.Parent
                     is MemberAccessExpressionSyntax
-                    {
-                        Expression: var disposalReceiver,
-                        Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
-                    }
+                {
+                    Expression: var disposalReceiver,
+                    Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
+                }
                 && disposalReceiver == referenceExpression;
             var isConditionalDisposalAttempt =
                 referenceExpression.Parent
                     is ConditionalAccessExpressionSyntax
+                {
+                    Expression: var conditionalDisposalReceiver,
+                    WhenNotNull: InvocationExpressionSyntax
                     {
-                        Expression: var conditionalDisposalReceiver,
-                        WhenNotNull: InvocationExpressionSyntax
+                        Expression: MemberBindingExpressionSyntax
                         {
-                            Expression: MemberBindingExpressionSyntax
-                            {
-                                Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
-                            }
+                            Name.Identifier.ValueText: "Dispose" or "DisposeAsync"
                         }
                     }
+                }
                 && conditionalDisposalReceiver == referenceExpression;
             var isDisposalAttempt = isDirectDisposalAttempt || isConditionalDisposalAttempt;
             var isReassignment =
@@ -1243,10 +1596,10 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         );
         return referenceExpression.Parent
                 is MemberAccessExpressionSyntax
-                {
-                    Expression: var tokenReceiver,
-                    Name.Identifier.ValueText: "Token"
-                }
+        {
+            Expression: var tokenReceiver,
+            Name.Identifier.ValueText: "Token"
+        }
                 && tokenReceiver == referenceExpression
             || referenceExpression.Parent
                 is ConditionalAccessExpressionSyntax conditionalAccess
@@ -1511,6 +1864,11 @@ public sealed class DI028_CallbackRegistrationLeakAnalyzer : DiagnosticAnalyzer
         KnownServiceLifetimeClassifier lifetimeClassifier
     )
     {
+        if (record.IsStaticSource)
+        {
+            return RankOf(ServiceLifetime.Singleton);
+        }
+
         if (record.PublisherType is null)
         {
             return null;
