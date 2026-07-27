@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.14] - 2026-07-27
+
+### Fixed
+
+- **DI009 mixed closed/open-generic enumerable lifetimes** (false negative) — an exact closed singleton registration no longer hides an applicable shorter-lived open-generic registration when an open-generic singleton captures `IEnumerable<T>`. DI009 now mirrors the container by taking the worst lifetime across both registration sets, including explicit and inherited keyed services, while excluding open-generic implementations whose runtime constraints reject the requested element type. A concrete-key enumerable uses only registrations for that exact key, while the final effective `AnyKey`-registered consumer with parameterless `[FromKeyedServices]` runs constructor selection and lifetime evaluation under every concrete key where an exact registration for the same service does not shadow it, reporting each constructor parameter once at its worst lifetime; an unknown concrete key keeps an empty enumerable instead of reaggregating shadowed keys, and `KeyedService.AnyKey` descriptors do not participate in either enumerable result. Nested service and implementation types use their containing generic arguments in runtime closure order. Single-service resolution selects the final effective descriptor within the first available runtime tier—closed exact key, closed `AnyKey`, open-generic exact key, then open-generic `AnyKey`—including constructor-resolvability analysis where an unresolvable exact or later same-tier registration must not be bypassed.
+
 ## [3.5.13] - 2026-07-27
 
 ### Fixed
