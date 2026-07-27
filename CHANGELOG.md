@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.16] - 2026-07-27
+
+### Fixed
+
+- **DI019 ternary-condition provider writes** (false negative) — provider assignments in the
+  always-evaluated condition of `condition ? whenTrue : whenFalse` now retain path stability for
+  later all-root conditional joins. Assignments in either result arm remain conservative because
+  only one arm executes.
+
 ## [3.5.15] - 2026-07-27
 
 ### Fixed

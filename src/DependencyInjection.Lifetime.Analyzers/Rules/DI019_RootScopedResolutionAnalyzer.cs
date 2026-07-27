@@ -954,8 +954,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
             TryStatementSyntax or
             AnonymousFunctionExpressionSyntax or
             LocalFunctionStatementSyntax or
-            QueryExpressionSyntax or
-            ConditionalExpressionSyntax ||
+            QueryExpressionSyntax ||
+        ancestor is ConditionalExpressionSyntax conditionalExpression &&
+            (conditionalExpression.WhenTrue.Span.Contains(assignment.Span) ||
+             conditionalExpression.WhenFalse.Span.Contains(assignment.Span)) ||
         ancestor is ConditionalAccessExpressionSyntax conditionalAccess &&
             conditionalAccess.WhenNotNull.Span.Contains(assignment.Span) ||
         ancestor is BinaryExpressionSyntax binary &&
