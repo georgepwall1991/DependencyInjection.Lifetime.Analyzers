@@ -361,7 +361,7 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
-        description: "Each registration is its own descriptor, so registering the same implementation type under two service types produces two instances rather than one shared instance. State kept in the implementation then diverges, and anything it owns exists twice. Register the implementation once and forward the other service types to it with a factory: services.AddSingleton<Impl>(); services.AddSingleton<IA>(sp => sp.GetRequiredService<Impl>());",
+        description: "Each registration is its own descriptor, so registering the same implementation type under two service types produces two instances rather than one shared instance. State kept in the implementation then diverges, and anything it owns exists twice. Register the implementation once and forward the other service types to it with a factory: services.AddSingleton<Impl>(); services.AddSingleton<IA>(sp => sp.GetRequiredService<Impl>()); This makes every service type resolve the same container-owned instance.",
         customTags: WellKnownDiagnosticTags.CompilationEnd
     );
 
