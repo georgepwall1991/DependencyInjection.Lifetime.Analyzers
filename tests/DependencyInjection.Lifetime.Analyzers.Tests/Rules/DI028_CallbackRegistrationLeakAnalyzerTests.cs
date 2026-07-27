@@ -388,6 +388,717 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
     }
 
     [Fact]
+    public async Task TransientSubscriber_StaticReadonlyCtsTokenRegister_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    public Worker()
+                    {
+                        [|Shutdown.Token.Register(OnStopping)|];
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_ExplicitStaticReadonlyCtsTokenRegister_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown =
+                        new CancellationTokenSource();
+
+                    public Worker()
+                    {
+                        [|Shutdown.Token.Register(OnStopping)|];
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Theory]
+    [InlineData("(Shutdown.Token)")]
+    [InlineData("((CancellationToken)Shutdown.Token)")]
+    [InlineData("(Shutdown).Token")]
+    [InlineData("((CancellationTokenSource)Shutdown).Token")]
+    public async Task TransientSubscriber_WrappedStaticReadonlyCtsTokenRegister_Reports(
+        string tokenExpression
+    )
+    {
+        var source =
+            Prelude
+            + $$"""
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    public Worker()
+                    {
+                        [|{{tokenExpression}}.Register(OnStopping)|];
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_MutableStaticCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static CancellationTokenSource Shutdown = new();
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_PublicStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class StaticTokens
+                {
+                    public static readonly CancellationTokenSource Shutdown = new();
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    public Worker()
+                    {
+                        StaticTokens.Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_TimedStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout =
+                        new(TimeSpan.FromSeconds(1));
+
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_MillisecondTimeoutStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout = new(5_000);
+
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_AlreadyCanceledStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Canceled = new(0);
+
+                    public Worker()
+                    {
+                        Canceled.Token.Register(OnCanceled);
+                    }
+
+                    private void OnCanceled() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_FactoryStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = CreateSource();
+
+                    private static CancellationTokenSource CreateSource() => new();
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_ReassignedStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout = new();
+
+                    static Worker()
+                    {
+                        Timeout = new(5_000);
+                    }
+
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_AliasedStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout = new();
+
+                    static Worker()
+                    {
+                        var alias = Timeout;
+                        alias.CancelAfter(5_000);
+                    }
+
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_CrossPartialReassignedStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public partial class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout = new();
+                }
+
+                public partial class Worker
+                {
+                    static Worker()
+                    {
+                        Timeout = new(5_000);
+                    }
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public partial class Worker
+                {
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_StaticReadonlyCtsWithCancelAfter_Register_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Timeout = new();
+
+                    static Worker()
+                    {
+                        Timeout.CancelAfter(5_000);
+                    }
+
+                    public Worker()
+                    {
+                        Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_CrossTypeCancelAfterStaticReadonlyCts_Register_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class StaticTokens
+                {
+                    public static readonly CancellationTokenSource Timeout = new();
+                }
+
+                public static class CancellationSchedule
+                {
+                    public static void BoundLifetime() =>
+                        StaticTokens.Timeout.CancelAfter(5_000);
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        CancellationSchedule.BoundLifetime();
+                        services.AddTransient<Worker>();
+                    }
+                }
+
+                public class Worker
+                {
+                    public Worker()
+                    {
+                        StaticTokens.Timeout.Token.Register(OnTimeout);
+                    }
+
+                    private void OnTimeout() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Theory]
+    [InlineData("Timeout.Infinite")]
+    [InlineData("-1")]
+    [InlineData("Timeout.InfiniteTimeSpan")]
+    [InlineData("TimeSpan.FromMilliseconds(-1)")]
+    public async Task TransientSubscriber_StaticReadonlyCtsWithInfiniteCancelAfter_Reports(
+        string infiniteDelay
+    )
+    {
+        var source =
+            Prelude
+            + $$"""
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    static Worker()
+                    {
+                        Shutdown.CancelAfter({{infiniteDelay}});
+                    }
+
+                    public Worker()
+                    {
+                        [|Shutdown.Token.Register(OnStopping)|];
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_UserDefinedInfiniteCancelAfterExtension_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public static class Extensions
+                {
+                    public static void CancelAfter(
+                        this CancellationTokenSource source,
+                        long delay
+                    ) => source.Cancel();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    static Worker()
+                    {
+                        Shutdown.CancelAfter(-1L);
+                    }
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_SourceDeclaredTimeoutInfiniteField_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                namespace System.Threading
+                {
+                    public static class Timeout
+                    {
+                        public static readonly int Infinite = 5_000;
+                    }
+                }
+
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    static Worker()
+                    {
+                        Shutdown.CancelAfter(System.Threading.Timeout.Infinite);
+                    }
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_CanceledStaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Canceled = new();
+
+                    static Worker()
+                    {
+                        Canceled.Cancel();
+                    }
+
+                    public Worker()
+                    {
+                        Canceled.Token.Register(OnCanceled);
+                    }
+
+                    private void OnCanceled() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_StaticReadonlyCtsWithStoredToken_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+                    private static readonly CancellationToken Stored = Shutdown.Token;
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_StaticReadonlyTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationToken Shutdown = new();
+
+                    public Worker()
+                    {
+                        Shutdown.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonSubscriber_StaticReadonlyCtsTokenRegister_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(OnStopping);
+                    }
+
+                    private void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task TransientSubscriber_StaticReadonlyCtsNonCapturingCallback_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private static readonly CancellationTokenSource Shutdown = new();
+
+                    public Worker()
+                    {
+                        Shutdown.Token.Register(static () => OnStopping());
+                    }
+
+                    private static void OnStopping() { }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
     public async Task ThisCapturingLambda_ApplicationStoppingRegister_Reports()
     {
         var source =
