@@ -1,26 +1,19 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.3 — DI028 now keeps linked
-`CancellationTokenSource` ownership live after ordinary `Token` reads. It shares DI014's disposal
-and ownership-transfer proof: `using`, reachable straight-line or `finally` disposal, and
-unconditional caller return stay silent; conditional or bypassed cleanup and reassignment before
-disposal report. Transparent syntax around `Token` reads cannot hide the use, and extension methods
-named `Dispose` or `DisposeAsync` do not count as disposal. Transparent initializer syntax still
-reaches the reliable-disposal proof, including cleanup through a same-instance cast. Unknown
-ownership-transfer calls remain conservative and silent. Conditional and coalescing initializers
-carry ownership to the selected local without treating fake chained disposal extensions as cleanup.
-Assignments to predeclared locals, including an assignment expression used as the receiver of
-`.Token`, and conditional-access `Token` reads use the same ownership proof, including when another
-operation is chained after the conditional projection; earlier values of the local are ignored,
-capture by a nested executable boundary stays conservative, and direct `.Token` or `?.Token`
-extraction reports because it loses the linked source's disposal handle.
+**Current release candidate:** 3.5.4 — DI023 and DI034 now preserve the fire-and-forget verdict when
+a finite or cancelable framework `Task.Wait(...)` has its Boolean result stored or returned. The
+result reports only whether that bounded wait completed; it does not keep the method, scope, or
+request alive after the wait returns. Parameterless waits, infinite timeouts, non-cancelable tokens,
+awaited or returned tasks, and tasks stored for later completion remain silent. Matching is bound to
+the exact instance `System.Threading.Tasks.Task.Wait` contract, so user-defined extension methods
+named `Wait` do not inherit the framework claim.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.3
-**Base audited commit:** `bf15996` (`v3.5.2`, `origin/main`)
+**Package version:** 3.5.4
+**Base audited commit:** `a479bf8` (`origin/main`; release `v3.5.3` at `1ccae66`)
 **Test result:** 2026-07-27 local Release build passed with 0 errors, and the Release suite passed
-2,538 tests with 0 failed and 0 skipped. The focused DI028 suite passed 78 tests, including thirty-five
-new linked-source ownership and disposal-contract boundaries.
+2,544 tests with 0 failed and 0 skipped. The focused DI023/DI034 suites passed 52 tests, including
+six new finite-wait result and user-defined-method boundaries.
 
 ## Historical Release Snapshots
 
@@ -174,7 +167,8 @@ Six releases in one sweep, each shipped as its own PR, review cycle, and tag:
 - **3.4.0 — DI034 HttpContext off-request.** **Boundary vs DI023:** DI023 needs a `using` scope in
   the method; DI034 needs only the request context, which ASP.NET Core recycles on its own schedule.
   Reviewing it also fixed two defects in DI023's shared helpers (`Wait(timeout)` accepted as
-  completion, constructed `TaskFactory<T>` unmatched).
+  completion, constructed `TaskFactory<T>` unmatched). Release 3.5.4 closed their remaining shared
+  finite-wait Boolean-result escape.
 - **3.5.0 — DI035 shared service across a fan-out.** Closes the concurrent-sharing leg the DI021
   notes parked. **Boundary vs DI021:** DI021 owns `Parallel.*` bodies and framework message handlers;
   DI035 owns `Task.WhenAll` projections. Both read the same non-thread-safe catalog.

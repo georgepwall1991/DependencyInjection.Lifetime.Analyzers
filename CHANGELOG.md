@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.4] - 2026-07-27
+
+### Fixed
+
+- **DI023/DI034 finite-wait result escapes** (false negative) — `Task.Wait(...)` with a finite
+  timeout or cancelable token can return while the task continues, so storing or returning its
+  `bool` result no longer suppresses the background-work diagnostic. Only the exact framework
+  `System.Threading.Tasks.Task.Wait` contract participates; user-defined extension methods named
+  `Wait` remain conservative and silent. Parameterless waits, infinite timeouts, non-cancelable
+  tokens, awaited tasks, returned tasks, and tasks stored for later completion remain unchanged.
+
 ## [3.5.3] - 2026-07-27
 
 ### Fixed
@@ -106,9 +117,8 @@ re-verified against current main, re-implemented on top of it, and mutation-test
   is zero rather than infinite, `cancellationToken: default` is a non-cancelable token, and a real
   cancelable token means the wait can end while the work continues. Non-cancelable tokens are recognised by their literal forms (`CancellationToken.None`, `default`, `new CancellationToken(false)` and their fully-qualified spellings); a token reached any other way is not assumed safe, and a constructed `TaskFactory<TResult>` is
   matched through its original definition instead of its display string. An escaped `@nameof(...)`
-  call is a real method and no longer treated as the `nameof` operator. Accepted false negative: a
-  `Wait(timeout)` result stored in a local or returned still suppresses, because the suppression is
-  decided from the chain rather than from what happens to its boolean result.
+  call is a real method and no longer treated as the `nameof` operator. The remaining false negative
+  for a stored or returned `Wait(timeout)` boolean result was closed in 3.5.4.
 
 ## [3.3.0] - 2026-07-26
 
