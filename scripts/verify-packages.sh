@@ -2,6 +2,7 @@
 set -euo pipefail
 
 package_dir="${1:-artifacts/packages}"
+release_notes_file="${2:-}"
 analyzer_version="$(dotnet msbuild src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj -getProperty:Version -nologo | tr -d '[:space:]')"
 analyzer_package="$package_dir/DependencyInjection.Lifetime.Analyzers.$analyzer_version.nupkg"
 
@@ -40,5 +41,9 @@ do
     exit 1
   }
 done
+
+if [[ -n "$release_notes_file" ]]; then
+  node tools/verify-package-release-notes.mjs "$analyzer_package" "$release_notes_file"
+fi
 
 echo "Verified package README, assets, and discoverability metadata for $analyzer_version."

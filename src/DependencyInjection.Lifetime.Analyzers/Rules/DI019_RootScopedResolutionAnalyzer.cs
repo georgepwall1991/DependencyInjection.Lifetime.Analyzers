@@ -945,8 +945,6 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         SyntaxNode ancestor,
         AssignmentExpressionSyntax assignment) =>
         ancestor is IfStatementSyntax or
-            SwitchStatementSyntax or
-            SwitchExpressionSyntax or
             ForStatementSyntax or
             CommonForEachStatementSyntax or
             WhileStatementSyntax or
@@ -958,6 +956,10 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         ancestor is ConditionalExpressionSyntax conditionalExpression &&
             (conditionalExpression.WhenTrue.Span.Contains(assignment.Span) ||
              conditionalExpression.WhenFalse.Span.Contains(assignment.Span)) ||
+        ancestor is SwitchStatementSyntax switchStatement &&
+            !switchStatement.Expression.Span.Contains(assignment.Span) ||
+        ancestor is SwitchExpressionSyntax switchExpression &&
+            !switchExpression.GoverningExpression.Span.Contains(assignment.Span) ||
         ancestor is ConditionalAccessExpressionSyntax conditionalAccess &&
             conditionalAccess.WhenNotNull.Span.Contains(assignment.Span) ||
         ancestor is BinaryExpressionSyntax binary &&
