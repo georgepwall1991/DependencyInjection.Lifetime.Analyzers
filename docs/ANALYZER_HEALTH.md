@@ -1,18 +1,17 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.19 — DI032 now captures direct factory-construction types while
-Roslyn's supplied syntax-action semantic model is active, removing the `RS1030` analyzer-project
-warning without changing the rule's diagnostic boundary.
+**Current release candidate:** 3.5.20 — DI009 and DI011 now ignore registrations provably removed
+by a later unconditional `IServiceCollection.Clear()` in the same straight-line flow. Conditional
+clears remain conservative, and unrelated descriptor collections do not enter the mutation stream.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.19
-**Base audited commit:** `680dbba` (`origin/main`; release `v3.5.18` points to `a23fece`)
+**Package version:** 3.5.20
+**Base audited commit:** `5796552` (`origin/main`; release `v3.5.19`)
 **Test result:** 2026-07-27 local Release build passed with 0 errors and 76 existing intentional
-sample warnings, down from 77 after removing `RS1030`. The Release suite passed 2,732 tests with 0
-failed and 0 skipped. DI032's existing factory, target-typed creation, parenthesized creation, opaque
-factory, and user-defined-conversion tests remain green; a collector regression test now pins
-syntax-action capture of the constructed type. The public `ServiceRegistration` constructor is
-unchanged.
+sample warnings. The Release suite passed 2,738 tests with 0 failed and 0 skipped. Focused DI011
+`Clear` coverage passed 5 tests after red-phase interface, concrete-receiver, and multi-registration
+false positives, including conditional-clear and unrelated-descriptor-list guardrails; a focused
+DI009 regression also passed.
 
 ## Historical Release Snapshots
 
@@ -981,8 +980,11 @@ One pass, four collector gaps — the 2.10.6 Replace-bug class; unblinds DI012/D
 ### ~~Pass 72 — DI019: switch-governing provider writes~~ ✅ Done 2026-07-27 (3.5.17)
 - **DI019 follow-up (FN, S): Fixed.** Provider assignments in a switch statement or switch expression's always-evaluated governing expression now retain path stability for later all-root conditional joins. Assignments in switch sections or result arms remain path-dependent and silent, and nested ternary-arm, short-circuit-right, and null-conditional `WhenNotNull` writes inside a governing expression keep their existing conservative classification.
 
+### ~~Pass 73 — DI009/DI011: collection-wide Clear mutations~~ ✅ Done 2026-07-27 (3.5.20)
+- **INFRA-5b phase 1 (FP, S): Fixed.** The shared effective-registration replay now recognizes the exact BCL `ICollection<ServiceDescriptor>.Clear()` contract only when its receiver is proven to implement `IServiceCollection`. A later unconditional clear in the same straight-line execution scope removes every registration on that collection flow for DI009 and DI011. Conditional clears remain possible removals rather than definite ones, preserving later `TryAdd` reachability and existing diagnostics; a separate descriptor list with the same method stays outside the mutation stream.
+
 ### Backlog (verified-low or unverified — pull in only if a pass comes up dry at red phase)
-DI009-3/5 · DI010-4/5 · DI011-3/4 · DI015-5 opaque-gate ordering · DI019-5 · DI026 scope-longevity Info→Warning upgrade — deferred; needs DI024's loop/scope classification + resolution-site tracking to prove a scope is long-lived (SignalR connection, Blazor circuit, hosted-service loop scope). Warning FPs on ordinary per-request scopes are worse than the current soft Info, so the tier stays Info until longevity is provable · INFRA-5b remaining `IList<ServiceDescriptor>` mutations (nonzero/dynamic `Insert`, `Remove`, `Clear`, indexer replacement) — require position/identity-aware flow proofs before widening.
+DI009-3/5 · DI010-4/5 · DI011-3/4 · DI015-5 opaque-gate ordering · DI019-5 · DI026 scope-longevity Info→Warning upgrade — deferred; needs DI024's loop/scope classification + resolution-site tracking to prove a scope is long-lived (SignalR connection, Blazor circuit, hosted-service loop scope). Warning FPs on ordinary per-request scopes are worse than the current soft Info, so the tier stays Info until longevity is provable · INFRA-5b remaining `IList<ServiceDescriptor>` mutations (nonzero/dynamic `Insert`, `Remove`, indexer replacement), plus `Clear` propagation beyond DI009/DI011 — require position/identity-aware flow proofs before widening.
 
 ## Watchlist
 

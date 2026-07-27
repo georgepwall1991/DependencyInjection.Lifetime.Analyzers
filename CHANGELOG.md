@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.20] - 2026-07-27
+
+### Fixed
+
+- **DI009/DI011 `IServiceCollection.Clear()` handling** (false positive) — registrations provably removed by a later unconditional `Clear()` in the same straight-line service-collection flow no longer participate in open-generic captive or provider-injection diagnostics. Conditional clears remain conservative, and `Clear()` on an unrelated `ICollection<ServiceDescriptor>` is not treated as an `IServiceCollection` mutation.
+
 ## [3.5.19] - 2026-07-27
 
 ### Fixed

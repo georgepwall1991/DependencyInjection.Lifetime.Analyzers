@@ -441,6 +441,71 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredService_ConditionallyRemovedByClear_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    {|#0:services.AddScoped<IMyService, MyService>()|};
+                    if (remove)
+                    {
+                        services.Clear();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("MyService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task UnrelatedDescriptorListClear_DoesNotRemoveRegisteredService()
+    {
+        var source = Usings + """
+            using System.Collections.Generic;
+
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(
+                    IServiceCollection services,
+                    List<ServiceDescriptor> descriptors)
+                {
+                    {|#0:services.AddScoped<IMyService, MyService>()|};
+                    descriptors.Clear();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("MyService", "IServiceProvider"));
+    }
+
+    [Fact]
     public async Task RegisteredService_RemoveAllThenTryAddProviderService_ReportsDiagnostic()
     {
         var source = Usings + """
@@ -1418,6 +1483,89 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 {
                     services.AddScoped<IMyService, MyService>();
                     services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemovedByClear_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    services.Clear();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemovedByConcreteServiceCollectionClear_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices()
+                {
+                    var services = new ServiceCollection();
+                    services.AddScoped<IMyService, MyService>();
+                    services.Clear();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task MultipleRegisteredServices_RemovedByClear_NoDiagnostics()
+    {
+        var source = Usings + """
+            public interface IFirstService { }
+            public interface ISecondService { }
+
+            public sealed class FirstService : IFirstService
+            {
+                public FirstService(IServiceProvider provider) { }
+            }
+
+            public sealed class SecondService : ISecondService
+            {
+                public SecondService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IFirstService, FirstService>();
+                    services.AddScoped<ISecondService, SecondService>();
+                    services.Clear();
                 }
             }
             """;
