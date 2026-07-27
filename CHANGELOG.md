@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.10] - 2026-07-27
+
+### Fixed
+
+- **DI010 open-generic constructor analysis** (false negative) — constructor over-injection now
+  analyzes the original generic type definition for registrations such as
+  `AddScoped(typeof(IRepository<>), typeof(Repository<>))`. Public constructors with more than the
+  configured meaningful-dependency threshold report consistently with closed type registrations.
+
 ## [3.5.9] - 2026-07-27
 
 ### Fixed

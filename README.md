@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.9
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.10
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.9">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.10">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.9" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.10" />
 ```
 
 Then reference it from the project file:
@@ -614,7 +614,7 @@ public sealed class ReportingService
 
 **Better pattern:** split into focused collaborators and inject smaller abstractions.
 
-For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories.
+For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor, including original type definitions registered through open-generic `typeof(...)` calls. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories.
 
 By default, DI010 reports when a constructor has more than `4` meaningful dependencies. It ignores primitives/value types, optional parameters, provider-plumbing types already covered by `DI011`, and common framework abstractions such as `ILogger<T>`, `IOptions<T>`, and `IConfiguration`.
 
