@@ -16,9 +16,9 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 /// exhausting sockets under load; or an <c>HttpClient</c> is handed to the container as a singleton
 /// or held in a static member, pinning a handler that then never rotates and never re-resolves DNS.
 /// <para>
-/// The boundary with DI008 is the lifetime: DI008 owns transient and scoped <c>HttpClient</c>
-/// registrations (a disposable the container never disposes), so DI029's registration tier is
-/// singleton-only and the two never report the same registration.
+/// The boundary with DI008 is the registration shape: DI008 owns transient disposable registrations,
+/// while DI029 owns singleton registrations and exact type-backed scoped <c>HttpClient</c>
+/// self-bindings. Factory-backed and derived scoped registrations remain outside this rule.
 /// </para>
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -29,6 +29,7 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         ImmutableArray.Create(
             DiagnosticDescriptors.HttpClientSocketExhaustion,
             DiagnosticDescriptors.HttpClientStaleDnsRegistration,
+            DiagnosticDescriptors.HttpClientScopedRegistration,
             DiagnosticDescriptors.HttpClientStaleDnsStaticMember
         );
 
@@ -109,7 +110,7 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             compilationContext.RegisterCompilationEndAction(endContext =>
             {
                 ReportSocketExhaustion(endContext, registrationCollector, creations);
-                ReportSingletonRegistrations(
+                ReportContainerRegistrations(
                     endContext,
                     registrationCollector,
                     wellKnownTypes,
@@ -380,10 +381,10 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
     }
 
     // ----------------------------------------------------------------
-    // Tier B leg 1 -- container singleton
+    // Tier B leg 1 -- container registrations
     // ----------------------------------------------------------------
 
-    private static void ReportSingletonRegistrations(
+    private static void ReportContainerRegistrations(
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes,
@@ -396,7 +397,10 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         var candidates = registrationCollector
             .Registrations.Where(registration =>
                 wellKnownTypes.IsHttpClient(registration.ServiceType)
-                && registration.Lifetime == ServiceLifetime.Singleton
+                && (
+                    registration.Lifetime == ServiceLifetime.Singleton
+                    || IsDirectScopedHttpClientRegistration(registration, wellKnownTypes)
+                )
             )
             .ToList();
 
@@ -436,13 +440,26 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
 
             context.ReportDiagnostic(
                 Diagnostic.Create(
-                    DiagnosticDescriptors.HttpClientStaleDnsRegistration,
+                    registration.Lifetime == ServiceLifetime.Scoped
+                        ? DiagnosticDescriptors.HttpClientScopedRegistration
+                        : DiagnosticDescriptors.HttpClientStaleDnsRegistration,
                     registration.Location,
                     keySuffix
                 )
             );
         }
     }
+
+    private static bool IsDirectScopedHttpClientRegistration(
+        ServiceRegistration registration,
+        WellKnownTypes wellKnownTypes
+    ) =>
+        wellKnownTypes.IHttpClientFactory is not null
+        && registration.Lifetime == ServiceLifetime.Scoped
+        && registration.ImplementationType is { } implementationType
+        && wellKnownTypes.IsHttpClient(implementationType)
+        && registration.FactoryExpression is null
+        && !registration.HasImplementationInstance;
 
 
     // ----------------------------------------------------------------
