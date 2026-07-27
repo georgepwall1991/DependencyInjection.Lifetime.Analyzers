@@ -1,19 +1,19 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.4 — DI023 and DI034 now preserve the fire-and-forget verdict when
-a finite or cancelable framework `Task.Wait(...)` has its Boolean result stored or returned. The
-result reports only whether that bounded wait completed; it does not keep the method, scope, or
-request alive after the wait returns. Parameterless waits, infinite timeouts, non-cancelable tokens,
-awaited or returned tasks, and tasks stored for later completion remain silent. Matching is bound to
-the exact instance `System.Threading.Tasks.Task.Wait` contract, so user-defined extension methods
-named `Wait` do not inherit the framework claim.
+**Current release candidate:** 3.5.5 — DI014 now requires the same root-provider instance to reach
+the actual resource expression before a `using` declaration or statement proves disposal. A
+user-defined conversion selected by a coalesce can create a disposable wrapper without disposing
+the provider, so that shape now reports. Direct provider resources and identity-conversion
+coalesces remain silent.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.4
-**Base audited commit:** `a479bf8` (`origin/main`; release `v3.5.3` at `1ccae66`)
+**Package version:** 3.5.5
+**Base audited commit:** `7f1f2bc` (`origin/main`; release `v3.5.4`)
 **Test result:** 2026-07-27 local Release build passed with 0 errors, and the Release suite passed
-2,544 tests with 0 failed and 0 skipped. The focused DI023/DI034 suites passed 52 tests, including
-six new finite-wait result and user-defined-method boundaries.
+2,552 tests with 0 failed and 0 skipped. The focused DI014 suite passed 119 tests, including two new
+user-defined-coalesce `using` diagnostics, an identity-conversion guard, and same-instance
+`as IDisposable`, assignment-expression, switch-arm, cast-chain, and framework async-disposal
+wrapper guards added from Codex review.
 
 ## Historical Release Snapshots
 

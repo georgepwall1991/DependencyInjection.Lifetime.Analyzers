@@ -75,7 +75,7 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
     )
     {
         // Case 1: Result is used in a using statement or declaration
-        if (IsInUsingContext(invocation))
+        if (IsInUsingContext(invocation, semanticModel))
         {
             return true;
         }
@@ -102,33 +102,28 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsInUsingContext(IInvocationOperation invocation)
+    private static bool IsInUsingContext(
+        IInvocationOperation invocation,
+        SemanticModel semanticModel)
     {
         // Walk up the syntax tree to find if we're in a using statement/declaration
         var syntax = invocation.Syntax;
+        var creationExpression = GetCreationExpression(syntax);
         var parent = syntax.Parent;
 
         while (parent is not null)
         {
-            // using var provider = ...;
+            // using var provider = ...; OR await using var provider = ...;
             if (parent is VariableDeclarationSyntax varDecl &&
                 varDecl.Parent is LocalDeclarationStatementSyntax localDecl &&
-                localDecl.UsingKeyword != default)
+                (localDecl.UsingKeyword != default || localDecl.AwaitKeyword != default))
             {
-                return true;
+                return IsUsingDeclarationResource(creationExpression, varDecl, semanticModel);
             }
 
             // using (var provider = ...) { } OR using (services.BuildServiceProvider()) { }
             if (parent is UsingStatementSyntax usingStatement &&
-                IsUsingStatementResource(syntax, usingStatement))
-            {
-                return true;
-            }
-
-            // await using var provider = ...;
-            if (parent is VariableDeclarationSyntax varDecl2 &&
-                varDecl2.Parent is LocalDeclarationStatementSyntax localDecl2 &&
-                localDecl2.AwaitKeyword != default)
+                IsUsingStatementResource(creationExpression, usingStatement, semanticModel))
             {
                 return true;
             }
@@ -148,21 +143,87 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsUsingStatementResource(SyntaxNode invocationSyntax, UsingStatementSyntax usingStatement)
+    private static bool IsUsingDeclarationResource(
+        SyntaxNode creationExpression,
+        VariableDeclarationSyntax declaration,
+        SemanticModel semanticModel)
+    {
+        return declaration.Variables.Any(
+            variable => variable.Initializer is { Value: var resourceExpression } &&
+                        IsUsingResource(creationExpression, resourceExpression, semanticModel));
+    }
+
+    private static bool IsUsingStatementResource(
+        SyntaxNode creationExpression,
+        UsingStatementSyntax usingStatement,
+        SemanticModel semanticModel)
     {
         if (usingStatement.Declaration is { } declaration &&
-            declaration.Span.Contains(invocationSyntax.Span))
+            IsUsingDeclarationResource(creationExpression, declaration, semanticModel))
         {
             return true;
         }
 
         if (usingStatement.Expression is { } expression &&
-            expression.Span.Contains(invocationSyntax.Span))
+            IsUsingResource(creationExpression, expression, semanticModel))
         {
             return true;
         }
 
         return false;
+    }
+
+    private static bool IsUsingResource(
+        SyntaxNode creationExpression,
+        ExpressionSyntax resourceExpression,
+        SemanticModel semanticModel)
+    {
+        return resourceExpression.Span.Contains(creationExpression.Span) &&
+               !HasUserDefinedCoalesceConversion(
+                   creationExpression,
+                   resourceExpression,
+                   semanticModel);
+    }
+
+    private static bool HasUserDefinedCoalesceConversion(
+        SyntaxNode creationExpression,
+        ExpressionSyntax resourceExpression,
+        SemanticModel semanticModel)
+    {
+        var current = creationExpression;
+        while (current != resourceExpression &&
+               current.Parent is { } parent &&
+               resourceExpression.Span.Contains(parent.Span))
+        {
+            if (parent is BinaryExpressionSyntax coalesceExpression &&
+                coalesceExpression.IsKind(SyntaxKind.CoalesceExpression) &&
+                IsUserDefinedCoalesceArm(coalesceExpression, current, semanticModel))
+            {
+                return true;
+            }
+
+            current = parent;
+        }
+
+        return false;
+    }
+
+    private static bool IsUserDefinedCoalesceArm(
+        BinaryExpressionSyntax coalesceExpression,
+        SyntaxNode current,
+        SemanticModel semanticModel)
+    {
+        if (coalesceExpression.Right == current)
+        {
+            return IsUserDefinedConversionResult(current, semanticModel);
+        }
+
+        return coalesceExpression.Left == current &&
+               (IsUserDefinedConversionResult(current, semanticModel) ||
+                semanticModel.GetOperation(coalesceExpression) is ICoalesceOperation
+                {
+                    ValueConversion.IsUserDefined: true,
+                });
     }
 
     /// <summary>
