@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.12] - 2026-07-27
+
+### Fixed
+
+- **DI027 assigned-local subscription tokens** (false negative) — a `Subscribe(...)` token assigned
+  to a predeclared local in a standalone statement now reports when that local is never otherwise
+  referenced. Assignments consumed by `return`, `using`, or another expression stay silent, as do
+  later disposal, argument passing, capture, or reassignment, because ownership or cleanup cannot
+  be ruled out.
+
 ## [3.5.11] - 2026-07-27
 
 ### Fixed
@@ -28,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exits, throw-expression exits, and constant-true exits. Registrations in mutually exclusive branches no longer erase
   pending removal paths, while unconditional restorations in `finally` suppress ineffective
   fallbacks. Short-circuited mutations and alias assignments stay conditional, while catch-all
-  handlers and exactly matching typed handlers preserve removal paths that resume after an
+  handlers and assignable typed handlers preserve removal paths that resume after an
   explicit throw. Alias assignments and initializers are indexed once per syntax tree instead of
   rescanning the complete tree for every registration receiver.
   Activation-constructor selection and DI009 lifetime classification use the replayed,
