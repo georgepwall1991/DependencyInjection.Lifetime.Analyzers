@@ -91,7 +91,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             string sinkDisplay,
             string knobName,
             ISymbol? timerInstance = null,
-            bool handlerParametersArePerInvocation = true)
+            bool handlerParametersArePerInvocation = true,
+            ITypeSymbol? sharedHandlerParameterType = null)
         {
             Concurrency = concurrency;
             Description = description;
@@ -99,6 +100,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             KnobName = knobName;
             TimerInstance = timerInstance;
             HandlerParametersArePerInvocation = handlerParametersArePerInvocation;
+            SharedHandlerParameterType = sharedHandlerParameterType;
         }
 
         public SinkConcurrency Concurrency { get; }
@@ -123,12 +125,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         public bool HandlerParametersArePerInvocation { get; }
 
         /// <summary>
-        /// The same sink as seen by a delegated method. A one-hop lambda can pass anything it
-        /// likes to the method it calls (`state =&gt; Handle(new object())`), so the shared-state
-        /// guarantee does not survive the hop.
+        /// Effective type of the exact shared object supplied to a handler parameter, when known.
         /// </summary>
-        public SinkContext WithPerInvocationParameters() =>
-            new(Concurrency, Description, SinkDisplay, KnobName, TimerInstance);
+        public ITypeSymbol? SharedHandlerParameterType { get; }
     }
 
     // ---------------------------------------------------------------------
@@ -157,60 +156,60 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         {
             case "Azure.Messaging.ServiceBus.ServiceBusProcessor"
                 when eventName is "ProcessMessageAsync" or "ProcessErrorAsync":
-            {
-                var trace = TraceEventSinkOptions(
-                    context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
-                var knob = EvaluateTracedKnob(
-                    context,
-                    assignment.Syntax,
-                    trace,
-                    "MaxConcurrentCalls",
-                    "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
-                var concurrency = knob switch
                 {
-                    KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
-                    // Only an options instance tied to THIS processor proves sequential dispatch;
-                    // a MaxConcurrentCalls = 1 elsewhere in the type must not silence other sinks.
-                    KnobProof.ProvenSequential when trace.Traced => SinkConcurrency.Sequential,
-                    _ => SinkConcurrency.Unprovable
-                };
-                sink = new SinkContext(
-                    concurrency,
-                    $"ServiceBusProcessor.{eventName} (MaxConcurrentCalls is set above 1)",
-                    $"ServiceBusProcessor.{eventName}",
-                    "MaxConcurrentCalls");
-                break;
-            }
+                    var trace = TraceEventSinkOptions(
+                        context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
+                    var knob = EvaluateTracedKnob(
+                        context,
+                        assignment.Syntax,
+                        trace,
+                        "MaxConcurrentCalls",
+                        "Azure.Messaging.ServiceBus.ServiceBusProcessorOptions");
+                    var concurrency = knob switch
+                    {
+                        KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
+                        // Only an options instance tied to THIS processor proves sequential dispatch;
+                        // a MaxConcurrentCalls = 1 elsewhere in the type must not silence other sinks.
+                        KnobProof.ProvenSequential when trace.Traced => SinkConcurrency.Sequential,
+                        _ => SinkConcurrency.Unprovable
+                    };
+                    sink = new SinkContext(
+                        concurrency,
+                        $"ServiceBusProcessor.{eventName} (MaxConcurrentCalls is set above 1)",
+                        $"ServiceBusProcessor.{eventName}",
+                        "MaxConcurrentCalls");
+                    break;
+                }
 
             case "Azure.Messaging.ServiceBus.ServiceBusSessionProcessor"
                 when eventName is "ProcessMessageAsync" or "ProcessErrorAsync":
-            {
-                // Sessions are pumped concurrently by default; only a proven single-session,
-                // single-call configuration on this processor's own options makes dispatch sequential.
-                var trace = TraceEventSinkOptions(
-                    context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
-                var sessions = EvaluateTracedKnob(
-                    context,
-                    assignment.Syntax,
-                    trace,
-                    "MaxConcurrentSessions",
-                    "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
-                var callsPerSession = EvaluateTracedKnob(
-                    context,
-                    assignment.Syntax,
-                    trace,
-                    "MaxConcurrentCallsPerSession",
-                    "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
-                var sequential = trace.Traced &&
-                                 sessions == KnobProof.ProvenSequential &&
-                                 callsPerSession is KnobProof.ProvenSequential or KnobProof.NotFound;
-                sink = new SinkContext(
-                    sequential ? SinkConcurrency.Sequential : SinkConcurrency.Concurrent,
-                    $"ServiceBusSessionProcessor.{eventName} (sessions are processed concurrently)",
-                    $"ServiceBusSessionProcessor.{eventName}",
-                    "MaxConcurrentSessions");
-                break;
-            }
+                {
+                    // Sessions are pumped concurrently by default; only a proven single-session,
+                    // single-call configuration on this processor's own options makes dispatch sequential.
+                    var trace = TraceEventSinkOptions(
+                        context, eventReference, "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
+                    var sessions = EvaluateTracedKnob(
+                        context,
+                        assignment.Syntax,
+                        trace,
+                        "MaxConcurrentSessions",
+                        "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
+                    var callsPerSession = EvaluateTracedKnob(
+                        context,
+                        assignment.Syntax,
+                        trace,
+                        "MaxConcurrentCallsPerSession",
+                        "Azure.Messaging.ServiceBus.ServiceBusSessionProcessorOptions");
+                    var sequential = trace.Traced &&
+                                     sessions == KnobProof.ProvenSequential &&
+                                     callsPerSession is KnobProof.ProvenSequential or KnobProof.NotFound;
+                    sink = new SinkContext(
+                        sequential ? SinkConcurrency.Sequential : SinkConcurrency.Concurrent,
+                        $"ServiceBusSessionProcessor.{eventName} (sessions are processed concurrently)",
+                        $"ServiceBusSessionProcessor.{eventName}",
+                        "MaxConcurrentSessions");
+                    break;
+                }
 
             // The shipping SDK declares EventProcessorClient in Azure.Messaging.EventHubs (the
             // PACKAGE is named .Processor); both namespaces are accepted to be drift-proof.
@@ -231,76 +230,76 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             case "RabbitMQ.Client.Events.EventingBasicConsumer"
                 or "RabbitMQ.Client.Events.AsyncEventingBasicConsumer"
                 when eventName is "Received" or "ReceivedAsync":
-            {
-                // The dispatch pump is sequential by default (ConsumerDispatchConcurrency = 1).
-                // When the consumer's own factory -> connection -> channel chain is traceable in
-                // the same tree, the knob is proven instance-correlated: a different factory's
-                // setting never contaminates this consumer, and a fresh factory that never sets
-                // the knob keeps the sequential default. Untraceable chains fall back to the
-                // strengthen-only containing-type scan (a constant above 1 on the real SDK
-                // property is still evidence of concurrency) with the config-gated DI022 tier.
-                SinkConcurrency concurrency;
-                if (TryTraceRabbitConsumerChain(
-                        context, eventReference, out var chainTrace, out var freshFactory, out var channelOptionsOverride) &&
-                    !channelOptionsOverride)
                 {
-                    var chainKnob = EvaluateTracedKnob(
-                        context,
-                        assignment.Syntax,
-                        chainTrace,
-                        "ConsumerDispatchConcurrency",
-                        "RabbitMQ.Client.ConnectionFactory");
-                    concurrency = chainKnob switch
+                    // The dispatch pump is sequential by default (ConsumerDispatchConcurrency = 1).
+                    // When the consumer's own factory -> connection -> channel chain is traceable in
+                    // the same tree, the knob is proven instance-correlated: a different factory's
+                    // setting never contaminates this consumer, and a fresh factory that never sets
+                    // the knob keeps the sequential default. Untraceable chains fall back to the
+                    // strengthen-only containing-type scan (a constant above 1 on the real SDK
+                    // property is still evidence of concurrency) with the config-gated DI022 tier.
+                    SinkConcurrency concurrency;
+                    if (TryTraceRabbitConsumerChain(
+                            context, eventReference, out var chainTrace, out var freshFactory, out var channelOptionsOverride) &&
+                        !channelOptionsOverride)
                     {
-                        KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
-                        KnobProof.ProvenSequential => SinkConcurrency.Sequential,
-                        KnobProof.NotFound when freshFactory => SinkConcurrency.Sequential,
-                        _ => SinkConcurrency.Unprovable
-                    };
-                }
-                else if (channelOptionsOverride)
-                {
-                    // Per-channel options can pin THIS channel back to sequential regardless of
-                    // the factory knob, so nothing in the type may upgrade past the config-gated
-                    // tier.
-                    concurrency = SinkConcurrency.Unprovable;
-                }
-                else
-                {
-                    var knob = EvaluateTracedKnob(
-                        context,
-                        assignment.Syntax,
-                        OptionsTrace.Untraceable,
-                        "ConsumerDispatchConcurrency",
-                        "RabbitMQ.Client.ConnectionFactory");
-                    concurrency = knob == KnobProof.ProvenConcurrent
-                        ? SinkConcurrency.Concurrent
-                        : SinkConcurrency.Unprovable;
-                }
+                        var chainKnob = EvaluateTracedKnob(
+                            context,
+                            assignment.Syntax,
+                            chainTrace,
+                            "ConsumerDispatchConcurrency",
+                            "RabbitMQ.Client.ConnectionFactory");
+                        concurrency = chainKnob switch
+                        {
+                            KnobProof.ProvenConcurrent => SinkConcurrency.Concurrent,
+                            KnobProof.ProvenSequential => SinkConcurrency.Sequential,
+                            KnobProof.NotFound when freshFactory => SinkConcurrency.Sequential,
+                            _ => SinkConcurrency.Unprovable
+                        };
+                    }
+                    else if (channelOptionsOverride)
+                    {
+                        // Per-channel options can pin THIS channel back to sequential regardless of
+                        // the factory knob, so nothing in the type may upgrade past the config-gated
+                        // tier.
+                        concurrency = SinkConcurrency.Unprovable;
+                    }
+                    else
+                    {
+                        var knob = EvaluateTracedKnob(
+                            context,
+                            assignment.Syntax,
+                            OptionsTrace.Untraceable,
+                            "ConsumerDispatchConcurrency",
+                            "RabbitMQ.Client.ConnectionFactory");
+                        concurrency = knob == KnobProof.ProvenConcurrent
+                            ? SinkConcurrency.Concurrent
+                            : SinkConcurrency.Unprovable;
+                    }
 
-                var consumerName = eventReference.Event.ContainingType!.Name;
-                sink = new SinkContext(
-                    concurrency,
-                    $"{consumerName}.{eventName} (ConsumerDispatchConcurrency is set above 1)",
-                    $"{consumerName}.{eventName}",
-                    "ConsumerDispatchConcurrency");
-                break;
-            }
+                    var consumerName = eventReference.Event.ContainingType!.Name;
+                    sink = new SinkContext(
+                        concurrency,
+                        $"{consumerName}.{eventName} (ConsumerDispatchConcurrency is set above 1)",
+                        $"{consumerName}.{eventName}",
+                        "ConsumerDispatchConcurrency");
+                    break;
+                }
 
             case "System.Timers.Timer" when eventName == "Elapsed":
-            {
-                if (IsTimersTimerSequential(context, assignment.Syntax, eventReference))
                 {
-                    return;
-                }
+                    if (IsTimersTimerSequential(context, assignment.Syntax, eventReference))
+                    {
+                        return;
+                    }
 
-                sink = new SinkContext(
-                    SinkConcurrency.Concurrent,
-                    "System.Timers.Timer.Elapsed (elapsed events can overlap)",
-                    "System.Timers.Timer.Elapsed",
-                    "AutoReset");
-                break;
-            }
+                    sink = new SinkContext(
+                        SinkConcurrency.Concurrent,
+                        "System.Timers.Timer.Elapsed (elapsed events can overlap)",
+                        "System.Timers.Timer.Elapsed",
+                        "AutoReset");
+                    break;
+                }
 
             default:
                 return;
@@ -487,13 +486,21 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             return;
         }
 
+        var stateArgument = creation.Arguments.FirstOrDefault(a => a.Parameter?.Name == "state");
+        var stateValue = stateArgument is null ? null : Unwrap(stateArgument.Value);
+        var sharedStateType =
+            stateValue is not null
+            && !(stateValue.ConstantValue.HasValue && stateValue.ConstantValue.Value is null)
+                ? stateValue.Type
+                : null;
         var sink = new SinkContext(
             SinkConcurrency.Concurrent,
             "System.Threading.Timer callbacks (timer callbacks can overlap)",
             "System.Threading.Timer callbacks",
             "period",
             timerInstance: GetCreationTargetSymbol(creation),
-            handlerParametersArePerInvocation: false);
+            handlerParametersArePerInvocation: false,
+            sharedHandlerParameterType: sharedStateType);
         AnalyzeHandlerValue(context, callbackArgument.Value, sink, creation.Syntax, scopedTierCandidates);
     }
 
@@ -614,7 +621,16 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             $"EventProcessor<TPartition>.{overridden.Name} (partitions are processed concurrently)",
             $"EventProcessor<TPartition>.{overridden.Name}",
             "partition count");
-        AnalyzeHandlerBody(context, body, methodBody.Syntax, method, sink, methodBody.Syntax, scopedTierCandidates);
+        AnalyzeHandlerBody(
+            context,
+            body,
+            methodBody.Syntax,
+            method,
+            sink,
+            methodBody.Syntax,
+            scopedTierCandidates,
+            GetInitiallySharedHandlerParameters(method, sink)
+        );
     }
 
     /// <summary>
@@ -2104,38 +2120,67 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         switch (target)
         {
             case IAnonymousFunctionOperation lambda:
+                var lambdaSharedParameters = GetInitiallySharedHandlerParameters(
+                    lambda.Symbol,
+                    sink
+                );
                 AnalyzeHandlerBody(
-                    context, lambda.Body, lambda.Syntax, lambda.Symbol, sink, registrationSyntax, scopedTierCandidates);
+                    context,
+                    lambda.Body,
+                    lambda.Syntax,
+                    lambda.Symbol,
+                    sink,
+                    registrationSyntax,
+                    scopedTierCandidates,
+                    lambdaSharedParameters
+                );
 
                 // Thin delegation lambda (`args => HandleAsync(args)`): real handler logic lives
                 // in the same-type instance method, so analyze that body as well.
-                if (TryGetOneHopTarget(lambda, out var delegated))
+                if (TryGetOneHopInvocation(lambda.Body, out var lambdaInvocation))
                 {
                     AnalyzeMethodHandler(
                         context,
-                        delegated,
-                        sink.WithPerInvocationParameters(),
+                        lambdaInvocation.TargetMethod,
+                        sink,
                         registrationSyntax,
-                        scopedTierCandidates);
+                        scopedTierCandidates,
+                        GetForwardedSharedHandlerParameters(
+                            lambdaInvocation,
+                            lambdaSharedParameters
+                        ),
+                        followOneHopDelegation: false
+                    );
                 }
 
                 break;
 
             case IMethodReferenceOperation methodReference:
-                AnalyzeMethodHandler(context, methodReference.Method, sink, registrationSyntax, scopedTierCandidates);
+                AnalyzeMethodHandler(
+                    context,
+                    methodReference.Method,
+                    sink,
+                    registrationSyntax,
+                    scopedTierCandidates,
+                    GetInitiallySharedHandlerParameters(methodReference.Method, sink),
+                    followOneHopDelegation: true
+                );
                 break;
         }
     }
 
-    private static bool TryGetOneHopTarget(IAnonymousFunctionOperation lambda, out IMethodSymbol target)
+    private static bool TryGetOneHopInvocation(
+        IBlockOperation body,
+        out IInvocationOperation invocation
+    )
     {
-        target = null!;
-        if (lambda.Body.Operations.Length != 1)
+        invocation = null!;
+        if (body.Operations.Length != 1)
         {
             return false;
         }
 
-        var statement = lambda.Body.Operations[0];
+        var statement = body.Operations[0];
         var expression = statement switch
         {
             IReturnOperation { ReturnedValue: { } returned } => Unwrap(returned),
@@ -2147,20 +2192,101 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             expression = Unwrap(awaitOperation.Operation);
         }
 
-        if (expression is not IInvocationOperation invocation)
+        if (expression is not IInvocationOperation candidate)
         {
             return false;
         }
 
-        var method = invocation.TargetMethod;
-        var isOnThis = invocation.Instance is null or IInstanceReferenceOperation;
+        var isOnThis = candidate.Instance is null or IInstanceReferenceOperation;
         if (!isOnThis)
         {
             return false;
         }
 
-        target = method;
+        invocation = candidate;
         return true;
+    }
+
+    private static Dictionary<ISymbol, ITypeSymbol> GetInitiallySharedHandlerParameters(
+        IMethodSymbol handler,
+        SinkContext sink
+    )
+    {
+        var shared = new Dictionary<ISymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+        if (!sink.HandlerParametersArePerInvocation &&
+            sink.SharedHandlerParameterType is { } sharedParameterType)
+        {
+            var originalParameters = handler.OriginalDefinition.Parameters;
+            foreach (var parameter in handler.Parameters)
+            {
+                var canonicalParameter =
+                    parameter.Ordinal < originalParameters.Length
+                        ? originalParameters[parameter.Ordinal]
+                        : parameter;
+                shared[canonicalParameter] = sharedParameterType;
+            }
+        }
+
+        return shared;
+    }
+
+    private static Dictionary<ISymbol, ITypeSymbol> GetForwardedSharedHandlerParameters(
+        IInvocationOperation invocation,
+        Dictionary<ISymbol, ITypeSymbol> sourceSharedParameters
+    )
+    {
+        var forwarded =
+            new Dictionary<ISymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var argument in invocation.Arguments)
+        {
+            if (
+                argument.Parameter is { } targetParameter
+                && TryGetDirectForwardedParameter(argument.Value, out var sourceParameter)
+                && sourceSharedParameters.ContainsKey(sourceParameter)
+            )
+            {
+                var originalParameters = invocation.TargetMethod.OriginalDefinition.Parameters;
+                var canonicalTargetParameter =
+                    targetParameter.Ordinal < originalParameters.Length
+                        ? originalParameters[targetParameter.Ordinal]
+                        : targetParameter;
+                forwarded[canonicalTargetParameter] =
+                    sourceSharedParameters[sourceParameter];
+            }
+        }
+
+        return forwarded;
+    }
+
+    private static bool TryGetDirectForwardedParameter(
+        IOperation operation,
+        out IParameterSymbol parameter
+    )
+    {
+        var current = operation;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when !conversion.Conversion.IsUserDefined
+                        && (
+                            conversion.Conversion.IsIdentity
+                            || conversion.Conversion.IsReference
+                        ):
+                    current = conversion.Operand;
+                    continue;
+                case IParameterReferenceOperation parameterReference:
+                    parameter = parameterReference.Parameter;
+                    return true;
+                default:
+                    parameter = null!;
+                    return false;
+            }
+        }
     }
 
     private static void AnalyzeMethodHandler(
@@ -2168,7 +2294,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         IMethodSymbol method,
         SinkContext sink,
         SyntaxNode registrationSyntax,
-        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates,
+        Dictionary<ISymbol, ITypeSymbol> sharedHandlerParameters,
+        bool followOneHopDelegation)
     {
         var enclosingType = GetEnclosingNamedType(context, registrationSyntax);
         if (enclosingType is null ||
@@ -2199,7 +2327,36 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             return;
         }
 
-        AnalyzeHandlerBody(context, body, declarationSyntax, method, sink, registrationSyntax, scopedTierCandidates);
+        AnalyzeHandlerBody(
+            context,
+            body,
+            declarationSyntax,
+            method.OriginalDefinition,
+            sink,
+            registrationSyntax,
+            scopedTierCandidates,
+            sharedHandlerParameters
+        );
+
+        if (followOneHopDelegation && TryGetOneHopInvocation(body, out var invocation))
+        {
+            var forwardedSharedParameters =
+                GetForwardedSharedHandlerParameters(invocation, sharedHandlerParameters);
+            if (forwardedSharedParameters.Count == 0)
+            {
+                return;
+            }
+
+            AnalyzeMethodHandler(
+                context,
+                invocation.TargetMethod,
+                sink,
+                registrationSyntax,
+                scopedTierCandidates,
+                forwardedSharedParameters,
+                followOneHopDelegation: false
+            );
+        }
     }
 
     private static INamedTypeSymbol? GetEnclosingNamedType(
@@ -2227,7 +2384,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         IMethodSymbol handlerSymbol,
         SinkContext sink,
         SyntaxNode registrationSyntax,
-        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates)
+        ConcurrentBag<ScopedTierCandidate> scopedTierCandidates,
+        Dictionary<ISymbol, ITypeSymbol> sharedHandlerParameters)
     {
         var operations = new List<IOperation>();
         CollectSameBoundaryOperations(body, operations);
@@ -2254,8 +2412,21 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 ILocalReferenceOperation local when IsDeclaredOutside(local.Local, handlerBoundary) =>
                     ((ISymbol)local.Local, local.Local.Type),
                 IParameterReferenceOperation parameter when
-                    !SymbolEqualityComparer.Default.Equals(parameter.Parameter.ContainingSymbol, handlerSymbol) =>
-                    ((ISymbol)parameter.Parameter, parameter.Parameter.Type),
+                    !SymbolEqualityComparer.Default.Equals(
+                        parameter.Parameter.ContainingSymbol,
+                        handlerSymbol
+                    )
+                    || sharedHandlerParameters.ContainsKey(parameter.Parameter)
+                        && !IsDirectForwardingUse(parameter, body) =>
+                    (
+                        (ISymbol)parameter.Parameter,
+                        sharedHandlerParameters.TryGetValue(
+                            parameter.Parameter,
+                            out var forwardedType
+                        )
+                            ? forwardedType
+                            : parameter.Parameter.Type
+                    ),
                 _ => (null, null)
             };
 
@@ -2265,7 +2436,13 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             }
 
             if (IsDisposeOnlyUse(operation.Syntax) ||
-                IsInsideLock(context, operation.Syntax, handlerBoundary, writtenSymbols, sink) ||
+                IsInsideLock(
+                    context,
+                    operation.Syntax,
+                    handlerBoundary,
+                    writtenSymbols,
+                    sharedHandlerParameters
+                ) ||
                 guards.Covers(operation.Syntax))
             {
                 continue;
@@ -2309,7 +2486,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 symbolName: pair.Key.Name,
                 serviceType: pair.Value.UseType,
                 catalogName: pair.Value.CatalogName,
-                captureKind: pair.Key.Kind.ToString(),
+                captureKind: sharedHandlerParameters.ContainsKey(pair.Key)
+                    ? "SharedHandlerParameter"
+                    : pair.Key.Kind.ToString(),
                 handlerIsAsync: handlerSymbol.IsAsync,
                 handlerReturnsAwaitable: ReturnsAwaitable(handlerSymbol),
                 captureSite: pair.Key.DeclaringSyntaxReferences.FirstOrDefault(),
@@ -2336,7 +2515,9 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 context, sink, registrationSyntax,
                 symbolName: pair.Key.Name,
                 serviceType: pair.Value.UseType,
-                captureKind: pair.Key.Kind.ToString(),
+                captureKind: sharedHandlerParameters.ContainsKey(pair.Key)
+                    ? "SharedHandlerParameter"
+                    : pair.Key.Kind.ToString(),
                 handlerIsAsync: handlerSymbol.IsAsync,
                 handlerReturnsAwaitable: ReturnsAwaitable(handlerSymbol),
                 captureSite: pair.Key.DeclaringSyntaxReferences.FirstOrDefault(),
@@ -2352,7 +2533,41 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         }
 
         AnalyzeCapturedScopeResolutions(
-            context, operations, handlerBoundary, handlerSymbol, sink, registrationSyntax, guards, writtenSymbols);
+            context,
+            operations,
+            handlerBoundary,
+            handlerSymbol,
+            sink,
+            registrationSyntax,
+            guards,
+            writtenSymbols,
+            sharedHandlerParameters
+        );
+    }
+
+    private static bool IsDirectForwardingUse(
+        IParameterReferenceOperation parameterReference,
+        IBlockOperation body)
+    {
+        if (!TryGetOneHopInvocation(body, out var invocation))
+        {
+            return false;
+        }
+
+        foreach (var argument in invocation.Arguments)
+        {
+            if (argument.Value.Syntax.Span.Contains(parameterReference.Syntax.Span) &&
+                TryGetDirectForwardedParameter(argument.Value, out var forwardedParameter) &&
+                SymbolEqualityComparer.Default.Equals(
+                    forwardedParameter,
+                    parameterReference.Parameter
+                ))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private sealed class DirectCandidate
@@ -2382,7 +2597,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         SinkContext sink,
         SyntaxNode registrationSyntax,
         HandlerGuards guards,
-        HashSet<ISymbol> writtenSymbols)
+        HashSet<ISymbol> writtenSymbols,
+        Dictionary<ISymbol, ITypeSymbol> sharedHandlerParameters)
     {
         var reportedTypes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var operation in operations)
@@ -2423,7 +2639,8 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 IFieldSymbol => true,
                 ILocalSymbol local => IsDeclaredOutside(local, handlerBoundary),
                 IParameterSymbol parameter =>
-                    !SymbolEqualityComparer.Default.Equals(parameter.ContainingSymbol, handlerSymbol),
+                    !SymbolEqualityComparer.Default.Equals(parameter.ContainingSymbol, handlerSymbol)
+                    || sharedHandlerParameters.ContainsKey(parameter),
                 _ => false
             };
             if (!isShared)
@@ -2431,7 +2648,14 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
                 continue;
             }
 
-            if (IsInsideLock(context, invocation.Syntax, handlerBoundary, writtenSymbols, sink) || guards.Covers(invocation.Syntax))
+            if (IsInsideLock(
+                    context,
+                    invocation.Syntax,
+                    handlerBoundary,
+                    writtenSymbols,
+                    sharedHandlerParameters
+                ) ||
+                guards.Covers(invocation.Syntax))
             {
                 continue;
             }
@@ -2879,7 +3103,7 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         SyntaxNode useSyntax,
         SyntaxNode handlerBoundary,
         HashSet<ISymbol> writtenSymbols,
-        SinkContext sink)
+        Dictionary<ISymbol, ITypeSymbol> sharedHandlerParameters)
     {
         var semanticModel = context.Operation.SemanticModel;
         for (var node = useSyntax.Parent; node is not null && node != handlerBoundary; node = node.Parent)
@@ -2899,9 +3123,11 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
 
             // A handler parameter is normally a fresh object per invocation, so locking it
             // guards nothing. Sinks that hand every invocation the same object — a
-            // System.Threading.Timer's state argument — are the exception.
+            // System.Threading.Timer's state argument — are the exception, including when
+            // that exact parameter is forwarded through one thin delegation hop.
             var parameterIsShared =
-                lockTarget is IParameterSymbol && !sink.HandlerParametersArePerInvocation;
+                lockTarget is IParameterSymbol
+                && sharedHandlerParameters.ContainsKey(lockTarget);
 
             if (lockTarget is ILocalSymbol or IParameterSymbol &&
                 !IsDeclaredOutside(lockTarget, handlerBoundary) &&
@@ -2984,18 +3210,18 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
             switch (containingType)
             {
                 case "System.Threading.SemaphoreSlim" when method.Name is "Wait" or "WaitAsync":
-                {
-                    // A semaphore created inside the handler is per-invocation and guards nothing.
-                    var waitedSemaphore = GetInstanceReferenceSymbol(invocation.Instance);
-                    if (waitedSemaphore is not null &&
-                        (waitedSemaphore is not ILocalSymbol waitedLocal ||
-                         IsDeclaredOutside(waitedLocal, handlerBoundary)))
                     {
-                        (waits ??= new()).Add((waitedSemaphore, invocation));
-                    }
+                        // A semaphore created inside the handler is per-invocation and guards nothing.
+                        var waitedSemaphore = GetInstanceReferenceSymbol(invocation.Instance);
+                        if (waitedSemaphore is not null &&
+                            (waitedSemaphore is not ILocalSymbol waitedLocal ||
+                             IsDeclaredOutside(waitedLocal, handlerBoundary)))
+                        {
+                            (waits ??= new()).Add((waitedSemaphore, invocation));
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "System.Threading.SemaphoreSlim" when method.Name == "Release":
                     if (GetInstanceReferenceSymbol(invocation.Instance) is { } releasedSemaphore &&

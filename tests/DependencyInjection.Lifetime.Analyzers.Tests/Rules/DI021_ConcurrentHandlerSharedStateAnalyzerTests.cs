@@ -5275,6 +5275,384 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
         await VerifyNoneAsync(source);
     }
 
+    [Fact]
+    public async Task ThreadingTimer_StateDbContextForwardedOneHop_ReportsDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle((AppDbContext)state);
+                }
+
+                private void Handle(AppDbContext db)
+                {
+                    [|db|].Add("tick");
+                    db.SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateObjectForwardedOneHopThenCast_ReportsDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle(state);
+                }
+
+                private void Handle(object state)
+                {
+                    ((AppDbContext)[|state|]).SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_NullStateForwardedOneHop_NoDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start()
+                {
+                    _timer = new Timer(Poll, null, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle((AppDbContext)state);
+                }
+
+                private void Handle(AppDbContext db)
+                {
+                    db.SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateProviderForwardedOneHop_ReportsDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(IServiceProvider provider)
+                {
+                    _timer = new Timer(Poll, provider, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle((IServiceProvider)state);
+                }
+
+                private void Handle(IServiceProvider provider)
+                {
+                    [|provider.GetRequiredService<AppDbContext>()|].SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateDbContextForwardedToGenericTarget_ReportsDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle((AppDbContext)state, new AppDbContext());
+                }
+
+                private void Handle<TContext>(TContext db, AppDbContext fresh)
+                    where TContext : AppDbContext
+                {
+                    [|db|].SaveChanges();
+                    fresh.SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateGateForwardedToGenericTarget_LockSuppressesDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private readonly AppDbContext _db;
+                private Timer _timer;
+
+                public Poller(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var gate = new object();
+                    _timer = new Timer(Poll, gate, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle(state);
+                }
+
+                private void Handle<TGate>(TGate gate)
+                    where TGate : class
+                {
+                    lock (gate)
+                    {
+                        _db.SaveChanges();
+                    }
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_GenericCallbackStateForwardedOneHop_ReportsDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll<TState>(TState state)
+                    where TState : class
+                {
+                    Handle((AppDbContext)(object)state);
+                }
+
+                private void Handle(AppDbContext db)
+                {
+                    [|db|].SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_GenericCallbackStateLock_LockSuppressesDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private readonly AppDbContext _db;
+                private Timer _timer;
+
+                public Poller(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    _timer = new Timer(Poll, new object(), 0, 1000);
+                }
+
+                private void Poll<TState>(TState state)
+                    where TState : class
+                {
+                    lock (state)
+                    {
+                        _db.SaveChanges();
+                    }
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateGateForwardedOneHop_LockSuppressesDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private readonly AppDbContext _db;
+                private Timer _timer;
+
+                public Poller(AppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public void Start()
+                {
+                    var gate = new object();
+                    _timer = new Timer(Poll, gate, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle(state);
+                }
+
+                private void Handle(object gate)
+                {
+                    lock (gate)
+                    {
+                        _db.Add("tick");
+                        _db.SaveChanges();
+                    }
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_TransformedStateForwarding_NoDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start()
+                {
+                    _timer = new Timer(Poll, new object(), 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Handle(new AppDbContext());
+                }
+
+                private void Handle(AppDbContext db)
+                {
+                    db.Add("tick");
+                    db.SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateDbContextForwardedTwoHops_NoDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    Forward((AppDbContext)state);
+                }
+
+                private void Forward(AppDbContext db)
+                {
+                    Handle(db);
+                }
+
+                private void Handle(AppDbContext db)
+                {
+                    db.Add("tick");
+                    db.SaveChanges();
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
+    public async Task ThreadingTimer_StateDbContextForwardedCrossType_NoDiagnostic()
+    {
+        var source = BaseUsings + EfCoreStubs + """
+            public static class PollingWork
+            {
+                public static void Handle(AppDbContext db)
+                {
+                    db.Add("tick");
+                    db.SaveChanges();
+                }
+            }
+
+            public class Poller
+            {
+                private Timer _timer;
+
+                public void Start(AppDbContext db)
+                {
+                    _timer = new Timer(Poll, db, 0, 1000);
+                }
+
+                private void Poll(object state)
+                {
+                    PollingWork.Handle((AppDbContext)state);
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
     private class CyclicTypeParameterProxy : System.Reflection.DispatchProxy
     {
         public Microsoft.CodeAnalysis.ITypeSymbol Constraint { get; set; } = null!;
