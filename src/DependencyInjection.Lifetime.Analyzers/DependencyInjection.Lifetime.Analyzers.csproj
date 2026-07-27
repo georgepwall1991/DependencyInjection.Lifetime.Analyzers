@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI019 now preserves path stability for provider assignments in the always-evaluated left operand of &amp;&amp;, ||, or ??, so later all-root conditional provider joins still report scoped resolutions from root. Writes in the conditionally evaluated right operand remain conservative and do not create false root-provider facts.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI019 now preserves path stability for provider assignments in the always-evaluated left operand of &amp;&amp;, ||, or ??, so later all-root conditional provider joins still report scoped resolutions from root. Writes in the conditionally evaluated right operand remain conservative and do not create false root-provider facts. Nested null-conditional WhenNotNull writes remain conditional, while writes in the null-conditional receiver remain definite.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>
