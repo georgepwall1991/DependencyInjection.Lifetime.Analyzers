@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.16
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.17
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.16">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.17">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.16" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.17" />
 ```
 
 Then reference it from the project file:
@@ -99,7 +99,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## 30-second path
 
-1. Reference the package with `PrivateAssets="all"` (version `3.5.16` above).
+1. Reference the package with `PrivateAssets="all"` (version `3.5.17` above).
 2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
 3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
 4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
@@ -917,7 +917,7 @@ services.AddSingleton(typeof(MyValueService), _ => new MyValueService());
 
 ## DI019: Scoped Service Resolved From Root Provider
 
-**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`. Root-provider aliases also stay classified through `?? throw` guards and conditional expressions whose two result arms are proven root through path-stable declarations or straight-line writes. Provider declarations and assignments are collected in source order, path stability propagates through copied aliases, later unclassified, `??=`, deconstruction, and `ref`/`out` writes invalidate older provider facts. Write facts become visible only after right-hand-side, initializer, or argument evaluation, and nested mutation events are processed before their enclosing write, so resolutions and alias copies observe the provider state at that runtime point. Assignments in the always-evaluated left operand of `&&`, `||`, or `??` and in a ternary's always-evaluated condition retain path stability; matching right-operand writes and writes in either ternary result arm stay conservative because execution can skip them. A nested null-conditional `WhenNotNull` write remains conditional even inside a short-circuit left operand, while a write in the null-conditional receiver remains definite. Merely binding or retargeting a ref local preserves the referents' facts; source-positioned mappings ensure later writes follow every possible storage active at that point across conditional or unconditional retargeting and ref-conditional local, by-reference argument, or lvalue targets, while reads use only the mapping active at their position and classify the alias only when every possible storage agrees. Writes through aliases with multiple possible referents invalidate every candidate storage rather than claiming each one definitely received the new value. Forward or backward `goto` edges cannot make path-dependent facts stable. Field/property facts never qualify because source position cannot prove cross-method execution; deferred lambda, LINQ-query, and local-function hazards remain conservative for captured outer storage, while locals and parameters owned by the deferred boundary retain ordinary path stability for declarations and straight-line writes. Control flow outside that owning boundary does not alter the path executed inside it. Other control-flow-dependent, mixed root/scoped, and unknown arms stay conservative. Both ordinary extension syntax and direct static calls through the exact framework `ServiceProviderServiceExtensions` and `ServiceProviderKeyedServiceExtensions` types are analyzed, including reordered named arguments; same-named user extensions stay silent.
+**What it catches:** scoped services, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, or services whose activation graph reaches a scoped service, resolved from a root `IServiceProvider` such as ASP.NET Core `app.Services`, ASP.NET test-host `factory.Services` / `server.Services`, Generic Host `host.Services`, nullable root-provider surfaces such as `app.Services!`, or a provider returned by `BuildServiceProvider()`. Root-provider aliases also stay classified through `?? throw` guards and conditional expressions whose two result arms are proven root through path-stable declarations or straight-line writes. Provider declarations and assignments are collected in source order, path stability propagates through copied aliases, later unclassified, `??=`, deconstruction, and `ref`/`out` writes invalidate older provider facts. Write facts become visible only after right-hand-side, initializer, or argument evaluation, and nested mutation events are processed before their enclosing write, so resolutions and alias copies observe the provider state at that runtime point. Assignments in the always-evaluated left operand of `&&`, `||`, or `??`, in a ternary's always-evaluated condition, and in the governing expression of a switch statement or switch expression retain path stability; matching right-operand writes, ternary result-arm writes, and writes in switch sections or result arms stay conservative because execution can skip them. Nested ternary-arm, short-circuit-right, and null-conditional `WhenNotNull` writes remain conditional even inside a switch governing expression, while a write in the null-conditional receiver remains definite. Merely binding or retargeting a ref local preserves the referents' facts; source-positioned mappings ensure later writes follow every possible storage active at that point across conditional or unconditional retargeting and ref-conditional local, by-reference argument, or lvalue targets, while reads use only the mapping active at their position and classify the alias only when every possible storage agrees. Writes through aliases with multiple possible referents invalidate every candidate storage rather than claiming each one definitely received the new value. Forward or backward `goto` edges cannot make path-dependent facts stable. Field/property facts never qualify because source position cannot prove cross-method execution; deferred lambda, LINQ-query, and local-function hazards remain conservative for captured outer storage, while locals and parameters owned by the deferred boundary retain ordinary path stability for declarations and straight-line writes. Control flow outside that owning boundary does not alter the path executed inside it. Other control-flow-dependent, mixed root/scoped, and unknown arms stay conservative. Both ordinary extension syntax and direct static calls through the exact framework `ServiceProviderServiceExtensions` and `ServiceProviderKeyedServiceExtensions` types are analyzed, including reordered named arguments; same-named user extensions stay silent.
 
 **Why it matters:** the default container's scope validation is designed to prevent scoped services from being resolved directly or indirectly from the root provider. Resolving them from root can fail at runtime or accidentally stretch scoped state to application lifetime.
 

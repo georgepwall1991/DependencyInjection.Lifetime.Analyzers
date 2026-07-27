@@ -130,6 +130,13 @@ jobs:
             --output ./artifacts \
             --release-notes-file ./artifacts/release-notes/package-release-notes.txt
 
+      - name: Test release package verifier
+        run: node --test tools/verify-package-release-notes.test.mjs
+
+      - name: Verify release package
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: scripts/verify-packages.sh ./artifacts ./artifacts/release-notes/package-release-notes.txt
+
       - name: Upload NuGet package artifact
         uses: actions/upload-artifact@v4
         with:

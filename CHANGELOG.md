@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.17] - 2026-07-27
+
+### Fixed
+
+- **DI019 switch-governing provider writes** (false negative) — provider assignments in the always-evaluated governing expression of a switch statement or switch expression now retain path stability for later all-root conditional joins. Assignments in switch sections or result arms remain conservative because those regions are conditionally evaluated, as do nested ternary, short-circuit-right, and null-conditional `WhenNotNull` writes inside a governing expression.
+- **Release package-note verification** — tag CI now compares the packed nuspec's `<releaseNotes>` value with the generated release-note source before uploading artifacts, preventing missing, truncated, or stale package notes from reaching NuGet or GitHub Releases.
+
 ## [3.5.16] - 2026-07-27
 
 ### Fixed
