@@ -499,6 +499,29 @@ public sealed class MyService
 
 **Known exceptions in this rule:** factory-style types with value-returning factory members, singleton services that use `IServiceScopeFactory` to create scopes deliberately, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, hosted services, endpoint filter factories, and provider parameters on non-public constructors the container cannot activate.
 
+Registrations that are definitely removed by a later unconditional `RemoveAll` or `Replace` call
+in the same straight-line service-collection flow are also ignored. Conditional or otherwise
+bypassable removals do not suppress the diagnostic because the registration can still be active.
+Fluent `Add*().RemoveAll()` chains follow nested-call execution order, and `TryAdd` fallbacks after
+an unconditional removal are analyzed when they become effective. Reassigning a collection
+receiver starts a separate flow, and companion descriptors emitted by one framework registration
+call retain independent effective-state identities. Top-level statements participate in the same
+proof, captured aliases retain their assignment-time collection identity, and `Insert(0)` ordering
+is honored when replaying `Replace`. A conditional `RemoveAll` can make a later `TryAdd` candidate
+effective, but exiting and mutually exclusive branch shapes do not.
+Only straight-line alias assignments determine collection identity; conditional assignments
+invalidate earlier aliases. Non-terminating branches cannot activate an unreachable fallback, while
+reachable same-branch, `switch`, loop, `try`/`catch`, and `goto` paths remain part of the
+effective-registration flow. `TryAddEnumerable` retains its service-and-implementation
+deduplication semantics during replay. Alternate-branch registrations cannot erase a pending
+removal path, while an unconditional replacement or `finally` restoration can. Reachable
+`try`/`catch` paths and nested exhaustive switches are included; nested-container,
+throw-expression, and constant-true exits remain unreachable, and activation
+constructors are selected using dependencies still effective after replay. Mutations and alias
+assignments in short-circuited right operands stay conditional, while catch-all handlers can resume
+an explicitly thrown removal path at a later fallback. Exactly matching typed catches also resume;
+other typed catches remain conservative. Alias candidates are indexed once per syntax tree.
+
 ---
 
 ## DI012: Conditional Registration Misuse

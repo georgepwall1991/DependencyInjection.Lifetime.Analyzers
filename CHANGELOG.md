@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.11] - 2026-07-27
+
+### Fixed
+
+- **DI011 effective-registration mutation handling** (false positive) — provider-injection
+  diagnostics now ignore registrations provably removed by a later, unconditional `RemoveAll` or
+  `Replace` mutation in the same straight-line service-collection flow. Conditional, cross-scope,
+  bypassable, and key-mismatched mutations remain conservative and continue reporting. Fluent
+  registration/removal chains preserve execution order, and a `TryAdd` fallback after `RemoveAll`
+  remains visible as the effective registration. Reassigned collection receivers and companion
+  registrations emitted by a single framework call retain independent effective-state identities.
+  Top-level statements, captured aliases, and index-zero descriptor insertion preserve their
+  runtime removal semantics. Conditional removal paths can reactivate later `TryAdd` candidates
+  both inside and after the removal branch without conflating mutually exclusive or exiting paths.
+  `TryAddEnumerable` retains its implementation-aware semantics. Only straight-line alias
+  assignments determine collection identity; conditional receiver reassignment invalidates earlier
+  aliases. Non-terminating loops and reachable `switch`, loop, `try`/`catch`, and `goto` fallback
+  paths preserve reachability accurately, including nested exhaustive switches, nested-container
+  exits, throw-expression exits, and constant-true exits. Registrations in mutually exclusive branches no longer erase
+  pending removal paths, while unconditional restorations in `finally` suppress ineffective
+  fallbacks. Short-circuited mutations and alias assignments stay conditional, while catch-all
+  handlers and exactly matching typed handlers preserve removal paths that resume after an
+  explicit throw. Alias assignments and initializers are indexed once per syntax tree instead of
+  rescanning the complete tree for every registration receiver.
+  Activation-constructor selection and DI009 lifetime classification use the replayed,
+  source-ordered effective dependency set rather than registrations already removed at runtime.
+
 ## [3.5.10] - 2026-07-27
 
 ### Fixed

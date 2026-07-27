@@ -406,9 +406,1535 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
                 .WithArguments("CacheFactory", "IServiceProvider"));
     }
 
+    [Fact]
+    public async Task RegisteredService_ConditionallyRemovedByRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    {|#0:services.AddScoped<IMyService, MyService>()|};
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("MyService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenTryAddProviderService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    services.RemoveAll<IMyService>();
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllThenTryAddProviderService_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenTryAddInSameBranch_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replace)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (replace)
+                    {
+                        services.RemoveAll<IMyService>();
+                        {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_TryRemoveAllThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+                    catch
+                    {
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ShortCircuitedRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(
+                    IServiceCollection services,
+                    IServiceCollection? fallback)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+                    _ = fallback ?? services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_LogicalOrRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool skip)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+                    _ = skip ||
+                        services.RemoveAll<IMyService>() is not null;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_LogicalAndReplace_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replace)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+                    _ = replace &&
+                        services.Replace(
+                            ServiceDescriptor.Scoped<IMyService, SafeService>()) is not null;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ShortCircuitedAliasBeforeRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection? fallback)
+                {
+                    var original = new ServiceCollection();
+                    {|#0:original.AddScoped<IMyService, ProviderService>()|};
+
+                    IServiceCollection services = new ServiceCollection();
+                    _ = fallback ?? (services = original);
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_LogicalAndAliasBeforeRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(
+                    IServiceCollection services,
+                    bool reassign)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+
+                    IServiceCollection alias = new ServiceCollection();
+                    _ = reassign &&
+                        (alias = services).Count >= 0;
+                    alias.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenCaughtThrowThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                            throw new InvalidOperationException();
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenMatchingTypedCatchThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                            throw new InvalidOperationException();
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenBaseTypedCatchThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                            throw new InvalidOperationException();
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllThenUncaughtTypedThrowThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                            throw new InvalidOperationException();
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_LogicalAndLeftAliasBeforeRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(
+                    IServiceCollection services,
+                    bool continueEvaluation)
+                {
+                    services.AddScoped<IMyService, ProviderService>();
+
+                    IServiceCollection alias = new ServiceCollection();
+                    _ = (alias = services).Count >= 0 &&
+                        continueEvaluation;
+                    alias.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemovedConstructorDependencyUsesProviderFallback_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public interface IDependency { }
+            public interface IOther { }
+
+            public sealed class SafeService : IMyService { }
+            public sealed class Dependency : IDependency { }
+            public sealed class Other : IOther { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IDependency dependency, IOther other) { }
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, Dependency>();
+                    services.AddScoped<IOther, Other>();
+                    services.AddScoped<IMyService, SafeService>();
+                    services.RemoveAll<IDependency>();
+                    services.RemoveAll<IMyService>();
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllAfterReceiverReassignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+                    services = new ServiceCollection();
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalReceiverAssignment_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(bool useOriginal)
+                {
+                    var original = new ServiceCollection();
+                    IServiceCollection services = new ServiceCollection();
+                    if (useOriginal)
+                    {
+                        services = original;
+                    }
+
+                    {|#0:original.AddScoped<IMyService, ProviderService>()|};
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalReceiverReassignmentAfterAlias_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool replace)
+                {
+                    var original = new ServiceCollection();
+                    services = original;
+                    if (replace)
+                    {
+                        services = new ServiceCollection();
+                    }
+
+                    {|#0:original.AddScoped<IMyService, ProviderService>()|};
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllGotoTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        goto fallback;
+                    }
+
+                    return;
+
+                fallback:
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_SwitchRemoveAllThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, int mode)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    switch (mode)
+                    {
+                        case 1:
+                            services.RemoveAll<IMyService>();
+                            break;
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_NestedSwitchAfterRemoveAllThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove, int mode)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        switch (mode)
+                        {
+                            case 1:
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_AlternateBranchRegistrationDoesNotClearPendingRemoveAll_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+            public sealed class AlternateSafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+                    else
+                    {
+                        services.AddScoped<IMyService, AlternateSafeService>();
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredService_LoopRemoveAllThenTryAdd_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    while (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        break;
+                    }
+
+                    {|#0:services.TryAddScoped<IMyService, ProviderService>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
+    [Fact]
+    public async Task RegisteredTypedHttpClient_CompanionRemoved_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using System.Net.Http;
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public sealed class ProviderClient
+            {
+                public ProviderClient(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddHttpClient<ProviderClient>()|};
+                    services.RemoveAll<IHttpClientFactory>();
+                }
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<
+            DI011_ServiceProviderInjectionAnalyzer,
+            Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies =
+                AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                    .ReferenceAssembliesWithFrameworkExtensions,
+            MarkupOptions = Microsoft.CodeAnalysis.Testing.MarkupOptions.UseFirstDescriptor,
+        };
+        test.ExpectedDiagnostics.Add(
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderClient", "IServiceProvider"));
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task RegisteredService_InsertZeroThenReplace_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class SafeService : IMyService { }
+            public sealed class ReplacementService : IMyService { }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    {|#0:services.AddScoped<IMyService, ProviderService>()|};
+                    services.Insert(
+                        0,
+                        ServiceDescriptor.Scoped<IMyService, SafeService>());
+                    services.Replace(
+                        ServiceDescriptor.Scoped<IMyService, ReplacementService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ServiceProviderInjection)
+                .WithLocation(0)
+                .WithArguments("ProviderService", "IServiceProvider"));
+    }
+
     #endregion
 
     #region Should Not Report Diagnostic (Allowed Cases)
+
+    [Fact]
+    public async Task RegisteredService_RemovedByRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class MyService : IMyService
+            {
+                public MyService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, MyService>();
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_TryAddEnumerableThenRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    services.TryAddEnumerable(
+                        ServiceDescriptor.Scoped<IMyService, ProviderService>());
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_FluentRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ProviderService>().RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_TopLevelRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            var services = new ServiceCollection();
+            services.AddScoped<ProviderService>();
+            services.RemoveAll<ProviderService>();
+
+            public sealed class ProviderService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsConsoleApplicationAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_AliasSnapshotRemoveAllAfterReceiverReassignment_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    var original = services;
+                    original.AddScoped<IMyService, ProviderService>();
+                    services = new ServiceCollection();
+                    original.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_AliasRoundTripThenRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IMyService, ProviderService>();
+                    var same = services;
+                    services = same;
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllExitThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        return;
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllInfiniteLoopThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        while (true)
+                        {
+                        }
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllAndBreakInOppositeLoopBranchesThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    while (true)
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_RemoveAllAndTryAddInOppositeBranches_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+                    else
+                    {
+                        services.TryAddScoped<IMyService, ProviderService>();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllNestedExitThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(
+                    IServiceCollection services,
+                    bool remove,
+                    bool firstExit)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        if (firstExit)
+                        {
+                            return;
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllNestedThrowExpressionThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        var value = (string?)null ??
+                            throw new InvalidOperationException();
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllThenUnconditionalRegistrationThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+            public sealed class ReplacementService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+
+                    services.AddScoped<IMyService, ReplacementService>();
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllThenFinallyRegistrationThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                        }
+                    }
+                    finally
+                    {
+                        services.AddScoped<IMyService, SafeService>();
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_ConditionalRemoveAllThenConstantTrueExitThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                        if (true)
+                        {
+                            return;
+                        }
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_NestedTryConditionalRemoveAllThenExitThenTryAdd_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IMyService { }
+            public sealed class SafeService : IMyService { }
+
+            public sealed class ProviderService : IMyService
+            {
+                public ProviderService(IServiceProvider provider) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddScoped<IMyService, SafeService>();
+                    try
+                    {
+                        if (remove)
+                        {
+                            services.RemoveAll<IMyService>();
+                            return;
+                        }
+                    }
+                    finally
+                    {
+                    }
+
+                    services.TryAddScoped<IMyService, ProviderService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
 
     [Fact]
     public async Task FactoryClass_NoDiagnostic()

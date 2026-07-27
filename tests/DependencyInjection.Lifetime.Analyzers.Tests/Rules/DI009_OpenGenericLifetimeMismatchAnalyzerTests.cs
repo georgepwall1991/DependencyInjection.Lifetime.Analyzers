@@ -909,6 +909,190 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
     }
 
     [Fact]
+    public async Task OpenGenericSingleton_ReactivatedScopedDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IRepository<T> { }
+            public interface IDependency { }
+
+            public sealed class OriginalDependency : IDependency { }
+            public sealed class ScopedDependency : IDependency { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository(IDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, OriginalDependency>();
+                    services.RemoveAll<IDependency>();
+                    services.TryAddScoped<IDependency, ScopedDependency>();
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IDependency"));
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_ReactivatedScopedEnumerableDependency_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IRepository<T> { }
+            public interface IDependency { }
+
+            public sealed class OriginalDependency : IDependency { }
+            public sealed class ScopedDependency : IDependency { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository(
+                    System.Collections.Generic.IEnumerable<IDependency> dependencies) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, OriginalDependency>();
+                    services.RemoveAll<IDependency>();
+                    services.TryAddScoped<IDependency, ScopedDependency>();
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IDependency"));
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_RemovedClosedOptionsSnapshotUsesKnownScopedLifetime_ReportsDiagnostic()
+    {
+        var source = Usings +
+                     "using Microsoft.Extensions.DependencyInjection.Extensions;\n\n" +
+                     OptionsStubs + """
+            public sealed class MyOptions { }
+
+            public sealed class CustomSnapshot :
+                Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> { }
+
+            public interface IRepository<T> { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository(
+                    Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> snapshot) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<
+                        Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>,
+                        CustomSnapshot>();
+                    services.RemoveAll<
+                        Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>();
+                    {|#0:services.AddSingleton(typeof(IRepository<>), typeof(Repository<>))|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.OpenGenericLifetimeMismatch)
+                .WithLocation(0)
+                .WithArguments("Repository", "scoped", "IOptionsSnapshot"));
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_ReactivatedSingletonDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IRepository<T> { }
+            public interface IDependency { }
+
+            public sealed class OriginalDependency : IDependency { }
+            public sealed class SingletonDependency : IDependency { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository(IDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IDependency, OriginalDependency>();
+                    services.RemoveAll<IDependency>();
+                    services.TryAddSingleton<IDependency, SingletonDependency>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OpenGenericSingleton_LaterSingletonOverridesReactivatedScopedDependency_NoDiagnostic()
+    {
+        var source = Usings + """
+            using Microsoft.Extensions.DependencyInjection.Extensions;
+
+            public interface IRepository<T> { }
+            public interface IDependency { }
+
+            public sealed class OriginalDependency : IDependency { }
+            public sealed class ScopedDependency : IDependency { }
+            public sealed class FinalDependency : IDependency { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository(IDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IDependency, OriginalDependency>();
+                    services.RemoveAll<IDependency>();
+                    services.TryAddScoped<IDependency, ScopedDependency>();
+                    services.AddSingleton<IDependency, FinalDependency>();
+                    services.AddSingleton(typeof(IRepository<>), typeof(Repository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task OpenGenericSingleton_ConditionallyRemovedByRemoveAll_ReportsDiagnostic()
     {
         var source = Usings + """

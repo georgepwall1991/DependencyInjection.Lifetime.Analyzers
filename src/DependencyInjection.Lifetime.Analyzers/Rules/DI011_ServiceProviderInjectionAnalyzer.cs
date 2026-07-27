@@ -57,9 +57,23 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
         RegistrationCollector registrationCollector,
         WellKnownTypes wellKnownTypes)
     {
-        var resolutionEngine = new DependencyResolutionEngine(registrationCollector, wellKnownTypes);
+        var registrations = registrationCollector.AllRegistrations.ToList();
+        var registrationCandidates = registrationCollector.RegistrationCandidates.ToList();
+        var definitelyRemovedRegistrations = DefinitelyRemovedRegistrationSet.Create(
+            context.Compilation,
+            registrations,
+            registrationCandidates,
+            registrationCollector.OrderedMutations);
+        var effectiveRegistrations =
+            definitelyRemovedRegistrations.GetEffectiveRegistrations(
+                registrations,
+                registrationCandidates);
+        var resolutionEngine = new DependencyResolutionEngine(
+            registrationCollector,
+            wellKnownTypes,
+            availableRegistrations: effectiveRegistrations);
 
-        foreach (var registration in registrationCollector.AllRegistrations)
+        foreach (var registration in effectiveRegistrations)
         {
             if (registration.HasImplementationInstance ||
                 registration.FactoryExpression is not null)
