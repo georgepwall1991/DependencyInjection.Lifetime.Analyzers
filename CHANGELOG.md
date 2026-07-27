@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.3] - 2026-07-27
+
+### Fixed
+
+- **DI028 referenced linked-token sources** (false negative) — a linked
+  `CancellationTokenSource` no longer becomes silent merely because code reads its `Token`.
+  DI028 now reuses DI014's ownership proof: `using`, reachable straight-line or `finally`
+  disposal, and unconditional return to the caller stay silent; conditional or bypassed
+  cleanup and reassignment before disposal report. Parentheses, null-forgiving operators, and
+  identity casts cannot hide a `Token` read, a wrapped initializer, or real cleanup, while
+  arbitrary `Dispose`/`DisposeAsync` extension methods cannot masquerade as ownership cleanup.
+  Declaration initializers and assignments to predeclared locals share the same proof, including
+  an assignment used as the receiver of `.Token`. Conditional-access `Token` reads remain visible
+  even when another operation such as `Register` is chained after them. Directly extracting
+  `.Token` or `?.Token` also reports because it discards the only handle through which the linked
+  source can be disposed. Earlier uses of a predeclared local do not describe the newly assigned
+  source, while capture by a nested function stays conservative. Unknown ownership-transfer calls
+  remain silent.
+
 ## [3.5.2] - 2026-07-26
 
 ### Changed

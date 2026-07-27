@@ -1059,10 +1059,8 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
     }
 
     [Fact]
-    public async Task LinkedTokenSourceReferencedLater_Silent()
+    public async Task LinkedTokenSourceTokenExtractedDirectly_Reports()
     {
-        // The accepted false negative: the local is referenced, so the discard proof refuses it even
-        // though nothing disposes the linked source. Proving this needs DI014-class disposal analysis.
         var source =
             Prelude
             + """
@@ -1074,10 +1072,978 @@ public class DI028_CallbackRegistrationLeakAnalyzerTests
 
                 public class Worker
                 {
-                    public async Task RunAsync(IHostApplicationLifetime lifetime)
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
                     {
-                        var linked = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
+                        var token = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|].Token;
+                        await Task.Delay(1, token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceTokenExtractedDirectlyThroughConditionalAccess_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var token = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]?.Token;
+                        await Task.Delay(1, token!.Value);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceAssignedInsideTokenExpressionWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        CancellationTokenSource linked = null!;
+                        var token = (linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]).Token;
+                        await Task.Delay(1, token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceTransferredThroughUnknownFluentCallBeforeTokenRead_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public sealed class Owner : IDisposable
+                {
+                    private CancellationTokenSource? _source;
+
+                    public void Take(CancellationTokenSource source) => _source = source;
+
+                    public void Dispose() => _source?.Dispose();
+                }
+
+                public static class OwnershipExtensions
+                {
+                    public static CancellationTokenSource RetainWith(
+                        this CancellationTokenSource source,
+                        Owner owner)
+                    {
+                        owner.Take(source);
+                        return source;
+                    }
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        using var owner = new Owner();
+                        var token = CancellationTokenSource
+                            .CreateLinkedTokenSource(_lifetime.ApplicationStopping)
+                            .RetainWith(owner)
+                            .Token;
+                        await Task.Delay(1, token);
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceReferencedLaterWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
                         await Task.Delay(1, linked.Token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceInConditionalInitializerWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync(bool useParent)
+                    {
+                        var linked = useParent
+                            ? [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]
+                            : new CancellationTokenSource();
+                        await Task.Delay(1, linked.Token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceInConditionalInitializerDisposedAfterUse_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync(bool useParent)
+                    {
+                        var linked = useParent
+                            ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)
+                            : new CancellationTokenSource();
+                        await Task.Delay(1, linked.Token);
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceInCoalescingInitializerWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync(CancellationTokenSource? fallback)
+                    {
+                        var linked = fallback
+                            ?? [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceAssignedToPredeclaredLocalWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        CancellationTokenSource linked;
+                        linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceAssignedToPredeclaredLocalAndDisposed_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        CancellationTokenSource linked;
+                        linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        await Task.Delay(1, linked.Token);
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceAssignedAfterPriorLocalReferencesWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        CancellationTokenSource linked = new();
+                        GC.KeepAlive(linked);
+                        linked.Dispose();
+
+                        linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceCapturedAndDisposedByInvokedLocalFunction_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+
+                        void ConsumeAndDispose()
+                        {
+                            _ = linked.Token;
+                            linked.Dispose();
+                        }
+
+                        ConsumeAndDispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceCapturedAndDisposedByInvokedLambda_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        Action consumeAndDispose = () =>
+                        {
+                            _ = linked.Token;
+                            linked.Dispose();
+                        };
+
+                        consumeAndDispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceConditionalTokenReadWithoutDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        _ = linked?.Token;
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceConditionalTokenReadAndDisposed_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        _ = linked?.Token;
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceConditionalTokenReadChainedIntoRegistration_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        using var registration = linked?.Token.Register(OnStop);
+                    }
+
+                    private void OnStop() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceDirectConditionalTokenReadChainedIntoRegistration_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public void Run()
+                    {
+                        using var registration =
+                            [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]?
+                                .Token.Register(OnStop);
+                    }
+
+                    private void OnStop() { }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Theory]
+    [InlineData("(linked).Token")]
+    [InlineData("linked!.Token")]
+    [InlineData("((CancellationTokenSource)linked).Token")]
+    public async Task LinkedTokenSourceTokenReadThroughTransparentWrapper_Reports(string tokenExpression)
+    {
+        var source =
+            (
+                Prelude
+                + """
+                    public static class Registrations
+                    {
+                        public static void Configure(IServiceCollection services) =>
+                            services.AddTransient<Worker>();
+                    }
+
+                    public class Worker
+                    {
+                        private readonly IHostApplicationLifetime _lifetime;
+
+                        public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                        public async Task RunAsync()
+                        {
+                            var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                            await Task.Delay(1, {TOKEN});
+                        }
+                    }
+                    """
+            ).Replace("{TOKEN}", tokenExpression);
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceNoOpDisposeAsyncExtension_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public static class FakeDisposalExtensions
+                {
+                    public static ValueTask DisposeAsync(this CancellationTokenSource source) => default;
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                        await linked.DisposeAsync();
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceChainedNoOpDisposeAsyncExtension_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public static class FakeDisposalExtensions
+                {
+                    public static ValueTask DisposeAsync(this CancellationTokenSource source) => default;
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        await [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|].DisposeAsync();
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceParenthesizedCreationDisposedAfterTokenUse_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = (CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping));
+                        await Task.Delay(1, linked.Token);
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Theory]
+    [InlineData(
+        "(CancellationTokenSource)[|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]"
+    )]
+    [InlineData(
+        "[|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|]!"
+    )]
+    public async Task LinkedTokenSourceWrappedCreationWithoutDisposal_Reports(
+        string creationExpression
+    )
+    {
+        var source =
+            (
+                Prelude
+                + """
+                    public static class Registrations
+                    {
+                        public static void Configure(IServiceCollection services) =>
+                            services.AddTransient<Worker>();
+                    }
+
+                    public class Worker
+                    {
+                        private readonly IHostApplicationLifetime _lifetime;
+
+                        public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                        public async Task RunAsync()
+                        {
+                            var linked = {CREATION};
+                            await Task.Delay(1, linked.Token);
+                        }
+                    }
+                    """
+            ).Replace("{CREATION}", creationExpression);
+
+        await VerifyAsync(source);
+    }
+
+    [Theory]
+    [InlineData("(linked).Dispose();")]
+    [InlineData("linked!.Dispose();")]
+    [InlineData("((CancellationTokenSource)linked).Dispose();")]
+    public async Task LinkedTokenSourceDisposedThroughTransparentWrapper_Silent(
+        string disposalExpression
+    )
+    {
+        var source =
+            (
+                Prelude
+                + """
+                    public static class Registrations
+                    {
+                        public static void Configure(IServiceCollection services) =>
+                            services.AddTransient<Worker>();
+                    }
+
+                    public class Worker
+                    {
+                        private readonly IHostApplicationLifetime _lifetime;
+
+                        public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                        public async Task RunAsync()
+                        {
+                            var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                            await Task.Delay(1, linked.Token);
+                            {DISPOSAL}
+                        }
+                    }
+                    """
+            ).Replace("{DISPOSAL}", disposalExpression);
+
+        await VerifySilentAsync(source);
+    }
+
+    [Theory]
+    [InlineData(
+        "(CancellationTokenSource)CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)"
+    )]
+    [InlineData(
+        "CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)!"
+    )]
+    public async Task LinkedTokenSourceWrappedCreationDisposedAfterTokenUse_Silent(
+        string creationExpression
+    )
+    {
+        var source =
+            (
+                Prelude
+                + """
+                    public static class Registrations
+                    {
+                        public static void Configure(IServiceCollection services) =>
+                            services.AddTransient<Worker>();
+                    }
+
+                    public class Worker
+                    {
+                        private readonly IHostApplicationLifetime _lifetime;
+
+                        public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                        public async Task RunAsync()
+                        {
+                            var linked = {CREATION};
+                            await Task.Delay(1, linked.Token);
+                            linked.Dispose();
+                        }
+                    }
+                    """
+            ).Replace("{CREATION}", creationExpression);
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceDisposedAfterTokenUse_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        await Task.Delay(1, linked.Token);
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceDisposedInFinally_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        try
+                        {
+                            await Task.Delay(1, linked.Token);
+                        }
+                        finally
+                        {
+                            linked.Dispose();
+                        }
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceConditionallyDisposed_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync(bool dispose)
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                        if (dispose)
+                        {
+                            linked.Dispose();
+                        }
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceExitCanBypassDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync(bool stop)
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                        if (stop)
+                        {
+                            return;
+                        }
+
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceReassignedBeforeDisposal_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public async Task RunAsync()
+                    {
+                        var linked = [|CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping)|];
+                        await Task.Delay(1, linked.Token);
+                        linked = new CancellationTokenSource();
+                        linked.Dispose();
+                    }
+                }
+                """;
+
+        await VerifyAsync(source);
+    }
+
+    [Fact]
+    public async Task LinkedTokenSourceReturnedToCaller_Silent()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddTransient<Worker>();
+                }
+
+                public class Worker
+                {
+                    private readonly IHostApplicationLifetime _lifetime;
+
+                    public Worker(IHostApplicationLifetime lifetime) => _lifetime = lifetime;
+
+                    public CancellationTokenSource Create()
+                    {
+                        var linked = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping);
+                        _ = linked.Token;
+                        return linked;
                     }
                 }
                 """;

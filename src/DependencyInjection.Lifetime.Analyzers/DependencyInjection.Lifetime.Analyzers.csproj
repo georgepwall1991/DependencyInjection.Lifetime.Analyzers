@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.5.2</Version>
+    <Version>3.5.3</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Discoverability release: keyword-rich package title, description, and tags for DI lifetime (captive dependency, scope leak, singleton/scoped/transient, BuildServiceProvider); conversion-funnel README with product-flow visuals for IDE diagnostics, code fixes, and the install→CI loop; packs assets for NuGet README rendering; adds discoverability metadata tests and package verification. Diagnostic IDs and severities are unchanged.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI028 now reports linked CancellationTokenSource instances that remain attached to a longer-lived token after their local is read but not reliably disposed, including direct .Token or ?.Token extraction that loses the source's disposal handle. The rule reuses DI014's ownership proof: using, reachable straight-line or finally disposal, and unconditional caller ownership transfer stay silent; conditional or bypassed cleanup and reassignment before disposal report.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

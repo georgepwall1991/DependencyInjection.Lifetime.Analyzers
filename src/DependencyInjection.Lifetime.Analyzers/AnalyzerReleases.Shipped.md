@@ -145,3 +145,10 @@ DI033 | DependencyInjection | Info | Disposable instance registered as a pre-bui
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI034 | DependencyInjection | Warning | HttpContext reaches fire-and-forget background work that outlives the request
+
+## Release 3.5.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI035 | DependencyInjection | Warning | One non-thread-safe service shared by every task of a Task.WhenAll fan-out
