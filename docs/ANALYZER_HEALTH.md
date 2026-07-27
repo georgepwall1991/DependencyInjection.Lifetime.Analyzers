@@ -1,17 +1,16 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.6 — DI029 now reports exact type-backed scoped `HttpClient`
-self-registrations when `IHttpClientFactory` is available. Each scope would otherwise create and
-dispose an independent handler pool. Factory-backed registrations, derived clients, transient
-registrations, and projects without the factory API remain silent.
+**Current release candidate:** 3.5.7 — DI035 now recognizes an inner task-returning LINQ selector
+directly returned by a `SelectMany` collection selector. A non-thread-safe service created once per
+outer group and shared by the flattened inner tasks now reports, while unrelated nested selectors
+and local-function returns remain silent.
 
 **Last refreshed:** 2026-07-27
-**Package version:** 3.5.6
-**Base audited commit:** `5892034` (`origin/main`; release `v3.5.5`)
-**Test result:** 2026-07-27 local Release build passed with 0 errors, and the Release suite passed
-2,557 tests with 0 failed and 0 skipped. The focused DI029 suite passed 58 tests, including exact
-direct, keyed, and `ServiceDescriptor` scoped self-binding diagnostics plus factory-backed,
-derived-client, transient, and missing-factory-reference guards.
+**Package version:** 3.5.7
+**Base audited commit:** `dc4d966` (`origin/main`; release `v3.5.6`)
+**Test result:** 2026-07-27 local Release build passed with 0 warnings and 0 errors, and the Release
+suite passed 2,559 tests with 0 failed and 0 skipped. The focused DI035 suite passed 11 tests,
+including the nested `SelectMany` diagnostic and an uncalled-local-function ownership guard.
 
 ## Historical Release Snapshots
 
@@ -178,10 +177,11 @@ recorded in CHANGELOG.md next to each rule, and each fixed false positive has a 
 
 These are durable design decisions, recorded so a future pass does not re-litigate them:
 
-- **DI029 vs DI008.** DI008 already reports transient and scoped `HttpClient` registrations as
-  disposables the container never disposes. DI029's registration tier is therefore singleton-only and
-  no DI008 exclusion was needed. DI029 has no registration-site leg for the `AddHttpClient` family at
-  all, which is where DI008 reports typed clients.
+- **DI029 vs DI008.** The original 3.0.0 boundary gave DI008 transient/scoped `HttpClient`
+  registrations and made DI029 singleton-only. Release 3.5.6 superseded the scoped half: DI029 now
+  owns exact type-backed scoped self-bindings when `IHttpClientFactory` is available, while DI008
+  retains transient registrations and typed `AddHttpClient` clients. Factory-backed and derived
+  scoped registrations remain silent.
 - **DI029 vs DI006.** DI006's type gate is the provider/scope-factory/keyed-provider set plus a closed
   wrapper allowlist; `HttpClient` matches none of it, so the static-member legs are disjoint by type.
 - **DI030 vs DI002/DI003.** DI002's collection-mutation sink already covers `Add`/`TryAdd`/`Insert`/
