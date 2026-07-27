@@ -220,6 +220,79 @@ public class DI034_HttpContextOffRequestAnalyzerTests
     }
 
     [Fact]
+    public async Task StoredFiniteWaitResult_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        var completed = Task.Run(
+                            () => Console.WriteLine({|DI034:context|}.TraceIdentifier)
+                        ).Wait(TimeSpan.Zero);
+                        GC.KeepAlive(completed);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ReturnedCancelableWaitResult_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class Handler
+                {
+                    public bool Handle(
+                        HttpContext context,
+                        System.Threading.CancellationToken cancellationToken)
+                    {
+                        return Task.Run(
+                            () => Console.WriteLine({|DI034:context|}.TraceIdentifier)
+                        ).Wait(System.Threading.Timeout.Infinite, cancellationToken);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StoredUserDefinedWaitResult_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public static class TaskExtensions
+                {
+                    public static bool Wait(this Task task, string mode)
+                    {
+                        task.GetAwaiter().GetResult();
+                        return true;
+                    }
+                }
+
+                public class Handler
+                {
+                    public void Handle(HttpContext context)
+                    {
+                        var completed = Task.Run(
+                            () => Console.WriteLine(context.TraceIdentifier)
+                        ).Wait("complete");
+                        GC.KeepAlive(completed);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI034_HttpContextOffRequestAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task GenericTaskFactory_ReportsDiagnostic()
     {
         // A constructed TaskFactory<int> is still a TaskFactory.

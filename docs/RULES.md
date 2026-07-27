@@ -915,7 +915,7 @@ Manually constructed instances are never reported by the scoped tier — the sin
 
 ## DI023: Fire-and-Forget Background Work Captures a Scope
 
-**What it catches:** a `using` scope, a local bound to its `ServiceProvider`, or any local resolved from it, captured by background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away — an expression statement or a `_ =` discard.
+**What it catches:** a `using` scope, a local bound to its `ServiceProvider`, or any local resolved from it, captured by background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away — an expression statement, a `_ =` discard, or a finite/cancelable `Wait(...)` whose Boolean result is stored or returned while the task may continue.
 
 **Why it matters:** `using` disposes the scope the instant the starting method returns, which for a discarded task is almost always before the work has finished. The background work then resolves from, or calls into, a disposed scope: `ObjectDisposedException` at best, and at worst a service that quietly operates on torn-down state such as a closed `DbContext` connection. The failure is timing-dependent, so it passes locally and fails under load.
 
@@ -945,7 +945,7 @@ public void Handle(int orderId)
 }
 ```
 
-**Guardrails:** capture tracking follows any number of hops (`scope` → `provider` → `service`) and covers method groups and delegate locals, not just inline lambdas. Values that cannot hold the scope's graph stay quiet: primitives, enums, and strings derived from it (`scope.GetHashCode()`), a local proved to be reassigned to something not scope-derived before the capture (same-block dominance; a branch-only or conditionally evaluated overwrite still reports), assignment targets, and `nameof(service)`. The scope must be disposed by a `using` in the same method — an undisposed scope has no proven teardown point here and is DI001's finding instead. A task that is awaited, returned, stored in a local, or waited on synchronously (parameterless `.Wait()`, `.GetAwaiter().GetResult()`) keeps the frame alive and stays silent — `Wait` with a finite timeout or a cancelable token does not, since either can return while the work runs on (arguments are bound to their parameters, so named and reordered forms classify correctly), as does background work that captures nothing scope-derived.
+**Guardrails:** capture tracking follows any number of hops (`scope` → `provider` → `service`) and covers method groups and delegate locals, not just inline lambdas. Values that cannot hold the scope's graph stay quiet: primitives, enums, and strings derived from it (`scope.GetHashCode()`), a local proved to be reassigned to something not scope-derived before the capture (same-block dominance; a branch-only or conditionally evaluated overwrite still reports), assignment targets, and `nameof(service)`. The scope must be disposed by a `using` in the same method — an undisposed scope has no proven teardown point here and is DI001's finding instead. A task that is awaited, returned, stored in a local, or waited on to guaranteed completion (parameterless `.Wait()`, infinite timeout with a non-cancelable token, `.GetAwaiter().GetResult()`) keeps the frame alive and stays silent. A framework `Task.Wait` with a finite timeout or cancelable token does not, even when its Boolean result is stored or returned, since either exit can leave the task running; arguments are bound to their parameters, so named and reordered forms classify correctly. User-defined extension methods named `Wait` and background work that captures nothing scope-derived stay silent.
 
 **Code Fix:** No — the repair is a design choice between awaiting the task and moving scope creation inside the background work, and the two produce different execution semantics.
 
@@ -1238,7 +1238,7 @@ If the instance must be pre-built — it is shared with code outside the contain
 
 ## DI034: HttpContext Used in Fire-and-Forget Background Work
 
-**What it catches:** an `HttpContext` value — a parameter, local, or field of that type — or a read of `IHttpContextAccessor.HttpContext`, inside background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away.
+**What it catches:** an `HttpContext` value — a parameter, local, or field of that type — or a read of `IHttpContextAccessor.HttpContext`, inside background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away or observed only through a finite/cancelable `Wait(...)` Boolean result.
 
 **Why it matters:** ASP.NET Core pools `HttpContext` and resets it as soon as the response has been written, and the accessor's backing `AsyncLocal` is cleared or reassigned to the next request. Work that outlives the request therefore reads a context whose request, response, features, and `RequestServices` have already been torn down. The usual symptom is a `NullReferenceException` or `ObjectDisposedException` under load, and the worst one is reading another user's request data from a recycled context.
 
@@ -1261,7 +1261,7 @@ public void Handle(HttpContext context)
 }
 ```
 
-**Guardrails:** a task that is awaited, returned, stored in a local, or waited on synchronously keeps the request alive until the work completes and stays silent, as does background work that touches no context. Reading the accessor *inside* the work is reported too, since by then the `AsyncLocal` has already moved on.
+**Guardrails:** a task that is awaited, returned, stored in a local, or waited on to guaranteed completion keeps the request alive until the work completes and stays silent. A framework `Task.Wait` with a finite timeout or cancelable token can return while work continues, so storing or returning its Boolean result still reports; user-defined extension methods named `Wait` stay conservative and silent. Background work that touches no context also stays silent. Reading the accessor *inside* the work is reported too, since by then the `AsyncLocal` has already moved on.
 
 **Code Fix:** No — which values to hoist out of the context is a decision about what the background work actually needs.
 

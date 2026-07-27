@@ -263,7 +263,16 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
 
         if (semanticModel.GetSymbolInfo(waitCall).Symbol is not IMethodSymbol waitMethod)
         {
-            return false;
+            return true;
+        }
+
+        if (
+            waitMethod.IsStatic
+            || waitMethod.ReducedFrom is not null
+            || waitMethod.ContainingType.ToDisplayString() != "System.Threading.Tasks.Task"
+        )
+        {
+            return true;
         }
 
         foreach (var argument in arguments)
@@ -342,9 +351,9 @@ public sealed class DI034_HttpContextOffRequestAnalyzer : DiagnosticAnalyzer
             // Wait() blocks until the work finishes; Wait(timeout) can return while it is still
             // running. The infinite and cancellation-free overloads block just as the
             // parameterless one does.
-            if (memberName == "Wait" && WaitsForCompletion(memberAccess, semanticModel))
+            if (memberName == "Wait")
             {
-                return false;
+                return !WaitsForCompletion(memberAccess, semanticModel);
             }
 
             outermost = memberAccess.Parent is InvocationExpressionSyntax chained

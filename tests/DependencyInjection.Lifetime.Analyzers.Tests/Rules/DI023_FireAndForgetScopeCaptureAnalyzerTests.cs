@@ -910,6 +910,100 @@ public class DI023_FireAndForgetScopeCaptureAnalyzerTests
     }
 
     [Fact]
+    public async Task StoredFiniteWaitResult_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public void Handle()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        var completed = {|DI023:Task.Run(() => service.DoWork())|}.Wait(TimeSpan.Zero);
+                        GC.KeepAlive(completed);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ReturnedCancelableWaitResult_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public bool Handle(CancellationToken cancellationToken)
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        return {|DI023:Task.Run(() => service.DoWork())|}.Wait(
+                            Timeout.Infinite,
+                            cancellationToken);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StoredUserDefinedWaitResult_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public static class TaskExtensions
+                {
+                    public static bool Wait(this Task task, string mode)
+                    {
+                        task.GetAwaiter().GetResult();
+                        return true;
+                    }
+                }
+
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public void Handle()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var service = scope.ServiceProvider.GetRequiredService<IMyService>();
+                        var completed = Task.Run(() => service.DoWork()).Wait("complete");
+                        GC.KeepAlive(completed);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI023_FireAndForgetScopeCaptureAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task GenericTaskFactory_ReportsDiagnostic()
     {
         var source =
