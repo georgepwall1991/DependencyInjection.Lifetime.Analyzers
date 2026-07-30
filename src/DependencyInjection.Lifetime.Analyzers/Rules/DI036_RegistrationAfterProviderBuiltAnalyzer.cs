@@ -160,11 +160,16 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         foreach (var registration in registrations)
         {
-            // A later build on the same collection picks the registration up, so nothing is lost.
+            // A later build on the same collection picks the registration up, so nothing is
+            // lost. A build inside a lambda or local function has no fixed position at all — the
+            // delegate can be invoked after the registration wherever it was declared.
             if (
                 builds.Any(build =>
                     CollectionKey.Equal(build.Key, registration.Key)
-                    && build.Invocation.SpanStart > registration.Invocation.SpanStart
+                    && (
+                        build.Invocation.SpanStart > registration.Invocation.SpanStart
+                        || IsInsideNestedFunction(build.Invocation, codeBlock)
+                    )
                 )
             )
             {
@@ -200,6 +205,23 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 )
             );
         }
+    }
+
+    /// <summary>
+    /// True when the node sits inside a lambda or local function declared within the code block,
+    /// so its execution order relative to the surrounding statements is not fixed.
+    /// </summary>
+    private static bool IsInsideNestedFunction(SyntaxNode node, SyntaxNode codeBlock)
+    {
+        for (var current = node; current is not null && current != codeBlock; current = current.Parent)
+        {
+            if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -241,6 +263,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 || !CollectionKey.TryCreate(
                     buildReceiver,
                     semanticModel,
+                    knownTypes,
                     reassignedSymbols,
                     out var buildKey
                 )
@@ -273,6 +296,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 || !CollectionKey.TryCreate(
                     hostReceiver,
                     semanticModel,
+                    knownTypes,
                     reassignedSymbols,
                     out var hostKey
                 )
@@ -323,6 +347,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             !CollectionKey.TryCreate(
                 receiver,
                 semanticModel,
+                knownTypes,
                 reassignedSymbols,
                 out var registrationKey
             )
@@ -347,12 +372,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
-        if (MutationMethodNames.Contains(method.Name))
-        {
-            return true;
-        }
-
-        if (!HasMutationPrefix(method.Name))
+        if (!MutationMethodNames.Contains(method.Name) && !HasMutationPrefix(method.Name))
         {
             return false;
         }
@@ -424,10 +444,9 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             var receiverArgument =
                 argumentList.Parent is InvocationExpressionSyntax invocation
                 && classified.Contains(invocation)
-                && argumentList.Arguments.Count > 0
                 && semanticModel.GetSymbolInfo(invocation).Symbol
-                    is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: null }
-                    ? argumentList.Arguments[0]
+                    is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: null } staticSpelling
+                    ? GetStaticSpellingReceiverArgument(invocation, staticSpelling)
                     : null;
 
             foreach (var argument in argumentList.Arguments)
@@ -451,6 +470,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                     CollectionKey.TryCreate(
                         argument.Expression,
                         semanticModel,
+                        knownTypes,
                         reassignedSymbols,
                         out var key
                     )
@@ -537,14 +557,41 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     {
         if (method.IsExtensionMethod && method.ReducedFrom is null)
         {
-            return invocation.ArgumentList.Arguments.Count > 0
-                ? invocation.ArgumentList.Arguments[0].Expression
-                : null;
+            return GetStaticSpellingReceiverArgument(invocation, method)?.Expression;
         }
 
         return invocation.Expression is MemberAccessExpressionSyntax memberAccess
             ? memberAccess.Expression
             : null;
+    }
+
+    /// <summary>
+    /// The argument bound to an extension's <c>this</c> parameter when it is called in its
+    /// static spelling. Named arguments can reorder the list, so the parameter name decides.
+    /// </summary>
+    private static ArgumentSyntax? GetStaticSpellingReceiverArgument(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol method
+    )
+    {
+        var arguments = invocation.ArgumentList.Arguments;
+        if (arguments.Count == 0 || method.Parameters.Length == 0)
+        {
+            return null;
+        }
+
+        var receiverParameterName = method.Parameters[0].Name;
+
+        foreach (var argument in arguments)
+        {
+            if (argument.NameColon?.Name.Identifier.ValueText == receiverParameterName)
+            {
+                return argument;
+            }
+        }
+
+        // No argument names the receiver parameter, so the first positional one fills it.
+        return arguments[0].NameColon is null ? arguments[0] : null;
     }
 
     private static bool IsHostBuilder(ITypeSymbol? type, KnownTypes knownTypes) =>
@@ -880,6 +927,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         public static bool TryCreate(
             ExpressionSyntax expression,
             SemanticModel semanticModel,
+            KnownTypes knownTypes,
             ImmutableHashSet<ISymbol> reassignedSymbols,
             out CollectionKey key
         )
@@ -887,7 +935,8 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             key = null!;
             var path = ImmutableArray.CreateBuilder<ISymbol>();
 
-            if (!TryBuild(expression, semanticModel, reassignedSymbols, path, 0))
+            if (!TryBuild(expression, semanticModel,
+                        knownTypes, reassignedSymbols, path, 0))
             {
                 return false;
             }
@@ -899,6 +948,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         private static bool TryBuild(
             ExpressionSyntax expression,
             SemanticModel semanticModel,
+            KnownTypes knownTypes,
             ImmutableHashSet<ISymbol> reassignedSymbols,
             ImmutableArray<ISymbol>.Builder path,
             int depth
@@ -906,10 +956,42 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         {
             switch (expression)
             {
+                case CastExpressionSyntax cast:
+                    return TryBuild(
+                        cast.Expression,
+                        semanticModel,
+                        knownTypes,
+                        reassignedSymbols,
+                        path,
+                        depth
+                    );
+
+                case PostfixUnaryExpressionSyntax suppression
+                    when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return TryBuild(
+                        suppression.Operand,
+                        semanticModel,
+                        knownTypes,
+                        reassignedSymbols,
+                        path,
+                        depth
+                    );
+
+                case BinaryExpressionSyntax asCast when asCast.IsKind(SyntaxKind.AsExpression):
+                    return TryBuild(
+                        asCast.Left,
+                        semanticModel,
+                        knownTypes,
+                        reassignedSymbols,
+                        path,
+                        depth
+                    );
+
                 case ParenthesizedExpressionSyntax parenthesized:
                     return TryBuild(
                         parenthesized.Expression,
                         semanticModel,
+                        knownTypes,
                         reassignedSymbols,
                         path,
                         depth
@@ -923,6 +1005,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                     return TryBuild(
                             memberAccess.Expression,
                             semanticModel,
+                        knownTypes,
                             reassignedSymbols,
                             path,
                             depth
@@ -930,13 +1013,15 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                         && TryAppend(
                             memberAccess.Name,
                             semanticModel,
+                    knownTypes,
                             reassignedSymbols,
                             path,
                             depth
                         );
 
                 case SimpleNameSyntax simpleName:
-                    return TryAppend(simpleName, semanticModel, reassignedSymbols, path, depth);
+                    return TryAppend(simpleName, semanticModel,
+                    knownTypes, reassignedSymbols, path, depth);
 
                 default:
                     return false;
@@ -946,6 +1031,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         private static bool TryAppend(
             SimpleNameSyntax name,
             SemanticModel semanticModel,
+            KnownTypes knownTypes,
             ImmutableHashSet<ISymbol> reassignedSymbols,
             ImmutableArray<ISymbol>.Builder path,
             int depth
@@ -979,17 +1065,23 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             )
             {
                 var restorePoint = path.Count;
-                if (TryBuild(initializer, semanticModel, reassignedSymbols, path, depth + 1))
+                if (TryBuild(initializer, semanticModel,
+                        knownTypes, reassignedSymbols, path, depth + 1))
                 {
-                    // A property in the folded path may compute a fresh collection per access,
-                    // so it cannot stand in for the local that captured one result of it.
-                    var foldsThroughProperty = false;
+                    // An arbitrary property may compute a fresh collection per access, so it
+                    // cannot stand in for the local that captured one result of it. A framework
+                    // builder's `Services` is the exception: it is the collection that builder
+                    // will freeze, and folding through it is what lets a later `builder.Build()`
+                    // cancel a finding on the local.
+                    var foldsThroughUnstableProperty = false;
                     for (var index = restorePoint; index < path.Count; index++)
                     {
-                        foldsThroughProperty |= path[index] is IPropertySymbol;
+                        foldsThroughUnstableProperty |=
+                            path[index] is IPropertySymbol property
+                            && !IsBuilderServicesProperty(property, knownTypes);
                     }
 
-                    if (!foldsThroughProperty)
+                    if (!foldsThroughUnstableProperty)
                     {
                         return true;
                     }
@@ -1001,6 +1093,15 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             path.Add(symbol);
             return true;
         }
+
+        private static bool IsBuilderServicesProperty(
+            IPropertySymbol property,
+            KnownTypes knownTypes
+        ) =>
+            property.Name == "Services"
+            && knownTypes.HostBuilderTypes.Any(hostBuilderType =>
+                SymbolEqualityComparer.Default.Equals(property.ContainingType, hostBuilderType)
+            );
 
         /// <summary>
         /// The initializer of a local that is written exactly once, at its declaration. Callers

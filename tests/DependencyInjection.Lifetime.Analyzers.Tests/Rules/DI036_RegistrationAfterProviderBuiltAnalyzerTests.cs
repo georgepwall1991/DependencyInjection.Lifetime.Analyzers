@@ -968,4 +968,162 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task LocalAliasOfBuilderServicesRebuilt_NoDiagnostic()
+    {
+        // Codex round 3: a local capturing `builder.Services` is that collection, so the later
+        // `builder.Build()` does pick the registration up.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
+
+            public interface IAudit { }
+
+            public class Audit : IAudit { }
+
+            public class Composition
+            {
+                public void Configure()
+                {
+                    var builder = new HostApplicationBuilder();
+                    var services = builder.Services;
+                    var first = services.BuildServiceProvider();
+                    services.AddSingleton<IAudit, Audit>();
+                    var host = builder.Build();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            HostingReferences
+        );
+    }
+
+    [Fact]
+    public async Task NamedArgumentsReorderStaticSpelling_NoDiagnostic()
+    {
+        // Codex round 3: named arguments can put the receiver anywhere in the list, so position
+        // must not decide which collection the call mutates.
+        var source =
+            Usings
+            + """
+                public static class FeatureExtensions
+                {
+                    public static IServiceCollection AddFeature(
+                        this IServiceCollection services,
+                        IServiceCollection source) => services;
+                }
+
+                public class Composition
+                {
+                    public IServiceProvider Configure()
+                    {
+                        var stale = new ServiceCollection();
+                        var live = new ServiceCollection();
+                        var first = stale.BuildServiceProvider();
+                        FeatureExtensions.AddFeature(source: stale, services: live);
+                        return live.BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RecognisedNameReturningWrapper_NoDiagnostic()
+    {
+        // Codex round 3: the wrapper suppression must apply to recognised registration names
+        // too, not only to prefix-matched ones.
+        var source =
+            Usings
+            + """
+                public sealed class Runtime
+                {
+                    public Runtime(IServiceProvider provider) => Provider = provider;
+
+                    public IServiceProvider Provider { get; }
+                }
+
+                public static class RuntimeExtensions
+                {
+                    public static Runtime Configure(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        return new Runtime(services.BuildServiceProvider());
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Build()
+                    {
+                        var services = new ServiceCollection();
+                        var first = services.BuildServiceProvider();
+                        var live = services.Configure();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CastAroundLaterRebuild_NoDiagnostic()
+    {
+        // Codex round 3: a cast in the path must not hide that the later build is on the same
+        // collection.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceProvider Build()
+                    {
+                        var services = new ServiceCollection();
+                        var first = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return ((IServiceCollection)services).BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RebuildThroughCapturingLocalFunction_NoDiagnostic()
+    {
+        // Codex round 3: a build inside a local function has no fixed position — the call can
+        // come after the registration however early the declaration sits.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceProvider Build()
+                    {
+                        var services = new ServiceCollection();
+                        IServiceProvider Rebuild() => services.BuildServiceProvider();
+
+                        var first = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return Rebuild();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
