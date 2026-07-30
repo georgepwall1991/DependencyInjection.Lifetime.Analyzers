@@ -125,7 +125,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         var builds = new List<CollectionEvent>();
         var registrations = new List<CollectionEvent>();
-        var classified = new HashSet<InvocationExpressionSyntax>();
+        var classifiedReceivers = new HashSet<SyntaxNode>();
 
         foreach (var invocation in invocations)
         {
@@ -141,7 +141,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             )
             {
                 (isBuild ? builds : registrations).Add(collectionEvent);
-                classified.Add(invocation);
+                classifiedReceivers.Add(collectionEvent.Receiver);
             }
         }
 
@@ -150,12 +150,12 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return;
         }
 
-        var handOffs = GetCollectionHandOffs(
+        var otherReads = GetOtherCollectionReads(
             codeBlock,
             semanticModel,
             knownTypes,
             reassignedSymbols,
-            classified
+            classifiedReceivers
         );
 
         foreach (var registration in registrations)
@@ -176,11 +176,14 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 continue;
             }
 
-            // The collection is handed to something else afterwards, which may build it again.
+            // Anything that touches the collection afterwards other than a further registration
+            // can carry it somewhere that builds it: an argument, a return, a tuple, a captured
+            // lambda, a yield. The registration is only provably lost if nothing else looks at
+            // the collection again.
             if (
-                handOffs.Any(handOff =>
-                    CollectionKey.Equal(handOff.Key, registration.Key)
-                    && handOff.Position > registration.Invocation.SpanStart
+                otherReads.Any(read =>
+                    CollectionKey.Equal(read.Key, registration.Key)
+                    && read.Position > registration.Invocation.SpanStart
                 )
             )
             {
@@ -272,7 +275,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 return false;
             }
 
-            collectionEvent = new CollectionEvent(invocation, buildKey, method.Name);
+            collectionEvent = new CollectionEvent(invocation, buildReceiver, buildKey, method.Name);
             isBuild = true;
             return true;
         }
@@ -307,6 +310,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
             collectionEvent = new CollectionEvent(
                 invocation,
+                hostReceiver,
                 hostKey.Append(servicesProperty),
                 method.Name
             );
@@ -360,7 +364,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
-        collectionEvent = new CollectionEvent(invocation, registrationKey, method.Name);
+        collectionEvent = new CollectionEvent(invocation, receiver, registrationKey, method.Name);
         return true;
     }
 
@@ -431,98 +435,51 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     }
 
     /// <summary>
-    /// Positions at which a service collection is handed to another method or constructor, which
-    /// may build a provider from it out of sight of this code block.
+    /// Every place the collection is read other than as the receiver of a call this rule
+    /// already understands. Such a read can carry the collection anywhere — into an argument, a
+    /// return value, a tuple, a captured lambda, an iterator — where something builds it.
     /// </summary>
-    private static List<CollectionHandOff> GetCollectionHandOffs(
+    private static List<CollectionRead> GetOtherCollectionReads(
         SyntaxNode codeBlock,
         SemanticModel semanticModel,
         KnownTypes knownTypes,
         ImmutableHashSet<ISymbol> reassignedSymbols,
-        HashSet<InvocationExpressionSyntax> classified
+        HashSet<SyntaxNode> classifiedReceivers
     )
     {
-        var handOffs = new List<CollectionHandOff>();
+        var reads = new List<CollectionRead>();
 
-        // Handing the collection back to the caller is a hand-off: the caller can build it.
         foreach (var node in codeBlock.DescendantNodes())
         {
-            var handedOut = node switch
+            if (
+                node is not ExpressionSyntax expression
+                || node is not (SimpleNameSyntax or MemberAccessExpressionSyntax)
+                || classifiedReceivers.Contains(node)
+            )
             {
-                ReturnStatementSyntax returnStatement => returnStatement.Expression,
-                ArrowExpressionClauseSyntax arrow => arrow.Expression,
-                AssignmentExpressionSyntax assignment
-                    when semanticModel.GetSymbolInfo(assignment.Left).Symbol
-                        is IFieldSymbol
-                            or IPropertySymbol
-                            or IParameterSymbol => assignment.Right,
-                _ => null,
-            };
+                continue;
+            }
+
+            if (!IsServiceCollection(semanticModel.GetTypeInfo(expression).Type, knownTypes))
+            {
+                continue;
+            }
 
             if (
-                handedOut is not null
-                && IsServiceCollection(semanticModel.GetTypeInfo(handedOut).Type, knownTypes)
-                && CollectionKey.TryCreate(
-                    handedOut,
+                CollectionKey.TryCreate(
+                    expression,
                     semanticModel,
                     knownTypes,
                     reassignedSymbols,
-                    out var handedOutKey
+                    out var key
                 )
             )
             {
-                handOffs.Add(new CollectionHandOff(handedOutKey, node.SpanStart));
+                reads.Add(new CollectionRead(key, expression.SpanStart));
             }
         }
 
-        foreach (var argumentList in codeBlock.DescendantNodes().OfType<ArgumentListSyntax>())
-        {
-            // The static spelling of a registration extension passes the collection to itself,
-            // which is not a hand-off. Every other argument of that same call still is: it can
-            // carry a different collection into a method that builds it.
-            // Only the *static* spelling puts the receiver in the argument list; in the usual
-            // reduced form every argument is a genuine hand-off.
-            var receiverArgument =
-                argumentList.Parent is InvocationExpressionSyntax invocation
-                && classified.Contains(invocation)
-                && semanticModel.GetSymbolInfo(invocation).Symbol
-                    is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: null } staticSpelling
-                    ? GetStaticSpellingReceiverArgument(invocation, staticSpelling)
-                    : null;
-
-            foreach (var argument in argumentList.Arguments)
-            {
-                if (argument == receiverArgument)
-                {
-                    continue;
-                }
-
-                if (
-                    !IsServiceCollection(
-                        semanticModel.GetTypeInfo(argument.Expression).Type,
-                        knownTypes
-                    )
-                )
-                {
-                    continue;
-                }
-
-                if (
-                    CollectionKey.TryCreate(
-                        argument.Expression,
-                        semanticModel,
-                        knownTypes,
-                        reassignedSymbols,
-                        out var key
-                    )
-                )
-                {
-                    handOffs.Add(new CollectionHandOff(key, argument.SpanStart));
-                }
-            }
-        }
-
-        return handOffs;
+        return reads;
     }
 
     /// <summary>
@@ -904,9 +861,9 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         }
     }
 
-    private sealed class CollectionHandOff
+    private sealed class CollectionRead
     {
-        public CollectionHandOff(CollectionKey key, int position)
+        public CollectionRead(CollectionKey key, int position)
         {
             Key = key;
             Position = position;
@@ -921,16 +878,20 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     {
         public CollectionEvent(
             InvocationExpressionSyntax invocation,
+            ExpressionSyntax receiver,
             CollectionKey key,
             string methodName
         )
         {
             Invocation = invocation;
+            Receiver = receiver;
             Key = key;
             MethodName = methodName;
         }
 
         public InvocationExpressionSyntax Invocation { get; }
+
+        public ExpressionSyntax Receiver { get; }
 
         public CollectionKey Key { get; }
 

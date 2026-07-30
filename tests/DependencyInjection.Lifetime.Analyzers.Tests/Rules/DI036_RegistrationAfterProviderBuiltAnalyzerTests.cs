@@ -1296,4 +1296,102 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task CollectionCapturedByReturnedLambda_NoDiagnostic()
+    {
+        // Codex round 6: the delegate hands the collection to the caller, which can build it.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public Func<IServiceCollection> Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return () => services;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CollectionReturnedInsideTuple_NoDiagnostic()
+    {
+        // Codex round 6: the tuple's own type is not the collection type, but the collection
+        // still leaves the method inside it.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public (IServiceCollection Services, IDisposable Snapshot) Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return (services, snapshot);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CollectionYielded_NoDiagnostic()
+    {
+        // Codex round 6: an iterator hands the collection out one element at a time.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IEnumerable<IServiceCollection> Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        yield return services;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task SecondRegistrationAfterBuild_ReportsBoth()
+    {
+        // A further registration is not an escape: both are lost, and both are reported.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceProvider Build()
+                    {
+                        var services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        {|DI036:services.AddSingleton<IAudit, Audit>()|};
+                        {|DI036:services.AddScoped<IReporting, Reporting>()|};
+                        return provider;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
