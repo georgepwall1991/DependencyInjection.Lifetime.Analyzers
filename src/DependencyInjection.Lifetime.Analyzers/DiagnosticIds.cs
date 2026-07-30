@@ -205,6 +205,13 @@ public static class DiagnosticIds
     public const string HttpClientLifetimeMisuse = "DI029";
 
     /// <summary>
+    /// DI036: A service registration runs after a provider was already built from the same
+    /// IServiceCollection. BuildServiceProvider snapshots the descriptor list, so the container
+    /// in use never sees the registration.
+    /// </summary>
+    public const string RegistrationAfterProviderBuilt = "DI036";
+
+    /// <summary>
     /// DI030: A collection owned by a singleton service or held in a static member is written with
     /// request-derived keys and never evicted, or an IMemoryCache entry is written with neither an
     /// expiration nor a size limit. The store grows monotonically for the life of the process.

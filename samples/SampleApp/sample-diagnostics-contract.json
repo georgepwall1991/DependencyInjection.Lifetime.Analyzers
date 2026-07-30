@@ -925,6 +925,19 @@
           "severity": "note"
         }
       ]
+    },
+    {
+      "folder": "DI036",
+      "ruleId": "DI036",
+      "claims": [
+        {
+          "filePathContains": "DI036/RegistrationAfterBuildExamples.cs",
+          "anchor": "services.AddSingleton<IAuditTrail, AuditTrail>();",
+          "ruleId": "DI036",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

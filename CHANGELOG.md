@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-07-30
+
+### Added
+
+- **DI036: Registration added after the provider was built** (new rule, Warning) — a mutation of an `IServiceCollection` that runs after a provider was already built from that same collection is reported, because `BuildServiceProvider` (and a host builder's `Build`) snapshots the descriptor list and never reads the collection again. Covers `AddXxx`/`TryAddXxx` extensions, `Configure`, `Replace`, `RemoveAll`, `Add(descriptor)`, the static extension spelling, and the minimal-API shape where `builder.Services.AddSingleton<...>()` drifts below `builder.Build()`.
+  - Execution order is proven inside one code block: the build must be unconditional within the statement list it shares with the registration and must precede it. A later build on the same collection cancels the finding, a shared enclosing loop is skipped, registrations reached only through a lambda or local function are skipped, and any `goto` in the block disables the rule there.
+  - Collections are matched by symbol path (`services`, `_services`, `builder.Services`); a collection reached through a method call is not keyed at all. `Clear()` is not a reported mutation — clearing after a build is the fixture-reuse idiom, not a lost registration.
+  - Accepted false negatives: a build and a registration in different methods, `IHostBuilder.ConfigureServices` callbacks (whose registrations run inside `Build`), and collections aliased through a helper's return value.
+
 ## [3.5.20] - 2026-07-27
 
 ### Fixed

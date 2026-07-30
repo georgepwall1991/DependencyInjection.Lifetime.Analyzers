@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.5.20
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.6.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.20">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.6.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.5.20" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.6.0" />
 ```
 
 Then reference it from the project file:
@@ -99,7 +99,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## 30-second path
 
-1. Reference the package with `PrivateAssets="all"` (version `3.5.20` above).
+1. Reference the package with `PrivateAssets="all"` (version `3.6.0` above).
 2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
 3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
 4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
@@ -217,6 +217,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
 | [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
+| [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 
 ---
 
@@ -1452,3 +1453,38 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Licence
 
 MIT Licence - see [LICENSE](LICENSE).
+
+---
+
+## DI036: Registration Added After The Provider Was Built
+
+**What it catches:** a call that mutates an `IServiceCollection` — `AddSingleton`, `TryAddScoped`, `Configure`, `Replace`, `RemoveAll`, `Add(descriptor)`, any `AddXxx`/`TryAddXxx` extension — executed after a provider was already built from that same collection in the same method. The build is either `BuildServiceProvider()` on the collection or `Build()` on a host or web-application builder whose `Services` property *is* that collection, which covers the minimal-API shape `var app = builder.Build(); builder.Services.AddSingleton<...>();`.
+
+**Why it matters:** `BuildServiceProvider` copies the descriptor list into the provider it returns, and a host builder does the same when it builds. Every mutation after that point writes into a collection nothing reads again. There is no error and no warning at run time — the service either fails to resolve with `InvalidOperationException: No service for type 'X' has been registered`, or silently resolves to the registration the build did capture, so a `Replace` or a test-time override appears to be ignored. It is a favourite failure of integration-test fixtures and of `Program.cs` files where a late `builder.Services` line drifts below `builder.Build()`.
+
+> **Explain Like I'm Ten:** The photo was already taken. Waving after the shutter clicks does not put you in the picture.
+
+**Problem:**
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+
+var app = builder.Build();
+
+builder.Services.AddSingleton<IAudit, Audit>();  // DI036: the app never sees this
+```
+
+**Better pattern:** finish registering, then build.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+builder.Services.AddSingleton<IAudit, Audit>();
+
+var app = builder.Build();
+```
+
+**Guardrails:** the proof is execution order inside one code block, not source order alone. The build must be *unconditional* relative to the registration — a build nested in an `if` under the shared statement list may never have run, so it proves nothing — and it must come first in that list. A later build on the same collection cancels the finding outright, because that provider does see the registration; this keeps the probe-then-rebuild idiom silent. Registrations reached only through a lambda or local function are skipped, since the delegate can run before the build. A build and a registration that share an enclosing loop are skipped, because the next iteration builds again. Any `goto` in the code block disables the rule there, since a jump can reorder execution away from source order. Collections are matched by symbol path (`services`, `_services`, `builder.Services`), so two different collections never pair, and a collection reached through a method call is not keyed at all — the call can return a different instance each time. `Clear()` is deliberately not a reported mutation: clearing after a build is the reuse idiom of test fixtures, not a lost registration. Accepted false negatives: a build and a registration in different methods, `IHostBuilder.ConfigureServices` callbacks (whose registrations run inside `Build`, not after it), and collections aliased through a helper's return value.
+
+**Code Fix:** No — the repair is a choice between moving the registration above the build and moving the build below it, and only the author knows whether anything between the two depends on the provider already existing.

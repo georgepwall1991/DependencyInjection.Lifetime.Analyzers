@@ -46,6 +46,7 @@ For the latest full rule content, see:
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
 | [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
+| [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 
 ---
 
@@ -1438,3 +1439,38 @@ public class PriceService
 **Guardrails:** reported at **Info**, because a key space that is unbounded in the type system may be bounded in production. The "never evicted" proof is sound rather than heuristic: the field must be `private`, so every reference to it lives inside the declaring type and a complete scan of that type is a complete proof. Anything not recognized as a write or a pure read makes the candidate silent — a `Remove`/`TryRemove`/`Clear`/`Dequeue`/`Pop`, any read of `Count` or `Length` (a size cap), the field passed as an argument, reassigned, iterated with `foreach`, used in LINQ, or captured into a lambda (a background eviction timer). Bounded keys are excluded up front: any compile-time constant, and any `enum`, `bool`, `System.Type`, or `char` key. One-time initialization is excluded too — constructor, static-constructor and initializer writes, assembly and `Enum.GetValues` scans, `Lazy<>` factories, and one-shot flag guards. Interface-typed fields (`IDictionary<,>`) stay silent because the backing type may be frozen or capped, as do `ImmutableDictionary`/`FrozenDictionary`, lock registries (`SemaphoreSlim`, `Lazy<>`, `Task`, `Mutex`-shaped value types), non-private fields, and types registered both singleton and scoped. Shapes owned by other rules are excluded rather than duplicated: a scope-resolved value stored into a collection is **DI002**, a scoped service cached by a singleton is **DI003**, and a static dictionary of providers is **DI006**. For `IMemoryCache`, options built anywhere other than inline at the call site stay silent, and a compilation-wide `MemoryCacheOptions.SizeLimit` disables the tier entirely. Two editorconfig knobs are available: `dotnet_code_quality.DI030.allowed_cache_types` and `dotnet_code_quality.DI030.detect_memory_cache_bounds`. Accepted false negatives: a key reached through a local alias, non-private and static-property caches, multi-level nested dictionaries, and collection types outside the seven recognized generics.
 
 **Code Fix:** No — and none planned. There is no single correct eviction policy: LRU, a TTL, a size cap, or a documented decision that the key space really is bounded are all valid answers, and a fixer that silently picks one would be worse than the diagnostic.
+
+---
+
+## DI036: Registration Added After The Provider Was Built
+
+**What it catches:** a call that mutates an `IServiceCollection` — `AddSingleton`, `TryAddScoped`, `Configure`, `Replace`, `RemoveAll`, `Add(descriptor)`, any `AddXxx`/`TryAddXxx` extension — executed after a provider was already built from that same collection in the same method. The build is either `BuildServiceProvider()` on the collection or `Build()` on a host or web-application builder whose `Services` property *is* that collection, which covers the minimal-API shape `var app = builder.Build(); builder.Services.AddSingleton<...>();`.
+
+**Why it matters:** `BuildServiceProvider` copies the descriptor list into the provider it returns, and a host builder does the same when it builds. Every mutation after that point writes into a collection nothing reads again. There is no error and no warning at run time — the service either fails to resolve with `InvalidOperationException: No service for type 'X' has been registered`, or silently resolves to the registration the build did capture, so a `Replace` or a test-time override appears to be ignored. It is a favourite failure of integration-test fixtures and of `Program.cs` files where a late `builder.Services` line drifts below `builder.Build()`.
+
+> **Explain Like I'm Ten:** The photo was already taken. Waving after the shutter clicks does not put you in the picture.
+
+**Problem:**
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+
+var app = builder.Build();
+
+builder.Services.AddSingleton<IAudit, Audit>();  // DI036: the app never sees this
+```
+
+**Better pattern:** finish registering, then build.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+builder.Services.AddSingleton<IAudit, Audit>();
+
+var app = builder.Build();
+```
+
+**Guardrails:** the proof is execution order inside one code block, not source order alone. The build must be *unconditional* relative to the registration — a build nested in an `if` under the shared statement list may never have run, so it proves nothing — and it must come first in that list. A later build on the same collection cancels the finding outright, because that provider does see the registration; this keeps the probe-then-rebuild idiom silent. Registrations reached only through a lambda or local function are skipped, since the delegate can run before the build. A build and a registration that share an enclosing loop are skipped, because the next iteration builds again. Any `goto` in the code block disables the rule there, since a jump can reorder execution away from source order. Collections are matched by symbol path (`services`, `_services`, `builder.Services`), so two different collections never pair, and a collection reached through a method call is not keyed at all — the call can return a different instance each time. `Clear()` is deliberately not a reported mutation: clearing after a build is the reuse idiom of test fixtures, not a lost registration. Accepted false negatives: a build and a registration in different methods, `IHostBuilder.ConfigureServices` callbacks (whose registrations run inside `Build`, not after it), and collections aliased through a helper's return value.
+
+**Code Fix:** No — the repair is a choice between moving the registration above the build and moving the build below it, and only the author knows whether anything between the two depends on the provider already existing.
