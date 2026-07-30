@@ -176,16 +176,11 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 continue;
             }
 
-            // Anything that touches the collection afterwards other than a further registration
-            // can carry it somewhere that builds it: an argument, a return, a tuple, a captured
-            // lambda, a yield. The registration is only provably lost if nothing else looks at
-            // the collection again.
-            if (
-                otherReads.Any(read =>
-                    CollectionKey.Equal(read.Key, registration.Key)
-                    && read.Position > registration.Invocation.SpanStart
-                )
-            )
+            // Anything that touches the collection other than a call this rule understands can
+            // carry it somewhere that builds it: an argument, a return, a tuple, a captured
+            // lambda, a yield, a field it is saved into. Position does not matter — a reference
+            // handed out before the build is still live when the registration runs.
+            if (otherReads.Any(read => CollectionKey.Equal(read.Key, registration.Key)))
             {
                 continue;
             }
@@ -391,6 +386,11 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
+        if (!BuildsNoProviderOfItsOwn(definition))
+        {
+            return false;
+        }
+
         // An `AddXxx` extension that answers with a scalar is a query over the collection, not a
         // registration: `services.AddCount()` reports a count, it does not register anything.
         if (definition.ReturnsVoid || IsServiceCollection(definition.ReturnType, knownTypes))
@@ -409,6 +409,44 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         // A third-party extension answering with something other than the collection may have
         // built a provider of its own and wrapped it in the result, which this rule cannot see.
         return IsConventionalExtension(definition);
+    }
+
+    /// <summary>
+    /// True when a registration extension is known not to build a provider of its own. Framework
+    /// and framework-shaped extensions are trusted by namespace; anything else is trusted only
+    /// when its body is visible here and contains no <c>BuildServiceProvider</c> call, because a
+    /// helper that builds and stores its own provider does see what it just registered.
+    /// </summary>
+    private static bool BuildsNoProviderOfItsOwn(IMethodSymbol definition)
+    {
+        if (!definition.IsExtensionMethod)
+        {
+            return true;
+        }
+
+        if (definition.DeclaringSyntaxReferences.Length == 0)
+        {
+            return IsConventionalExtension(definition);
+        }
+
+        foreach (var reference in definition.DeclaringSyntaxReferences)
+        {
+            var declaration = reference.GetSyntax();
+            var buildsProvider = declaration
+                .DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Any(invocation =>
+                    invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                        && memberAccess.Name.Identifier.ValueText == "BuildServiceProvider"
+                );
+
+            if (buildsProvider)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsConventionalExtension(IMethodSymbol definition)

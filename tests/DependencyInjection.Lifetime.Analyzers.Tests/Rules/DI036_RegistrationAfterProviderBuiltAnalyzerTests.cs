@@ -1394,4 +1394,101 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task CollectionSavedToFieldBeforeBuild_NoDiagnostic()
+    {
+        // Codex round 7: a reference handed out before the build is still live when the
+        // registration runs, so position does not make the escape harmless.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    private IServiceCollection _saved = null!;
+
+                    public IServiceProvider Configure()
+                    {
+                        var services = new ServiceCollection();
+                        _saved = services;
+                        var probe = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return _saved.BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ExtensionThatBuildsItsOwnProvider_NoDiagnostic()
+    {
+        // Codex round 7: a void helper can still build and retain a provider internally, which
+        // does see what the helper just registered.
+        var source =
+            Usings
+            + """
+                public static class RuntimeExtensions
+                {
+                    public static IServiceProvider Current = null!;
+
+                    public static void AddRuntime(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        Current = services.BuildServiceProvider();
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddRuntime();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task InSourceExtensionThatBuildsNothing_ReportsDiagnostic()
+    {
+        // The build-check is what excludes a helper, not the fact that it is user-written: a
+        // custom AddXxx that only registers keeps its coverage.
+        var source =
+            Usings
+            + """
+                public static class AuditExtensions
+                {
+                    public static IServiceCollection AddAuditing(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        return services;
+                    }
+                }
+
+                public class Composition
+                {
+                    public IServiceProvider Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        {|DI036:services.AddAuditing()|};
+                        return provider;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
