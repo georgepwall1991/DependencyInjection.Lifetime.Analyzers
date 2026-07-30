@@ -750,4 +750,222 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task UnrelatedBuildOnHostBuilderContract_NoDiagnostic()
+    {
+        // Codex round 2: a type can implement a builder contract and still declare a Build of
+        // its own that creates no provider.
+        var source =
+            Usings
+            + """
+                public interface ICustomBuilder
+                {
+                    IServiceCollection Services { get; }
+                }
+
+                public sealed class CustomBuilder : ICustomBuilder
+                {
+                    public IServiceCollection Services { get; } = new ServiceCollection();
+
+                    public object Build() => new object();
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var builder = new CustomBuilder();
+                        var result = builder.Build();
+                        builder.Services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task BuildInsideConditionalExpression_NoDiagnostic()
+    {
+        // Codex round 2: the declaration statement is unconditional, but the build itself sits
+        // in a ternary arm that may never be evaluated.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void Configure(bool reuse, IServiceProvider existing)
+                    {
+                        var services = new ServiceCollection();
+                        var provider = reuse ? existing : services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AliasFoldedThroughComputedProperty_NoDiagnostic()
+    {
+        // Codex round 2: a property getter can hand back a fresh collection per access, so a
+        // local capturing one result is not an alias of the property path.
+        var source =
+            Usings
+            + """
+                public sealed class Holder
+                {
+                    public IServiceCollection Services => new ServiceCollection();
+                }
+
+                public class Composition
+                {
+                    public void Configure(Holder holder)
+                    {
+                        var snapshot = holder.Services;
+                        var provider = snapshot.BuildServiceProvider();
+                        holder.Services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task SecondaryCollectionArgumentOfRegistration_NoDiagnostic()
+    {
+        // Codex round 2: only the receiver argument of a registration call is exempt from the
+        // hand-off scan; another collection passed alongside it can still be rebuilt.
+        var source =
+            Usings
+            + """
+                public static class BridgeExtensions
+                {
+                    public static IServiceCollection AddBridge(
+                        this IServiceCollection target,
+                        IServiceCollection source) => target;
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var primary = new ServiceCollection();
+                        var secondary = new ServiceCollection();
+                        var provider = primary.BuildServiceProvider();
+                        primary.AddSingleton<IAudit, Audit>();
+                        secondary.AddBridge(primary);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task TupleDeconstructionReassignment_NoDiagnostic()
+    {
+        // Codex round 2: a deconstructing assignment writes each element, so the name at the
+        // registration no longer denotes the collection that was built.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceCollection Configure(IServiceCollection fresh)
+                    {
+                        IServiceCollection services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        (services, fresh) = (fresh, services);
+                        services.AddSingleton<IAudit, Audit>();
+                        return services;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ThirdPartyExtensionReturningWrapper_NoDiagnostic()
+    {
+        // Codex round 2: a third-party AddXxx answering with a wrapper may have built a provider
+        // of its own and handed it back inside the result.
+        var source =
+            Usings
+            + """
+                public sealed class BuildResult
+                {
+                    public IServiceProvider Provider { get; set; } = null!;
+                }
+
+                public static class WrapperExtensions
+                {
+                    public static BuildResult AddAndBuild(this IServiceCollection services) =>
+                        new BuildResult { Provider = services.BuildServiceProvider() };
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        var current = services.AddAndBuild().Provider;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task FrameworkBuilderReturningExtension_ReportsDiagnostic()
+    {
+        // The wrapper exclusion is namespace-scoped: a framework AddXxx returning a builder is
+        // still a registration.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection
+                {
+                    public interface IAuditBuilder { }
+
+                    public static class AuditServiceCollectionExtensions
+                    {
+                        public static IAuditBuilder AddAuditing(this IServiceCollection services) =>
+                            null!;
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        {|DI036:services.AddAuditing()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

@@ -65,10 +65,18 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     /// <c>Build()</c> on a type that merely exposes a service collection is never a snapshot.
     /// </summary>
     private static readonly ImmutableArray<string> HostBuilderMetadataNames = ImmutableArray.Create(
-        "Microsoft.Extensions.Hosting.IHostApplicationBuilder",
         "Microsoft.Extensions.Hosting.HostApplicationBuilder",
         "Microsoft.AspNetCore.Builder.WebApplicationBuilder"
     );
+
+    /// <summary>
+    /// Namespaces whose <c>AddXxx</c> extensions follow the registration convention closely
+    /// enough that a builder-shaped return value is still a registration. A third-party
+    /// extension returning something other than the collection may be building a provider of
+    /// its own and handing it back inside a wrapper, which this rule cannot see into.
+    /// </summary>
+    private static readonly ImmutableArray<string> ConventionalExtensionNamespacePrefixes =
+        ImmutableArray.Create("Microsoft.Extensions.", "Microsoft.AspNetCore.");
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -250,14 +258,15 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         if (method.Name == "Build" && method.Parameters.Length == 0)
         {
             var hostReceiver = GetReceiverExpression(invocation, method);
-            var receiverType = method.ReceiverType ?? method.ContainingType;
 
-            if (hostReceiver is null || !IsHostBuilder(receiverType, knownTypes))
+            // The Build that snapshots must be the framework builder's own. A type may implement
+            // a builder contract and still declare an unrelated Build alongside it.
+            if (hostReceiver is null || !IsHostBuilder(definition.ContainingType, knownTypes))
             {
                 return false;
             }
 
-            var servicesProperty = FindServicesProperty(receiverType, knownTypes);
+            var servicesProperty = FindServicesProperty(definition.ContainingType, knownTypes);
 
             if (
                 servicesProperty is null
@@ -350,10 +359,31 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         // An `AddXxx` extension that answers with a scalar is a query over the collection, not a
         // registration: `services.AddCount()` reports a count, it does not register anything.
-        return definition.ReturnsVoid
-            || (
-                !definition.ReturnType.IsValueType
-                && definition.ReturnType.SpecialType != SpecialType.System_String
+        if (definition.ReturnsVoid || IsServiceCollection(definition.ReturnType, knownTypes))
+        {
+            return true;
+        }
+
+        if (
+            definition.ReturnType.IsValueType
+            || definition.ReturnType.SpecialType == SpecialType.System_String
+        )
+        {
+            return false;
+        }
+
+        // A third-party extension answering with something other than the collection may have
+        // built a provider of its own and wrapped it in the result, which this rule cannot see.
+        return IsConventionalExtension(definition);
+    }
+
+    private static bool IsConventionalExtension(IMethodSymbol definition)
+    {
+        var containingNamespace = definition.ContainingNamespace?.ToDisplayString();
+
+        return containingNamespace is not null
+            && ConventionalExtensionNamespacePrefixes.Any(prefix =>
+                containingNamespace.StartsWith(prefix, StringComparison.Ordinal)
             );
     }
 
@@ -386,18 +416,27 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         foreach (var argumentList in codeBlock.DescendantNodes().OfType<ArgumentListSyntax>())
         {
-            // Arguments of the calls this rule already understands are not hand-offs; the static
-            // spelling of a registration extension passes the collection to itself.
-            if (
+            // The static spelling of a registration extension passes the collection to itself,
+            // which is not a hand-off. Every other argument of that same call still is: it can
+            // carry a different collection into a method that builds it.
+            // Only the *static* spelling puts the receiver in the argument list; in the usual
+            // reduced form every argument is a genuine hand-off.
+            var receiverArgument =
                 argumentList.Parent is InvocationExpressionSyntax invocation
                 && classified.Contains(invocation)
-            )
-            {
-                continue;
-            }
+                && argumentList.Arguments.Count > 0
+                && semanticModel.GetSymbolInfo(invocation).Symbol
+                    is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: null }
+                    ? argumentList.Arguments[0]
+                    : null;
 
             foreach (var argument in argumentList.Arguments)
             {
+                if (argument == receiverArgument)
+                {
+                    continue;
+                }
+
                 if (
                     !IsServiceCollection(
                         semanticModel.GetTypeInfo(argument.Expression).Type,
@@ -442,7 +481,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             switch (node)
             {
                 case AssignmentExpressionSyntax assignment:
-                    AddSymbol(assignment.Left);
+                    AddAssignmentTarget(assignment.Left);
                     break;
 
                 case ArgumentSyntax argument when !argument.RefKindKeyword.IsKind(SyntaxKind.None):
@@ -458,6 +497,31 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             if (semanticModel.GetSymbolInfo(expression).Symbol is { } symbol)
             {
                 builder.Add(symbol);
+            }
+        }
+
+        // `(services, fresh) = (fresh, services)` writes each element, not the tuple.
+        void AddAssignmentTarget(ExpressionSyntax expression)
+        {
+            switch (expression)
+            {
+                case TupleExpressionSyntax tuple:
+                    foreach (var element in tuple.Arguments)
+                    {
+                        AddAssignmentTarget(element.Expression);
+                    }
+
+                    return;
+
+                case DeclarationExpressionSyntax declaration
+                    when semanticModel.GetSymbolInfo(declaration.Designation).Symbol
+                        is { } declared:
+                    builder.Add(declared);
+                    return;
+
+                default:
+                    AddSymbol(expression);
+                    return;
             }
         }
     }
@@ -483,32 +547,11 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             : null;
     }
 
-    private static bool IsHostBuilder(ITypeSymbol? type, KnownTypes knownTypes)
-    {
-        if (type is null)
-        {
-            return false;
-        }
-
-        foreach (var hostBuilderType in knownTypes.HostBuilderTypes)
-        {
-            if (SymbolEqualityComparer.Default.Equals(type, hostBuilderType))
-            {
-                return true;
-            }
-
-            if (
-                type.AllInterfaces.Any(@interface =>
-                    SymbolEqualityComparer.Default.Equals(@interface, hostBuilderType)
-                )
-            )
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool IsHostBuilder(ITypeSymbol? type, KnownTypes knownTypes) =>
+        type is not null
+        && knownTypes.HostBuilderTypes.Any(hostBuilderType =>
+            SymbolEqualityComparer.Default.Equals(type, hostBuilderType)
+        );
 
     private static IPropertySymbol? FindServicesProperty(
         ITypeSymbol? receiverType,
@@ -589,7 +632,10 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
             // The build must be unconditional within the shared list; a build nested inside a
             // branch under that list may never have run.
-            if (!ReferenceEquals(buildStatement, buildChain[0]))
+            if (
+                !ReferenceEquals(buildStatement, buildChain[0])
+                || IsConditionallyEvaluated(build, buildStatement)
+            )
             {
                 return false;
             }
@@ -600,6 +646,41 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             }
 
             return !IsInsideLoop(owner);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when the build sits under an operator that can skip it even though its statement
+    /// runs: a ternary arm, a short-circuit or null-coalescing right operand, a conditional
+    /// access, or a switch-expression arm.
+    /// </summary>
+    private static bool IsConditionallyEvaluated(SyntaxNode build, StatementSyntax statement)
+    {
+        for (
+            var current = build;
+            current is not null && current != statement;
+            current = current.Parent
+        )
+        {
+            switch (current.Parent)
+            {
+                case ConditionalExpressionSyntax conditional when conditional.Condition != current:
+                case ConditionalAccessExpressionSyntax conditionalAccess
+                    when conditionalAccess.Expression != current:
+                case SwitchExpressionArmSyntax:
+                    return true;
+
+                case BinaryExpressionSyntax binary
+                    when binary.Right == current
+                        && (
+                            binary.IsKind(SyntaxKind.LogicalAndExpression)
+                            || binary.IsKind(SyntaxKind.LogicalOrExpression)
+                            || binary.IsKind(SyntaxKind.CoalesceExpression)
+                        ):
+                    return true;
+            }
         }
 
         return false;
@@ -900,7 +981,18 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 var restorePoint = path.Count;
                 if (TryBuild(initializer, semanticModel, reassignedSymbols, path, depth + 1))
                 {
-                    return true;
+                    // A property in the folded path may compute a fresh collection per access,
+                    // so it cannot stand in for the local that captured one result of it.
+                    var foldsThroughProperty = false;
+                    for (var index = restorePoint; index < path.Count; index++)
+                    {
+                        foldsThroughProperty |= path[index] is IPropertySymbol;
+                    }
+
+                    if (!foldsThroughProperty)
+                    {
+                        return true;
+                    }
                 }
 
                 path.Count = restorePoint;
