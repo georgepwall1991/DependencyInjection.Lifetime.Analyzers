@@ -208,8 +208,10 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
     }
 
     [Fact]
-    public async Task FieldHeldCollectionRegisteredAfterBuild_ReportsDiagnostic()
+    public async Task FieldHeldCollection_NoDiagnostic()
     {
+        // Codex round 5: a field is reachable from every other member of the type, any of which
+        // can build it again, so one code block cannot prove the registration lost.
         var source =
             Usings
             + """
@@ -220,13 +222,13 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
                     public IServiceProvider Build()
                     {
                         var provider = _services.BuildServiceProvider();
-                        {|DI036:_services.AddSingleton<IAudit, Audit>()|};
+                        _services.AddSingleton<IAudit, Audit>();
                         return provider;
                     }
                 }
                 """;
 
-        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
             source
         );
     }
@@ -1243,27 +1245,54 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
     }
 
     [Fact]
-    public async Task AutoPropertyHeldCollection_ReportsDiagnostic()
+    public async Task PropertyHeldCollection_NoDiagnostic()
     {
-        // The stability rule is about computed getters, not properties as such: an auto-property
-        // reads back the same collection every time.
+        // Codex round 5: a property-held collection is reachable from every other member, and a
+        // settable one can even be replaced between the build and the registration.
         var source =
             Usings
             + """
                 public class Composition
                 {
-                    private IServiceCollection Services { get; } = new ServiceCollection();
+                    private IServiceCollection Services { get; set; } = new ServiceCollection();
+
+                    private void Reset() => Services = new ServiceCollection();
 
                     public IServiceProvider Build()
                     {
                         var provider = Services.BuildServiceProvider();
-                        {|DI036:Services.AddSingleton<IAudit, Audit>()|};
+                        Reset();
+                        Services.AddSingleton<IAudit, Audit>();
                         return provider;
                     }
                 }
                 """;
 
-        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CallerOwnedCollectionParameter_NoDiagnostic()
+    {
+        // Codex round 5: the caller owns the collection and can build the live provider after
+        // this helper returns. Building a provider mid-registration is DI016's claim, not this
+        // rule's.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        var probe = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
             source
         );
     }

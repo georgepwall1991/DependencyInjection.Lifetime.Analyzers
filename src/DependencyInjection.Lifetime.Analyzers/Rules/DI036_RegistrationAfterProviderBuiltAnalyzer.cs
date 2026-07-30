@@ -989,6 +989,14 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 return false;
             }
 
+            // Only a collection rooted in a local of this code block is provably finished with.
+            // A parameter is the caller's, and a field or property is reachable from every other
+            // member of the type — either can be built again outside this block.
+            if (path.Count == 0 || path[0] is not ILocalSymbol)
+            {
+                return false;
+            }
+
             key = new CollectionKey(path.ToImmutable());
             return true;
         }
