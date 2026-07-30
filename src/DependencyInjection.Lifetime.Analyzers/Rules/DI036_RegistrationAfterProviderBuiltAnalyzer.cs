@@ -336,10 +336,14 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 return false;
             }
         }
-        else if (!IsServiceCollection(semanticModel.GetTypeInfo(receiver).Type, knownTypes))
+        else if (
+            !IsServiceCollection(semanticModel.GetTypeInfo(receiver).Type, knownTypes)
+            || !TakesServiceDescriptor(definition, knownTypes)
+        )
         {
             // `services.Add(descriptor)` and friends are `ICollection<ServiceDescriptor>`
-            // members reached through the collection itself.
+            // members reached through the collection itself. An implementation is free to add
+            // same-named overloads of its own that touch no descriptor at all.
             return false;
         }
 
@@ -359,6 +363,12 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         collectionEvent = new CollectionEvent(invocation, registrationKey, method.Name);
         return true;
     }
+
+    private static bool TakesServiceDescriptor(IMethodSymbol definition, KnownTypes knownTypes) =>
+        knownTypes.ServiceDescriptor is not null
+        && definition.Parameters.Any(parameter =>
+            SymbolEqualityComparer.Default.Equals(parameter.Type, knownTypes.ServiceDescriptor)
+        );
 
     private static bool IsRegistrationMethod(
         IMethodSymbol method,
@@ -433,6 +443,37 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     )
     {
         var handOffs = new List<CollectionHandOff>();
+
+        // Handing the collection back to the caller is a hand-off: the caller can build it.
+        foreach (var node in codeBlock.DescendantNodes())
+        {
+            var handedOut = node switch
+            {
+                ReturnStatementSyntax returnStatement => returnStatement.Expression,
+                ArrowExpressionClauseSyntax arrow => arrow.Expression,
+                AssignmentExpressionSyntax assignment
+                    when semanticModel.GetSymbolInfo(assignment.Left).Symbol
+                        is IFieldSymbol
+                            or IPropertySymbol
+                            or IParameterSymbol => assignment.Right,
+                _ => null,
+            };
+
+            if (
+                handedOut is not null
+                && IsServiceCollection(semanticModel.GetTypeInfo(handedOut).Type, knownTypes)
+                && CollectionKey.TryCreate(
+                    handedOut,
+                    semanticModel,
+                    knownTypes,
+                    reassignedSymbols,
+                    out var handedOutKey
+                )
+            )
+            {
+                handOffs.Add(new CollectionHandOff(handedOutKey, node.SpanStart));
+            }
+        }
 
         foreach (var argumentList in codeBlock.DescendantNodes().OfType<ArgumentListSyntax>())
         {
@@ -806,12 +847,14 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             INamedTypeSymbol serviceCollection,
             INamedTypeSymbol containerBuilderExtensions,
             INamedTypeSymbol? serviceProvider,
+            INamedTypeSymbol? serviceDescriptor,
             ImmutableArray<INamedTypeSymbol> hostBuilderTypes
         )
         {
             ServiceCollection = serviceCollection;
             ContainerBuilderExtensions = containerBuilderExtensions;
             ServiceProvider = serviceProvider;
+            ServiceDescriptor = serviceDescriptor;
             HostBuilderTypes = hostBuilderTypes;
         }
 
@@ -820,6 +863,8 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         public INamedTypeSymbol ContainerBuilderExtensions { get; }
 
         public INamedTypeSymbol? ServiceProvider { get; }
+
+        public INamedTypeSymbol? ServiceDescriptor { get; }
 
         public ImmutableArray<INamedTypeSymbol> HostBuilderTypes { get; }
 
@@ -851,6 +896,9 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 serviceCollection,
                 containerBuilderExtensions,
                 compilation.GetTypeByMetadataName("System.IServiceProvider"),
+                compilation.GetTypeByMetadataName(
+                    "Microsoft.Extensions.DependencyInjection.ServiceDescriptor"
+                ),
                 hostBuilderTypes.ToImmutable()
             );
         }
@@ -956,7 +1004,10 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         {
             switch (expression)
             {
-                case CastExpressionSyntax cast:
+                // A user-defined conversion is a method call in disguise and may hand back a
+                // different collection on each evaluation.
+                case CastExpressionSyntax cast
+                    when semanticModel.GetSymbolInfo(cast).Symbol is not IMethodSymbol:
                     return TryBuild(
                         cast.Expression,
                         semanticModel,
@@ -1058,6 +1109,16 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 return false;
             }
 
+            // A computed getter can hand back a different collection on each access, so it does
+            // not identify one. Auto-properties and a framework builder's Services do.
+            if (
+                symbol is IPropertySymbol property
+                && !IsStableProperty(property, knownTypes)
+            )
+            {
+                return false;
+            }
+
             if (
                 symbol is ILocalSymbol
                 && depth < MaxAliasDepth
@@ -1068,23 +1129,10 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 if (TryBuild(initializer, semanticModel,
                         knownTypes, reassignedSymbols, path, depth + 1))
                 {
-                    // An arbitrary property may compute a fresh collection per access, so it
-                    // cannot stand in for the local that captured one result of it. A framework
-                    // builder's `Services` is the exception: it is the collection that builder
-                    // will freeze, and folding through it is what lets a later `builder.Build()`
-                    // cancel a finding on the local.
-                    var foldsThroughUnstableProperty = false;
-                    for (var index = restorePoint; index < path.Count; index++)
-                    {
-                        foldsThroughUnstableProperty |=
-                            path[index] is IPropertySymbol property
-                            && !IsBuilderServicesProperty(property, knownTypes);
-                    }
-
-                    if (!foldsThroughUnstableProperty)
-                    {
-                        return true;
-                    }
+                    // Folding through a stable auto-property is what lets a later
+                    // `builder.Build()` cancel a finding on a local that captured
+                    // `builder.Services`; unstable properties never reach a path at all.
+                    return true;
                 }
 
                 path.Count = restorePoint;
@@ -1102,6 +1150,20 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             && knownTypes.HostBuilderTypes.Any(hostBuilderType =>
                 SymbolEqualityComparer.Default.Equals(property.ContainingType, hostBuilderType)
             );
+
+        /// <summary>
+        /// A property identifies one collection only when reading it twice is guaranteed to
+        /// yield the same object: an auto-property backed by a field, or a framework builder's
+        /// <c>Services</c>.
+        /// </summary>
+        private static bool IsStableProperty(IPropertySymbol property, KnownTypes knownTypes) =>
+            IsBuilderServicesProperty(property, knownTypes)
+            || property
+                .ContainingType.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Any(field =>
+                    SymbolEqualityComparer.Default.Equals(field.AssociatedSymbol, property)
+                );
 
         /// <summary>
         /// The initializer of a local that is written exactly once, at its declaration. Callers

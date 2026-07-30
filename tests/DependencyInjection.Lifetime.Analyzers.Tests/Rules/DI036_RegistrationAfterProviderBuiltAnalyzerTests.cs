@@ -1126,4 +1126,145 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task UserDefinedConversionInPath_NoDiagnostic()
+    {
+        // Codex round 4: a user-defined conversion is a method call in disguise and may hand
+        // back a different collection on each evaluation.
+        var source =
+            Usings
+            + """
+                public sealed class Source
+                {
+                    public ServiceCollection Live { get; } = new ServiceCollection();
+
+                    public static explicit operator ServiceCollection(Source source) =>
+                        new ServiceCollection();
+                }
+
+                public class Composition
+                {
+                    public void Configure(Source source)
+                    {
+                        var provider = ((ServiceCollection)source).BuildServiceProvider();
+                        ((ServiceCollection)source).AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CollectionReturnedToCaller_NoDiagnostic()
+    {
+        // Codex round 4: the caller receives the collection and can build it after this method
+        // has run, so the registration is not proven lost.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceCollection Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return services;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ComputedServicesProperty_NoDiagnostic()
+    {
+        // Codex round 4: reading a computed getter twice can yield two different collections, so
+        // the property does not identify one.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    private int _reads;
+                    private readonly IServiceCollection _probe = new ServiceCollection();
+                    private readonly IServiceCollection _live = new ServiceCollection();
+
+                    private IServiceCollection Services => _reads++ == 0 ? _probe : _live;
+
+                    public IServiceProvider Build()
+                    {
+                        var probe = Services.BuildServiceProvider();
+                        Services.AddSingleton<IAudit, Audit>();
+                        return _live.BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task NonDescriptorAddOverload_NoDiagnostic()
+    {
+        // Codex round 4: an IServiceCollection implementation may add same-named overloads of
+        // its own that touch no descriptor at all.
+        var source =
+            Usings
+            + """
+                public sealed class AuditingCollection : List<ServiceDescriptor>, IServiceCollection
+                {
+                    public void Add(string message) { }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new AuditingCollection();
+                        var provider = services.BuildServiceProvider();
+                        services.Add("audit enabled");
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AutoPropertyHeldCollection_ReportsDiagnostic()
+    {
+        // The stability rule is about computed getters, not properties as such: an auto-property
+        // reads back the same collection every time.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    private IServiceCollection Services { get; } = new ServiceCollection();
+
+                    public IServiceProvider Build()
+                    {
+                        var provider = Services.BuildServiceProvider();
+                        {|DI036:Services.AddSingleton<IAudit, Audit>()|};
+                        return provider;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
