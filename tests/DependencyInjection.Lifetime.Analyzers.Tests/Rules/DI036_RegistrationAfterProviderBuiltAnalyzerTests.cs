@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using DependencyInjection.Lifetime.Analyzers.Tests.Infrastructure;
+using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
 namespace DependencyInjection.Lifetime.Analyzers.Tests.Rules;
@@ -22,6 +23,22 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
         public class Audit : IAudit { }
 
         """;
+
+    /// <summary>
+    /// The host-builder leg needs the real <c>HostApplicationBuilder</c>: DI036 recognises only
+    /// the framework builder contracts, so a stub cannot stand in for it.
+    /// </summary>
+    private static readonly ReferenceAssemblies HostingReferences =
+        ReferenceAssemblies.Net.Net80.AddPackages(
+            [
+                new PackageIdentity(
+                    "Microsoft.Extensions.DependencyInjection.Abstractions",
+                    "10.0.2"
+                ),
+                new PackageIdentity("Microsoft.Extensions.DependencyInjection", "10.0.2"),
+                new PackageIdentity("Microsoft.Extensions.Hosting", "10.0.2"),
+            ]
+        );
 
     private const string HostBuilderStub = """
         public sealed class AppBuilder
@@ -60,24 +77,36 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
     [Fact]
     public async Task RegistrationAfterHostBuilderBuild_ReportsDiagnostic()
     {
-        var source =
-            Usings
-            + HostBuilderStub
-            + """
-                public class Composition
-                {
-                    public void Configure()
-                    {
-                        var builder = new AppBuilder();
-                        builder.Services.AddScoped<IReporting, Reporting>();
-                        var app = builder.Build();
-                        {|DI036:builder.Services.AddSingleton<IAudit, Audit>()|};
-                    }
-                }
-                """;
+        // `using` clauses must precede the type declarations `Usings` carries, so this source is
+        // self-contained.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
 
-        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
-            source
+            public interface IReporting { }
+
+            public interface IAudit { }
+
+            public class Reporting : IReporting { }
+
+            public class Audit : IAudit { }
+
+            public class Composition
+            {
+                public void Configure()
+                {
+                    var builder = new HostApplicationBuilder();
+                    builder.Services.AddScoped<IReporting, Reporting>();
+                    var host = builder.Build();
+                    {|DI036:builder.Services.AddSingleton<IAudit, Audit>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            HostingReferences
         );
     }
 
@@ -491,6 +520,228 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
                         var services = new ServiceCollection();
                         var query = new QueryBuilder().Build();
                         services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task UnrelatedBuilderExposingServices_NoDiagnostic()
+    {
+        // Codex round 1: a type that merely has an `IServiceCollection Services` property and a
+        // `Build()` freezes nothing — its provider may be created later from the live collection.
+        var source =
+            Usings
+            + HostBuilderStub
+            + """
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var builder = new AppBuilder();
+                        var report = builder.Build();
+                        builder.Services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CustomBuildServiceProviderExtension_NoDiagnostic()
+    {
+        // Codex round 1: a same-named community extension may hand back a live view of the
+        // collection rather than a snapshot, so the registration still reaches it.
+        var source =
+            Usings
+            + """
+                public static class LiveProviderExtensions
+                {
+                    public static IServiceProvider BuildServiceProvider(
+                        this IServiceCollection services,
+                        int mode) => null!;
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var live = services.BuildServiceProvider(1);
+                        services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ReadOnlyAddPrefixedExtension_NoDiagnostic()
+    {
+        // Codex round 1: an `AddXxx` extension answering with a scalar is a query over the
+        // collection, not a registration, so there is nothing to lose.
+        var source =
+            Usings
+            + """
+                public static class InspectionExtensions
+                {
+                    public static int AddCount(this IServiceCollection services) => services.Count;
+                }
+
+                public class Composition
+                {
+                    public int Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        return services.AddCount();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ExtensionReturningProvider_NoDiagnostic()
+    {
+        // Codex round 1: a call that hands back a provider builds one itself, so whatever it
+        // registers reaches the provider it returns.
+        var source =
+            Usings
+            + """
+                public static class ProviderExtensions
+                {
+                    public static ServiceProvider AddAuditProvider(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        return services.BuildServiceProvider();
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        var live = services.AddAuditProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RemoveAfterBuild_NoDiagnostic()
+    {
+        // Codex round 1: stripping a descriptor back out is teardown, not a lost registration.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var descriptor = ServiceDescriptor.Singleton<IAudit, Audit>();
+                        services.Add(descriptor);
+                        var provider = services.BuildServiceProvider();
+                        services.Remove(descriptor);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AliasedRebuildCancels_NoDiagnostic()
+    {
+        // Codex round 1: the later build goes through an alias of the same collection, so the
+        // registration does reach a provider.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceProvider Build()
+                    {
+                        IServiceCollection services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        IServiceCollection alias = services;
+                        return alias.BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ReassignedCollection_NoDiagnostic()
+    {
+        // Codex round 1: the name denotes a different collection at the registration than it did
+        // at the build, so the build proves nothing about it.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceCollection Configure()
+                    {
+                        IServiceCollection services = new ServiceCollection();
+                        var discarded = services.BuildServiceProvider();
+                        services = new ServiceCollection();
+                        services.AddSingleton<IAudit, Audit>();
+                        return services;
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CollectionHandedToHelperAfterRegistration_NoDiagnostic()
+    {
+        // Codex round 1: the helper can build the collection again out of sight of this block.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    private static ServiceProvider CreateProvider(IServiceCollection services) =>
+                        services.BuildServiceProvider();
+
+                    public IServiceProvider Build()
+                    {
+                        var services = new ServiceCollection();
+                        var snapshot = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return CreateProvider(services);
                     }
                 }
                 """;
