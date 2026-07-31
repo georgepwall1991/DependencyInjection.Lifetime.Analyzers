@@ -52,6 +52,12 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     private const int MaxDependencyDepth = 6;
 
     /// <summary>
+    /// How far a service's own helpers are followed while asking whether it keeps the task it
+    /// hands back.
+    /// </summary>
+    private const int MaxHelperDepth = 3;
+
+    /// <summary>
     /// Generic resolution methods whose type argument names the service that was resolved.
     /// </summary>
     private static readonly ImmutableHashSet<string> ResolutionMethodNames =
@@ -575,12 +581,9 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         }
 
         // A method that keeps the handle it hands back has a join of its own in mind, so the
-        // caller discarding the task is not the end of the story.
-        if (
-            bodyNodes
-                .OfType<AssignmentExpressionSyntax>()
-                .Any(assignment => IsInstanceStateReference(assignment.Left, method.ContainingType))
-        )
+        // caller discarding the task is not the end of the story. The keeping may happen a
+        // helper or two down, so its own calls on this instance are followed too.
+        if (RetainsTheTask(method, 0))
         {
             return true;
         }
@@ -603,6 +606,81 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             && returns.All(statement =>
                 statement.Expression is { } value && IsCompletedTaskExpression(value)
             );
+    }
+
+    /// <summary>
+    /// Whether the method, or a helper of its own type that it calls, stores a task in instance
+    /// state. A service that keeps what it started intends to join it.
+    /// </summary>
+    private static bool RetainsTheTask(IMethodSymbol method, int depth)
+    {
+        if (
+            depth > MaxHelperDepth
+            || method.DeclaringSyntaxReferences.Length != 1
+            || !ExecutableSyntaxHelper.TryGetExecutableBody(
+                method.DeclaringSyntaxReferences[0].GetSyntax(),
+                out var body
+            )
+        )
+        {
+            return false;
+        }
+
+        var declaringType = method.ContainingType;
+
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(body))
+        {
+            if (
+                node is AssignmentExpressionSyntax assignment
+                && IsInstanceStateReference(assignment.Left, declaringType)
+            )
+            {
+                return true;
+            }
+
+            if (
+                node is InvocationExpressionSyntax call
+                && GetOwnInstanceMethod(call, declaringType) is { } helper
+                && RetainsTheTask(helper, depth + 1)
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The method a call names when it is a call on this same instance — unqualified, or written
+    /// through <c>this</c>. Calls on anything else say nothing about this service.
+    /// </summary>
+    private static IMethodSymbol? GetOwnInstanceMethod(
+        InvocationExpressionSyntax invocation,
+        INamedTypeSymbol? declaringType
+    )
+    {
+        if (declaringType is null)
+        {
+            return null;
+        }
+
+        var name = invocation.Expression switch
+        {
+            SimpleNameSyntax simple => simple,
+            MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } member => member.Name,
+            _ => null,
+        };
+
+        if (name is null)
+        {
+            return null;
+        }
+
+        return declaringType
+            .GetMembers(name.Identifier.ValueText)
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(candidate => !candidate.IsStatic);
     }
 
     /// <summary>

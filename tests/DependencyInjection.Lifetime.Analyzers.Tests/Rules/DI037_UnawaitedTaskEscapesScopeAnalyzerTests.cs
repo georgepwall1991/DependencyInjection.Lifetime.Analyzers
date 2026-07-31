@@ -1243,4 +1243,48 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ServiceKeepsTheHandleThroughAHelper_NoDiagnostic()
+    {
+        // Codex round 9: the keeping happens one helper down, and the service joins what it kept
+        // before the scope ends.
+        var source =
+            Usings
+            + """
+                public sealed class RememberingWorker : IDisposable
+                {
+                    private Task _pending = Task.CompletedTask;
+
+                    public Task RunAsync() => Remember(RunCoreAsync());
+
+                    public void Join() => _pending.GetAwaiter().GetResult();
+
+                    public void Dispose() { }
+
+                    private Task Remember(Task task) => _pending = task;
+
+                    private async Task RunCoreAsync() => await Task.Delay(10);
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<RememberingWorker>();
+                        worker.RunAsync();
+                        worker.Join();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
