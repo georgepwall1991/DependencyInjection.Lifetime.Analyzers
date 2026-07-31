@@ -563,6 +563,28 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         var bodyNodes = ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(body).ToList();
 
+        // Work that never touches the service cannot be hurt by the service being disposed:
+        // `PauseAsync() => Task.Delay(10)` hands back a timer, not a piece of this instance.
+        // Nested delegates count here — a lambda is where a capture of `this` hides.
+        if (
+            !body.DescendantNodesAndSelf()
+                .Any(node => IsInstanceStateReference(node, method.ContainingType))
+        )
+        {
+            return true;
+        }
+
+        // A method that keeps the handle it hands back has a join of its own in mind, so the
+        // caller discarding the task is not the end of the story.
+        if (
+            bodyNodes
+                .OfType<AssignmentExpressionSyntax>()
+                .Any(assignment => IsInstanceStateReference(assignment.Left, method.ContainingType))
+        )
+        {
+            return true;
+        }
+
         // An async body with nothing to await runs straight through to its end and hands back a
         // task that is already finished.
         if (method.IsAsync)
@@ -581,6 +603,38 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             && returns.All(statement =>
                 statement.Expression is { } value && IsCompletedTaskExpression(value)
             );
+    }
+
+    /// <summary>
+    /// Whether a node names instance state of the declaring type: <c>this</c>, <c>base</c>, or a
+    /// member of it reached without a receiver of its own.
+    /// </summary>
+    private static bool IsInstanceStateReference(SyntaxNode node, INamedTypeSymbol? declaringType)
+    {
+        if (node is ThisExpressionSyntax or BaseExpressionSyntax)
+        {
+            return true;
+        }
+
+        if (declaringType is null || node is not SimpleNameSyntax name)
+        {
+            return false;
+        }
+
+        // `other.Field` is somebody else's state; only an unqualified name, or one qualified by
+        // `this`, reaches this instance.
+        if (
+            name.Parent is MemberAccessExpressionSyntax qualified
+            && qualified.Name == name
+            && qualified.Expression is not ThisExpressionSyntax
+        )
+        {
+            return false;
+        }
+
+        return declaringType
+            .GetMembers(name.Identifier.ValueText)
+            .Any(member => !member.IsStatic);
     }
 
     private static bool IsCompletedTaskExpression(ExpressionSyntax expression) =>

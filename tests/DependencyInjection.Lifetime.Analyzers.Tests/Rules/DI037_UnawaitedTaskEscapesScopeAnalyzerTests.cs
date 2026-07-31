@@ -582,7 +582,13 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             + """
                 public class Worker : IWorker, IDisposable
                 {
-                    public async Task RunAsync() => await Task.Delay(10);
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                        _count++;
+                    }
 
                     public Task<int> CountAsync() => Task.FromResult(0);
 
@@ -695,9 +701,12 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             + """
                 public sealed class RealWorker : IDisposable
                 {
+                    private int _count;
+
                     public async Task RunAsync()
                     {
                         await Task.Delay(10);
+                        _count++;
                     }
 
                     public void Dispose() { }
@@ -961,9 +970,15 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
 
                 public sealed class PlainWorker
                 {
-                    public PlainWorker(Connection connection) { }
+                    private readonly Connection _connection;
 
-                    public Task RunAsync() => Task.Delay(10);
+                    public PlainWorker(Connection connection) => _connection = connection;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                        _connection.ToString();
+                    }
                 }
 
                 public class Registrations
@@ -1109,6 +1124,122 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
                 """;
 
         await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task WorkIndependentOfTheService_NoDiagnostic()
+    {
+        // Codex round 8: the task hands back a timer rather than a piece of this instance, so
+        // disposing the service cannot touch it.
+        var source =
+            Usings
+            + """
+                public sealed class PausingWorker : IDisposable
+                {
+                    public Task PauseAsync() => Task.Delay(10);
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public Task Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        return scope.ServiceProvider.GetRequiredService<PausingWorker>().PauseAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ServiceKeepsTheHandleItHandsBack_NoDiagnostic()
+    {
+        // Codex round 8: the service stores the task it starts, so it has a join of its own in
+        // mind and the caller discarding the task is not the end of the story.
+        var source =
+            Usings
+            + """
+                public sealed class JoiningWorker : IDisposable
+                {
+                    private Task? _running;
+
+                    private int _count;
+
+                    public Task RunAsync() => _running = Task.Run(() => _count++);
+
+                    public void Join() => _running!.GetAwaiter().GetResult();
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<JoiningWorker>();
+                        worker.RunAsync();
+                        worker.Join();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task WorkUsingTheServiceItself_ReportsDiagnostic()
+    {
+        // Work that reads the service's own state through the delegate it starts is exactly what
+        // the scope tears down.
+        var source =
+            Usings
+            + """
+                public sealed class StatefulWorker : IDisposable
+                {
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                        _count++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public Task Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        return {|DI037:scope.ServiceProvider.GetRequiredService<StatefulWorker>().RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
             source
         );
     }
