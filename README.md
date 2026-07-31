@@ -232,7 +232,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## DI001: Service Scope Not Disposed
 
-**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, switch section, loop, catch block, or after a branch exit that can bypass shared cleanup. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, and it treats directly returned scopes as caller-owned even through simple casts or conditional return arms. Reassignment leaks and loop-created scopes that need per-iteration disposal still report.
+**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, or behind a switch section, loop, or catch block that does not also contain the creation, or after a branch exit that can bypass shared cleanup. Create-and-dispose within the same loop iteration, switch section, or catch clause — the per-message worker shape — stays quiet, but a `continue`/`break` that skips the dispose, or a `yield return`/`yield break` that can strand the scope in a never-resumed iterator, still reports. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, and it treats directly returned scopes as caller-owned even through simple casts or conditional return arms. Reassignment leaks and loop-created scopes that need per-iteration disposal still report.
 
 **Why it matters:** undisposed scopes can retain scoped and transient disposable services longer than expected, causing memory and handle leaks.
 
@@ -260,13 +260,13 @@ public void Process()
 }
 ```
 
-**Code Fix:** Yes. Adds `using` / `await using` where possible.
+**Code Fix:** Yes. Adds `using` / `await using` where possible; the `await using` conversion also rewrites explicitly typed declarations to `var`, because `AsyncServiceScope` boxed to `IServiceScope` cannot be awaited-using.
 
 ---
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases, delegates that capture scoped services and then escape, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. It also detects wrapped returned resolutions and later-returned locals such as casts, `as` casts, null-forgiving, ternary/coalesce expressions, and non-generic `GetService(typeof(T))`, while keeping pre-resolution locals and proven non-escaping scope-local holder objects, including simple direct local holder aliases, quiet. Holders that later escape through a return, conditional-access slot return, long-lived assignment including null-conditional assignment to a field/property-held receiver, nested receiver path under a fresh wrapper, escaping delegate, returned/stored local container, already-escaped local collection, returned collection alias, or `??=` receiver that may still point at a long-lived holder still report; slot reads before the scoped write stay quiet.
+**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases, delegates that capture scoped services and then escape, scopes declared before a later `using (scope)` disposal block, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Collection escapes through field/property-held containers (`_cache.Add(service)`, `_byTenant[key] = service`, `_cache.GetOrAdd(key, service)` and its value-factory spelling `_cache.GetOrAdd(key, _ => resolution)`, `_cache.AddOrUpdate(...)`) and caller-owned collection parameters (`destination.Add(service)`), including caller-visible `ref`/`out` replacements, event subscriptions that bind the scoped service to an owner that outlives the scope (`_publisher.Changed += service.Handle`, captured-delegate handlers), and composite-construction returns (`return (service, count);`, `return new { Service = service };`) are detected too. Wrapped returned resolutions and later-returned locals such as casts, `as` casts, null-forgiving, ternary/coalesce expressions, and non-generic `GetService(typeof(T))` are covered; local containers, by-value parameters definitely replaced with fresh collections that remain local, scope-local publishers, proven non-escaping scope-local holders including simple direct local holder aliases, pre-resolution locals, and composites consumed inside the scope stay quiet. A fresh parameter replacement that is stored into longer-lived state, returned after mutation, or exposed through a direct local alias or `ref`/`out` still reports. Holders that later escape through a return, conditional-access slot return, long-lived assignment including null-conditional assignment to a field/property-held receiver, nested receiver path under a fresh wrapper, escaping delegate, returned/stored local container, already-escaped local collection, returned collection alias, or `??=` receiver that may still point at a long-lived holder still report; slot reads before the scoped write stay quiet.
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -299,9 +299,9 @@ public void UseServiceNow()
 
 ## DI003: Captive Dependency
 
-**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` calls where DI still resolves a scoped or transient constructor parameter.
+**What it catches:** singleton services capturing scoped or transient dependencies, including constructor injection, `IEnumerable<T>` collection captures, known scoped framework services such as `IOptionsSnapshot<T>`, typed HTTP clients registered with `AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`, EF Core contexts and `DbContextOptions<TContext>` registrations from `AddDbContext(...)`, `AddDbContextFactory(...)`, `AddDbContextPool(...)`, and `AddPooledDbContextFactory(...)` including service/implementation overload self-registrations, and high-confidence factory paths such as inline delegates, stable local delegate factories, method-group factories, `GetServices<T>()`, keyed resolutions, and `ActivatorUtilities.CreateInstance(...)` calls where DI still resolves a scoped or transient constructor parameter. A factory that creates and provably disposes its own scope (`using var scope = sp.CreateScope();`) stays quiet for resolutions through that scope when only derived values flow into the product — one-time scoped setup is not a captive — while an escaping resolved instance or an undisposed factory scope still reports.
 
-`ServiceDescriptor` registrations prepended with `services.Insert(0, descriptor)` are analyzed too, including reordered named arguments, concrete framework `ServiceCollection` receivers, and repeated prepends whose runtime list precedence differs from source order. Nonzero or dynamic insert indexes and source-defined concrete `Insert` bodies stay conservative because their absolute position or mutation behavior is not provable.
+The shared registration model also recognizes `IServiceCollection.Insert(0, ServiceDescriptor...)`, including reordered named arguments and the concrete framework `ServiceCollection` implementation. It evaluates ordinary additions after prepends and reverses repeated prepend operations to match the runtime descriptor list. Nonzero or dynamic insert indexes remain deliberately silent because unmodelled descriptors make absolute positions unsafe to infer; source-defined concrete `Insert` bodies stay silent because an implementation can remap the interface member to arbitrary behavior.
 
 **Why it matters:** lifetime mismatch can produce stale state, leaks, and thread-safety defects.
 
@@ -373,13 +373,13 @@ public sealed class ProcessorHostedService : IHostedService
 
 Repository and unit-of-work abstractions are reported when their registered lifetime is scoped or transient. DI003 does not infer DbContext-backed behavior from names like `IRepository<T>` or `IUnitOfWork` alone.
 
-**Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, `TryAddSingleton`, keyed `AddKeyedSingleton`, inline factory registrations, and supported `ServiceDescriptor` forms).
+**Code Fix:** Yes. Rewrites explicit registration lifetimes when the registration syntax is local and unambiguous (for example `AddSingleton`, `TryAddSingleton`, keyed `AddKeyedSingleton`, inline factory registrations, and supported `ServiceDescriptor` forms). The rewrite only ever targets MEDI registration methods — user helpers whose names happen to contain a lifetime token are never renamed.
 
 ---
 
 ## DI004: Service Used After Scope Disposed
 
-**What it catches:** using a service after the scope that produced it has already ended, including services resolved through provider aliases, scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()` (including `scope?.Dispose()` for scope locals), wrapped use receivers such as `service!.DoWork()` and `((IService)service).DoWork()`, scopes disposed later via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods.
+**What it catches:** using a service after the scope that produced it has already ended, including scoped collections from `GetServices<T>()` enumerated after disposal, explicit `Dispose()` / `DisposeAsync()` (including `scope?.Dispose()` for scope locals), wrapped use receivers such as `service!.DoWork()` and `((IService)service).DoWork()`, services resolved from a predeclared scope variable later disposed via `using (scope)`, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Uses in branches mutually exclusive with the disposal — whether the dispose is explicit or a `using` statement/declaration — stay quiet, and `out` arguments are writes rather than uses (the rewritten local is fresh afterwards), while `ref` arguments still report.
 
 **Why it matters:** leads to runtime disposal errors and brittle service behaviour.
 
@@ -406,7 +406,7 @@ using (var scope = _scopeFactory.CreateScope())
 }
 ```
 
-**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases.
+**Code Fix:** Yes. Moves simple immediate invocation-style uses back into the owning scope only when the diagnostic local was assigned in that scope, or adds a narrow pragma suppression for context-dependent cases. The pragma suppression always lands on a line-starting statement, so embedded unbraced statements compile.
 
 ---
 
@@ -446,7 +446,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers, mutable/immutable/frozen dictionary value caches, recursive dictionary values, and simple holder types that only wrap a provider.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), mutable/immutable/frozen dictionary value caches, recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>`, and simple holder types that only wrap a provider.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -459,8 +459,22 @@ public static class Locator
 {
     public static IServiceProvider Provider { get; set; } = null!;
     private static readonly Lazy<IServiceProvider> LazyProvider = new(() => Provider);
-    private static readonly Dictionary<string, Lazy<IServiceProvider>> TenantProviders = new();
+    private static readonly Dictionary<string, Lazy<IServiceProvider>> LazyTenantProviders = new();
+    private static readonly Dictionary<string, IServiceProvider> TenantProviders = new();
     private static readonly ImmutableDictionary<string, IServiceProvider> SnapshotProviders = ImmutableDictionary<string, IServiceProvider>.Empty;
+    private static ProviderHolder Holder = null!;
+}
+```
+
+```csharp
+public sealed class ProviderHolder
+{
+    private readonly IServiceProvider _provider;
+
+    public ProviderHolder(IServiceProvider provider)
+    {
+        _provider = provider;
+    }
 }
 ```
 
@@ -480,11 +494,13 @@ public sealed class Locator
 
 **Code Fix:** Yes. Removes `static` modifier in common private-member cases where existing references stay valid; it is suppressed for nested-type references, type-qualified references, and instance field/property initializers that would become invalid instance-member access.
 
+**Options:** `dotnet_code_quality.DI006.detect_holder_pattern = false` disables the simple holder-type detector if a codebase intentionally uses provider-wrapper types.
+
 ---
 
 ## DI007: Service Locator Anti-Pattern
 
-**What it catches:** resolving dependencies via `IServiceProvider` inside app logic.
+**What it catches:** resolving dependencies via `IServiceProvider` inside app logic, including non-generic resolution calls that pass a local `Type` alias initialized from `typeof(...)`.
 
 **Why it matters:** hides real dependencies, makes tests harder, and weakens architecture boundaries.
 
@@ -528,7 +544,7 @@ public sealed class MyService
 
 **Code Fix:** No. This is usually architectural refactoring.
 
-DI007 follows generic resolutions, direct `typeof(...)` arguments, and local `Type` aliases initialized from `typeof(...)` when they are not reassigned before the resolution call. It stays quiet in recognized composition/factory boundaries: DI registration factories, value-returning `Create*`/`Build*` factory methods, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
+DI007 stays quiet in recognized composition/factory boundaries: DI registration factories, value-returning `Create*`/`Build*` factory methods, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, `BackgroundService.ExecuteAsync`, exact hosted-service lifecycle implementations, options configure/validate implementations, and provider-aware options/factory delegates.
 
 ---
 
@@ -558,15 +574,17 @@ services.AddScoped<IMyService, DisposableService>();
 // or ensure explicit disposal ownership if transient is intentional
 ```
 
-DI008 follows generic, `typeof(...)`, keyed, named-argument, `ServiceDescriptor.Transient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, conditional `services?.Add(ServiceDescriptor.Transient(...))`, `TryAddTransient`, and `TryAddEnumerable` registration shapes. Factory registrations stay quiet because disposal ownership is explicit in user code.
+DI008 follows generic, `typeof(...)`, keyed, named-argument, typed HTTP client (`AddHttpClient<TClient>()` / `AddHttpClient<TClient,TImplementation>()`), `ServiceDescriptor.Transient(...)`, conditional `services?.Add(ServiceDescriptor.Transient(...))`, `ServiceDescriptor.KeyedTransient(...)`, `ServiceDescriptor.Describe(..., ServiceLifetime.Transient)`, `ServiceDescriptor.DescribeKeyed(..., ServiceLifetime.Transient)`, `new ServiceDescriptor(..., ServiceLifetime.Transient)`, `TryAddTransient`, plain `TryAdd(ServiceDescriptor...)`, `Replace(ServiceDescriptor...)`, and `TryAddEnumerable` registration shapes, including descriptor arrays, lists, and C# collection expressions. Descriptor argument binding uses Roslyn parameters, so keyed descriptor calls whose `serviceKey` is itself a `typeof(...)` expression still report the disposable implementation rather than misreading the key as the implementation. Factory registrations stay quiet because disposal ownership is explicit in user code.
 
 **Code Fix:** Yes. Suggests safer lifetime alternatives and rewrites local descriptor lifetime arguments where the registration is unambiguous.
+
+**Options:** `dotnet_code_quality.DI008.allowed_disposable_types = MyType, My.Namespace.OtherType` suppresses known intentional disposable transients by simple or full type name.
 
 ---
 
 ## DI009: Open Generic Captive Dependency
 
-**What it catches:** open generic singleton registrations that depend on shorter-lived services, including `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, keyed open-generic singleton registrations, and `IEnumerable<T>` constructor captures where the element service is shorter-lived.
+**What it catches:** open generic singleton registrations that depend on shorter-lived services, including common registration-shape variants such as `TryAddSingleton(...)`, `ServiceDescriptor.Singleton(...)`, keyed open-generic singleton registrations, and `IEnumerable<T>` constructor captures where the element service is shorter-lived.
 
 **Why it matters:** every closed generic instance inherits the lifetime mismatch.
 
@@ -593,6 +611,33 @@ services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 DI009 follows the single likely activation constructor the container can actually use. Optional/default-value parameters are treated as activatable during that selection, and ambiguous equally-greedy constructor sets stay silent instead of guessing.
 
 Dependency lifetimes are looked up against user registrations first and then fall back to the shared known-framework classifier, so open-generic singletons that capture `IOptionsSnapshot<T>` are reported as scoped captures even when the application does not register Options manually. `IOptions<T>` and `IOptionsMonitor<T>` keep their singleton lifetime and stay quiet.
+
+For `IEnumerable<T>`, the container includes every matching exact closed and applicable open-generic
+registration. DI009 therefore takes the worst lifetime across both sets: an exact closed singleton
+element cannot hide an additional scoped or transient open-generic element. Matching keyed
+registrations use the same rule. A concrete-key enumerable uses only registrations for that exact
+key; `KeyedService.AnyKey` descriptors do not participate. The final effective
+`AnyKey`-registered consumer with parameterless `[FromKeyedServices]` runs constructor selection
+and lifetime evaluation against every concrete key where an exact registration for the same
+service does not shadow it, reporting each constructor parameter once at its worst
+lifetime across those keys and again without including the `AnyKey` descriptor. The unknown-key
+fallback keeps an empty enumerable rather than reaggregating concrete keys already shadowed for
+that consumer. Ordinary single-service resolution still uses
+`AnyKey` as a fallback only when no exact-key registration exists. Constructor-resolvability
+analysis follows the same precedence, so a broken exact-key registration cannot be bypassed by a
+resolvable `AnyKey` registration when selecting the activation constructor. Within the selected
+exact or `AnyKey` tier, the final effective descriptor wins, so an earlier resolvable registration
+cannot bypass a later broken registration. Open-generic
+implementations whose runtime generic constraints
+reject the requested element type are excluded, while an unconstrained consumer type parameter
+remains a potential match unless its class, struct, base-type, interface, constructor, dependent, or
+composite constraints prove the sets disjoint. Nested service and implementation types include
+containing-type arguments or parameters in runtime closure order, and nested invariant generic constraints keep their concrete
+generic shape instead of treating an entire composite argument as a wildcard. Concrete base-class
+constraints are disjoint from `struct` constraints except for CLR value-type bases such as `Enum`.
+Ordinary single-service resolution is unchanged and
+selects the final effective descriptor from the first available runtime tier: closed exact key,
+closed `AnyKey`, open-generic exact key, then open-generic `AnyKey`.
 
 **Code Fix:** Yes. Can adjust lifetime for open generic registrations.
 
@@ -624,7 +669,7 @@ public sealed class ReportingService
 
 **Better pattern:** split into focused collaborators and inject smaller abstractions.
 
-For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor, including original type definitions registered through open-generic `typeof(...)` calls. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories.
+For normal type registrations, DI010 evaluates the public constructor(s) the container could realistically activate instead of every declared constructor — including C# 12 primary constructors and original type definitions registered through open-generic `typeof(...)` calls. Tied equally-greedy activation constructors report only once at the registration using the highest meaningful dependency count. It also covers straightforward factory registrations that directly return `new MyService(...)`, final-return factory blocks that set up locals before `return new MyService(...)`, and `ActivatorUtilities.CreateInstance<MyService>(sp)`, while staying conservative on branching or dynamic factories. Method-group factories work across files: `services.AddScoped<IMyService>(Factories.Create)` is analyzed through the factory body even when `Factories` is declared in another file.
 
 By default, DI010 reports when a constructor has more than `4` meaningful dependencies. It ignores primitives/value types, optional parameters, provider-plumbing types already covered by `DI011`, and common framework abstractions such as `ILogger<T>`, `IOptions<T>`, and `IConfiguration`.
 
@@ -662,6 +707,29 @@ public sealed class MyService
 
 **Known exceptions in this rule:** factory-style types with value-returning factory members, singleton services that use `IServiceScopeFactory` to create scopes deliberately, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, hosted services, endpoint filter factories, and provider parameters on non-public constructors the container cannot activate.
 
+Registrations that are definitely removed by a later unconditional `RemoveAll` or `Replace` call
+in the same straight-line service-collection flow are also ignored. Conditional or otherwise
+bypassable removals do not suppress the diagnostic because the registration can still be active.
+Fluent `Add*().RemoveAll()` chains follow nested-call execution order, and `TryAdd` fallbacks after
+an unconditional removal are analyzed when they become effective. Reassigning a collection
+receiver starts a separate flow, and companion descriptors emitted by one framework registration
+call retain independent effective-state identities. Top-level statements participate in the same
+proof, captured aliases retain their assignment-time collection identity, and `Insert(0)` ordering
+is honored when replaying `Replace`. A conditional `RemoveAll` can make a later `TryAdd` candidate
+effective, but exiting and mutually exclusive branch shapes do not.
+Only straight-line alias assignments determine collection identity; conditional assignments
+invalidate earlier aliases. Non-terminating branches cannot activate an unreachable fallback, while
+reachable same-branch, `switch`, loop, `try`/`catch`, and `goto` paths remain part of the
+effective-registration flow. `TryAddEnumerable` retains its service-and-implementation
+deduplication semantics during replay. Alternate-branch registrations cannot erase a pending
+removal path, while an unconditional replacement or `finally` restoration can. Reachable
+`try`/`catch` paths and nested exhaustive switches are included; nested-container,
+throw-expression, and constant-true exits remain unreachable, and activation
+constructors are selected using dependencies still effective after replay. Mutations and alias
+assignments in short-circuited right operands stay conditional, while catch-all handlers can resume
+an explicitly thrown removal path at a later fallback. Exactly matching typed catches also resume;
+other typed catches remain conservative. Alias candidates are indexed once per syntax tree.
+
 ---
 
 ## DI012: Conditional Registration Misuse
@@ -671,7 +739,7 @@ public sealed class MyService
 - `TryAdd*` calls after an `Add*` already registered that service.
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
-DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, and for mutually exclusive `if`/`else if`/`else` alternative registrations.
+DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. Common framework registration helpers such as `AddLogging()`, `AddOptions()`, `Configure<T>()`, `AddMemoryCache()`, `AddHttpClient()`, and `AddHttpContextAccessor()` are transparent rather than opaque barriers, so later user registrations remain visible. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, applies `TryAddEnumerable`'s service-and-implementation pair semantics, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
 When a `Replace(...)` still leaves a duplicate descriptor behind, DI012 reports the active registration that survives the single-descriptor replacement, ignoring inactive `TryAdd*` calls when choosing the message location.
 
 **Why it matters:** registration intent becomes unclear and behaviour differs from what readers expect.
@@ -718,13 +786,15 @@ public sealed class SqlRepository : IRepository { }
 services.AddSingleton(typeof(IRepository), typeof(SqlRepository));
 ```
 
-**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid block-contained standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation, including invalid implementation-instance registrations. Embedded single-line statement bodies stay manual unless a symbol-backed type rewrite is available.
+For instance-backed registrations (`AddSingleton(typeof(IService), instance)` and the `ServiceDescriptor` equivalents), DI013 only reports when the instance's runtime type is provably known: the argument is an object creation (even through parentheses or upcasts), or its static type is sealed or a value type. A local declared as a base type or interface stays silent — its static type says nothing about the runtime type, and DI013 is the package's only Error-severity rule, so it never reports on code that could be correct.
+
+**Code Fix:** Yes. Offers broad assists where the syntax and symbols are local enough to rewrite safely: remove the invalid block-contained standalone registration, replace the implementation type with a compatible candidate, or retarget the service type to an interface/base type implemented by the current implementation, including invalid implementation-instance registrations. Embedded single-line statement bodies stay manual unless a symbol-backed type rewrite is available. Candidate suggestions never include generic type definitions or structs — both produce registrations that fail to compile or crash at resolution.
 
 ---
 
 ## DI014: Root Service Provider Not Disposed
 
-**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal, standard `Dispose()` to `Dispose(true)` cleanup, and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, null-forgiven, selected by a ternary arm, or supplied by a null-coalescing operand; user-defined conversions remain reportable because they may produce a different instance.
+**What it catches:** root providers from `BuildServiceProvider()` that are never disposed, including local providers whose only manual disposal is conditional, catch-only, after reassignment to another provider, or after repeated creation inside a loop. Straight-line explicit disposal, standard `Dispose()` to `Dispose(true)` cleanup, and caller-owned return flows are accepted even when the `BuildServiceProvider()` result is parenthesized, same-instance cast, null-forgiven, selected by a ternary arm, or supplied by a null-coalescing operand — including a provider stored in a local and returned later (ownership transfer), and create-and-dispose within the same loop iteration, switch section, or catch clause (a `continue`/`break` that skips the dispose still reports). A `using` declaration or statement proves cleanup only when that same provider instance reaches its resource expression. User-defined conversions remain reportable because they may produce a different instance, including a disposable wrapper selected by a coalesce inside `using`.
 
 **Why it matters:** singleton disposables at root scope may never be cleaned up.
 
@@ -745,7 +815,7 @@ using var provider = services.BuildServiceProvider();
 var service = provider.GetRequiredService<IMyService>();
 ```
 
-**Code Fix:** Yes. Adds disposal pattern for simple local declarations with no existing manual disposal code. Conditional or otherwise partial manual-disposal flows stay diagnostic-only so the ownership rewrite remains deliberate.
+**Code Fix:** Yes. Adds disposal pattern for simple local declarations with no existing manual disposal code; declared types that do not implement the required disposal interface (e.g. `IServiceProvider`) are rewritten to `var` so the emitted `using` compiles. Conditional or otherwise partial manual-disposal flows stay diagnostic-only so the ownership rewrite remains deliberate.
 
 ---
 
@@ -855,7 +925,7 @@ DI016 is intentionally conservative to reduce false positives:
 
 ## DI017: Circular Dependency
 
-**What it catches:** constructor-injection cycles such as `A -> B -> A`, including longer transitive loops. It follows effective registration precedence, including exact closed registrations before open-generic fallbacks, and mirrors the default container's constructor-set rule: the greediest resolvable constructor is analyzed only when its resolved service identifiers (type plus key) contain every other resolvable constructor's service identifiers. Equivalent reordered constructors therefore expose the same real cycle, while non-superset sets stay silent because activation is ambiguous.
+**What it catches:** high-confidence activation cycles such as `A -> B -> A`, including longer transitive loops through constructors, explicit `GetRequiredService` / `GetRequiredKeyedService` factory calls, `ActivatorUtilities` factory construction, keyed-service inheritance, open-generic registrations, exact closed registrations that override open-generic fallbacks, and registered `IEnumerable<T>` elements. It analyzes only reachable service-registration flows and mirrors the default container's constructor-set rule: equivalent reordered greedy constructors expose the same cycle, while a greediest constructor whose resolved service identifiers (type plus key) are not a superset of every other resolvable constructor stays silent as ambiguous.
 
 **Why it matters:** the default DI container cannot resolve circular constructor graphs and will fail at runtime when the service is activated.
 
@@ -879,6 +949,12 @@ public sealed class PaymentService : IPaymentService
 ```
 
 **Better pattern:** break the cycle by moving shared logic into a third collaborator or by changing the dependency direction so each service has an acyclic constructor graph.
+
+DI017 intentionally remains conservative:
+
+- It honors source-ordered effective registrations, including duplicate overrides, `TryAdd`, `RemoveAll`, and `Replace` removal semantics.
+- It does not report cycles from uninvoked registration helpers, unrelated `IServiceCollection` instances, opaque factory bodies, unregistered optional/default constructor parameters, implementation instances, or resolvable constructor sets with no service-identifier superset.
+- `IEnumerable<T>` parameters are treated as cycle edges only when matching element registrations exist; empty collections stay silent.
 
 **Code Fix:** No. Breaking dependency cycles is a design change.
 
@@ -904,7 +980,7 @@ public sealed class BadPrivateCtorService : IMyService
 services.AddSingleton<IMyService, BadPrivateCtorService>();
 ```
 
-DI018 also reports abstract classes, interfaces, static classes, delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`), default structs, and enums used as implementation types without a factory expression. The default container activates implementation types through public constructors returned by reflection: Roslyn's synthetic value-type constructor is not emitted as constructor metadata, so a default struct or enum fails at first resolution. A struct with an explicitly declared public constructor remains valid. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
+DI018 also reports abstract classes, interfaces, static classes, delegate types (such as `services.AddSingleton<MyHandler>()` where `MyHandler` is a `delegate`), default structs, and enums used as implementation types without a factory expression, including through `ServiceDescriptor` factories, target-typed descriptor construction, stable descriptor locals, and `TryAddEnumerable(ServiceDescriptor...)`. The default container activates implementation types through public constructors returned by reflection: Roslyn's synthetic value-type constructor is not emitted as constructor metadata, so a default struct or enum fails at first resolution. A struct with an explicitly declared public constructor remains valid. Factory arguments are recognized from the bound delegate parameter even when the expression is an invocation, conditional, coalesce expression, or delegate object creation, so valid factory registrations do not self-bind the service type. Delegates carry only implicit `(object, IntPtr)` and `(object, UIntPtr)` constructors that the default DI container cannot populate, so the registration fails at activation.
 
 **Better pattern:**
 
@@ -1013,30 +1089,18 @@ public class MyMiddleware
 
 ## DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations
 
-**What it catches:** A documented non-thread-safe service (EF Core `DbContext` and derived contexts, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their interfaces, `IDbContextTransaction`, `HttpContext`) that is created or resolved once and then captured — through a field, a closure over an outer local, or an enclosing method parameter — into a handler that a framework invokes **concurrently**:
+**What it catches:** A documented non-thread-safe service (EF Core `DbContext` and derived contexts, `DbConnection`/`DbCommand`/`DbTransaction`/`DbDataReader` and their interfaces, `IDbContextTransaction`, `HttpContext`) created or resolved once and then captured — through a field, a closure over an outer local, or an enclosing method parameter — into a handler that a framework invokes concurrently: `ServiceBusProcessor`/`ServiceBusSessionProcessor` message and error handlers, `EventProcessorClient` event handlers, RabbitMQ `EventingBasicConsumer.Received`/`AsyncEventingBasicConsumer.Received`/`ReceivedAsync` consumer handlers (instance-correlated through the consumer's own factory/connection/channel chain: proven `ConsumerDispatchConcurrency` above 1 warns, proven 1 or a fresh default factory stays silent, untraceable chains stay config-gated; fallback constants must bind to the real RabbitMQ property), `System.Threading.Timer` callbacks with a finite period, `System.Timers.Timer.Elapsed`, `Parallel.For`/`ForEach`/`ForEachAsync`/`Invoke` bodies, PLINQ `ForAll` bodies (sequential only when `WithDegreeOfParallelism(1)` is proven on the query chain), TPL Dataflow `ActionBlock`/`TransformBlock`/`TransformManyBlock` delegates (sequential by default; reported when `MaxDegreeOfParallelism` is provably above 1, config-gated DI022 when the options are unprovable), and `EventProcessor<TPartition>` batch/error overrides (the override body is the handler; partitions run concurrently). Resolving from a long-lived scope captured from outside the handler is reported too — it hands the same instance to every concurrent invocation. Both generic requests and exact framework non-generic `IServiceProvider.GetService(typeof(T))` / `GetRequiredService(typeof(T))` requests participate; direct-static calls bind the provider by declared parameter only for exact framework extension containers, and concrete provider implementations bind the `System.Type` contract parameter regardless of its source name. Built-in identity, reference, and boxing conversions remain transparent while tracing provider origins, preserving coverage for captured value-type and `IServiceProvider`-constrained providers; cyclic constraint graphs in temporarily invalid source are bounded by symbol identity. Runtime `Type` values, user-defined conversions on the requested type or provider receiver, and user-defined same-named helpers remain conservative and silent.
 
-- `ServiceBusProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (when `MaxConcurrentCalls` is provably above 1)
-- `ServiceBusSessionProcessor.ProcessMessageAsync` / `ProcessErrorAsync` (sessions are pumped concurrently by default)
-- `EventProcessorClient.ProcessEventAsync` / `ProcessErrorAsync` (partitions are processed concurrently)
-- RabbitMQ `EventingBasicConsumer.Received` / `AsyncEventingBasicConsumer.Received` / `ReceivedAsync` (instance-correlated: the consumer's own factory/connection/channel chain proves `ConsumerDispatchConcurrency` — proven 1 or a fresh default factory stays silent, proven above 1 warns, untraceable chains stay config-gated DI022; fallback constants must bind to the real RabbitMQ property)
-- `System.Threading.Timer` callbacks with a finite period (callbacks can overlap)
-- `System.Timers.Timer.Elapsed` (elapsed events can overlap unless `AutoReset = false` or a `SynchronizingObject` is set)
-- `Parallel.For` / `ForEach` / `ForEachAsync` / `Invoke` bodies
-- PLINQ `ForAll` bodies (partitions run concurrently unless `WithDegreeOfParallelism(1)` is proven on the query chain)
-- TPL Dataflow `ActionBlock` / `TransformBlock` / `TransformManyBlock` delegates (when `MaxDegreeOfParallelism` is provably above 1; blocks default to sequential)
-- `EventProcessor<TPartition>` batch and error overrides (partitions are processed concurrently)
+**Why it matters:** This is the deferred form of the captive dependency. The lifetimes can look correct, but one instance is shared across overlapping invocations and fails at runtime ("A second operation was started on this context instance before a previous operation completed"). It works in development with one message at a time and fails under production load.
 
-It also catches the deferred variant: resolving from a **long-lived scope captured from outside the handler** (`_scope.ServiceProvider.GetRequiredService<AppDbContext>()` inside the handler still hands the same instance to every concurrent invocation).
-
-**Why it matters:** This is the deferred form of the captive dependency. The lifetimes can look correct — a scope was even created — but one instance is shared across overlapping invocations and fails at runtime with errors like *"A second operation was started on this context instance before a previous operation completed."* It works in dev (one message at a time) and explodes under production load.
+> **Explain Like I'm Ten:** One pencil shared by the whole class works fine while pupils write one at a time. The moment everyone writes at once, the pencil snaps.
 
 **Problem:**
 
 ```csharp
 public class OrderProcessor : BackgroundService
 {
-    private readonly AppDbContext _db;                 // resolved once
-    private readonly ServiceBusSessionProcessor _processor;
+    private readonly AppDbContext _db; // resolved once
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -1046,8 +1110,8 @@ public class OrderProcessor : BackgroundService
 
     private async Task HandleAsync(ProcessSessionMessageEventArgs args)
     {
-        _db.Add(args);                 // DI021: one DbContext, N concurrent handlers
-        await _db.SaveChangesAsync();  // "A second operation was started on this context"
+        _db.Add(args);                // one DbContext, N concurrent handlers
+        await _db.SaveChangesAsync();
     }
 }
 ```
@@ -1064,23 +1128,19 @@ private async Task HandleAsync(ProcessSessionMessageEventArgs args)
 }
 ```
 
-DI021 stays quiet for handlers that already do the right thing: a scope created **inside** the handler, `IDbContextFactory<TContext>` usage, instances created inline, and handlers that explicitly serialize themselves (`lock` on a stable monitor shared from outside the handler, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Locking the handler's own parameter, an object created inside the handler, or a shared monitor reassigned by the handler does not serialize separate invocations and still reports. Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
+DI021 stays quiet for scopes created inside the handler, `IDbContextFactory<TContext>` usage, instances created inline, proven-sequential configurations (`MaxConcurrentCalls = 1`, `MaxConcurrentSessions = 1`, `MaxDegreeOfParallelism = 1`, one-shot timers, `AutoReset = false`), and handlers that explicitly serialize themselves (`lock` on a stable monitor shared from outside the handler, `SemaphoreSlim` wait/release in `try`/`finally`, `Interlocked`/`Monitor.TryEnter` reentrancy guards, timer re-arm). Locking the handler's own parameter, an object created inside the handler, or a shared monitor reassigned by the handler does not serialize separate invocations and still reports. Frameworks that already create a scope per message (MassTransit, NServiceBus, Quartz, Hangfire, SignalR, Azure Functions) are deliberately not sinks.
 
-**Code Fix:** Yes. Rewrites the handler to resolve the service from a new scope per invocation, plumbs `IServiceScopeFactory` through the constructor when needed, and removes the now-dead captured field.
+**Code Fix:** Yes. Rewrites the handler to resolve the service from a new scope per invocation, plumbs `IServiceScopeFactory` through the constructor when needed, and removes the now-dead captured field. The plumbing stays deliberate where a rewrite could break the build or runtime: partial types (a constructor or field reference may live in another part), multiple or expression-bodied constructors, and constructors whose parameters or locals already use the `scopeFactory` name are left diagnostic-only.
 
 ---
 
 ## DI022: Service Instance Reused Across Handler Invocations
 
-**What it catches:** The same capture shape as DI021, but on a sink whose concurrency is controlled by a configuration knob that cannot be proven at compile time — canonically `ServiceBusProcessor` where `MaxConcurrentCalls` comes from configuration or is left at its default.
+**What it catches:** Two tiers. First, the same capture shape as DI021 on a sink whose concurrency is controlled by a configuration knob that cannot be proven at compile time — canonically `ServiceBusProcessor` where `MaxConcurrentCalls` comes from configuration or is left at its default of 1, and RabbitMQ consumers (`EventingBasicConsumer`/`AsyncEventingBasicConsumer`) where `ConsumerDispatchConcurrency` lives on the `ConnectionFactory` several hops from the consumer; a constant above 1 on the actual SDK property upgrades the report to DI021, while unrelated same-named user properties do not. Second, the scoped-lifetime tier: a service outside the non-thread-safe catalog whose effective registration is scoped, captured into any concurrently-invoked handler — the capture itself is the lifetime violation, so the report stays Info regardless of the sink's knob. Singleton-registered and unregistered captures stay silent.
 
-**Why it matters:** If the knob is ever raised above 1 this becomes the DI021 concurrency crash. Even with sequential dispatch, one instance accumulates state across all messages: an EF Core change tracker grows without bound, and a failed `SaveChanges` poisons every subsequent message. DI022 reports at **Info** severity because the concurrency claim is conditional; teams that want it louder can raise it with one line:
+**Why it matters:** If the knob is ever raised above 1 this becomes the DI021 concurrency crash. Even with sequential dispatch, one instance accumulates state across all messages: an EF Core change tracker grows without bound, and a failed `SaveChanges` poisons every subsequent message. DI022 reports at Info severity because the concurrency claim is conditional; raise it per team policy with `dotnet_diagnostic.DI022.severity = warning`. When `MaxConcurrentCalls` is a compile-time constant above 1 the diagnostic upgrades to DI021; when it is provably 1, both rules stay silent. Knob proofs follow same-file non-virtual helper methods that return a fresh options creation (`var options = CreateOptions();`), so concurrency configured in a sibling factory method is proven too; virtual helpers, parameter-driven values, and shared-instance returns stay unproven.
 
-```ini
-dotnet_diagnostic.DI022.severity = warning
-```
-
-When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnostic upgrades to DI021 (Warning). When it is provably 1, both rules stay silent.
+Manually constructed instances are never reported by the scoped tier — the single-origin scan covers field initializers, assignments, and property initializers (`private EmailSender Email { get; } = new EmailSender();`).
 
 **Code Fix:** Yes. Same scope-per-invocation rewrite as DI021.
 
@@ -1126,9 +1186,11 @@ public void Handle(int orderId)
 
 ## DI024: Hosted Service Creates Scope Outside Execution Loop
 
-**What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — including direct or compound cancellation checks, `while (true)`, `for (;;)`, `PeriodicTimer` loops, and channel-consumer loops — and uses it inside the loop, either directly or through a service resolved from it. One-hop, directly invoked private helpers in the same type declaration receive the same helper-local analysis; deferred and transitive helper calls stay conservative. Generic and direct-`typeof(T)` non-generic `GetService`/`GetRequiredService` resolutions participate, including keyed `GetKeyedService`/`GetRequiredKeyedService` calls with compile-time keys; runtime `Type` values and dynamic keys stay conservative. Compound conditions stay conservative: nested `!` operators are reduced by polarity, every `&&` operand must be long-running, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
+**What it catches:** Two tiers. First, a `BackgroundService.ExecuteAsync` override or `IHostedService`/`IHostedLifecycleService` start method that creates an `IServiceScope` once before its long-running execution loop (`while (!token.IsCancellationRequested)`, compound cancellation conditions, `while (true)`, `for (;;)`, `PeriodicTimer` `WaitForNextTickAsync` loops, and channel-consumer loops — `await foreach` over `ChannelReader<T>.ReadAllAsync(...)` or `while (await reader.WaitToReadAsync(...))`, including channel loops nested inside an outer cancellation loop when the scope is created per outer iteration but spans the unbounded inner drain; `ConfigureAwait(...)`/`WithCancellation(...)` wrappers on any of the awaited shapes are peeled before gating) and uses it inside the loop — directly, through a service resolved from it before the loop, or through a provider alias local (`var sp = scope.ServiceProvider;`) used inside the loop. The same helper-local analysis follows one-hop, directly invoked private helpers declared on the same type; field candidates stay confined to true hosted entry points. Generic resolutions and the framework's direct-`typeof(T)` non-generic `GetService`/`GetRequiredService` forms participate, including keyed `GetKeyedService`/`GetRequiredKeyedService` calls whose service key is compile-time known, plus casted and null-forgiving results; runtime `Type` values, dynamic keys, and user-defined same-named methods remain unproven. Compound conditions are evaluated conservatively: nested `!` operators are reduced by polarity, every `&&` operand must be long-running because any operand can bound the loop, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. Declare-then-assign locals (`IServiceScope? scope = null; try { scope = factory.CreateScope(); while (...) ... } finally { scope?.Dispose(); }` — the try/finally ownership pattern) qualify via their pre-loop assignment: the last direct pre-loop write wins, so a creation makes the candidate and a null/default clear (or an unrecognized value) kills it. Second, a service whose effective registration is provably scoped, resolved once before the loop from any provider and reused across iterations. Both tiers also cover fields: a scope (or resolved service) stored in a field qualifies when every assignment to the field is the expected shape and every assignment site is a field initializer, a constructor, or a hosted execution method (`BackgroundService.StartAsync` overrides included); partial types are analyzed across all declarations. Reported at the `CreateScope`/`CreateAsyncScope` or service-resolution call with the loop as an additional location.
 
-**Why it matters:** The well-known hosted-service idiom is *scope per iteration*. A scope hoisted above the loop keeps the same scoped instances alive for the entire process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, a unit of work accumulates every iteration's state, and a single failure poisons all subsequent iterations.
+**Why it matters:** The hosted-service idiom is scope per iteration. A hoisted scope keeps the same scoped instances alive for the process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, and one failed iteration poisons all subsequent ones.
+
+**Problem:**
 
 ```csharp
 public class PollingService : BackgroundService
@@ -1149,7 +1211,7 @@ public class PollingService : BackgroundService
 }
 ```
 
-**Correct pattern:** create the scope inside the loop body so each iteration gets fresh scoped services:
+**Better pattern:** create the scope inside the loop body so each iteration gets fresh scoped services.
 
 ```csharp
 protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1163,17 +1225,21 @@ protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 }
 ```
 
-DI024 stays quiet when the code already does the right thing: a scope created inside the loop (including an inner batch loop reusing the outer iteration's scope), a startup scope consumed entirely before the loop (migrations), a dispose-and-recreate scope reassigned inside the loop, a hoisted scope whose every resolution is provably singleton (hoisting is then behaviorally identical), bounded loops such as cancellation-plus-counter conjunctions, and hoisted services whose lifetime cannot be proven scoped from the visible registrations.
+**Guardrails:** Scopes created inside the loop (including inner batch loops reusing the outer iteration's scope), startup scopes consumed entirely before the loop, dispose-and-recreate scopes reassigned inside the loop, hoisted scopes whose every resolution is provably singleton (including keyed singletons matched by compile-time key), bounded loops (including cancellation-plus-counter conjunctions, plain `foreach` batches, and `await foreach` over non-channel sources — a repository-style `ReadAllAsync` is a bounded enumeration, so only `System.Threading.Channels.ChannelReader<T>` sources qualify), shutdown paths (`StopAsync` and the stopping/stopped lifecycle callbacks), hoisted services with unprovable lifetimes, fields assigned anywhere outside field initializers/constructors/execution methods (a helper method may reassign per iteration), locals whose closest pre-loop write is a null/default clear, dynamic keyed resolutions, uncalled or deferred helpers, transitive and cross-declaration helpers, helper parameter/field flow, and provider aliases repointed inside the loop all stay silent.
 
-**Code Fix:** No. Moving the scope into the loop is a statement-level rewrite with disposal implications; apply the correct pattern above manually.
+**Code Fix:** No. Moving the scope into the loop body is a statement-level rewrite with disposal implications; apply it manually.
 
 ---
 
 ## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
 
-**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a **longer-lived publisher** and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations (`AddSingleton(typeof(IEventBus<>), typeof(EventBus<>))`) matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. Identity and reference casts preserve that proof, so `((IBaseBus)_bus).Changed += H` reports for direct injected receivers and already-proven stable chains. Chained receivers (`_host.Bus.Changed += H`) report too when the publisher is a **stable projection** of an injected root: the lifetime proof anchors on the chain root's registration, and every intermediate segment must be a readonly field, a get-only auto-property, or a getter returning one — interface segments proven through the root's registered implementation types. C# forbids assigning another type's field-like event, so the cross-type delegate leak lives on a **delegate-typed field or property** of the publisher instead: `_bus.Handlers += OnMessage` and the equivalent self-assignment `_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)` report identically to an event `+=`, with a mirrored `Delegate.Remove` self-assignment recognized as the matching unsubscription. An unsubscription written with a *different* lambda instance (`-= (s, e) => Handle()` after `+= (s, e) => Handle()`) is recognized as the classic no-op unsubscribe bug: the subscription still reports, and the diagnostic points at the ineffective `-=`.
+**What it catches:** A transient- or scoped-registered service that subscribes (`+=`) an instance-capturing handler — an instance method group, a `this`-capturing lambda, or a stored instance-bound delegate field — to an event on a longer-lived publisher and never unsubscribes. Longer-lived publishers are injected dependencies whose registration is provably singleton — closed registrations preferred, open-generic singleton registrations matched for constructed injections — via a constructor parameter or a field/property assigned only from a constructor parameter, and `static` events. Identity and reference casts preserve that proof, so `((IBaseBus)_bus).Changed += H` reports for direct injected receivers and already-proven stable chains. Chained receivers (`_host.Bus.Changed += H`) report when the publisher is a stable projection of an injected root: the lifetime proof anchors on the chain root's registration, and every intermediate segment must be a readonly field, a get-only auto-property, or a getter returning one, with interface segments proven through the root's registered implementation types. Because C# forbids assigning another type's field-like event, the cross-type delegate leak lives on a delegate-typed field or property of the publisher instead: `_bus.Handlers += OnMessage` and the equivalent self-assignment `_bus.Handlers = (EventHandler)Delegate.Combine(_bus.Handlers, OnMessage)` report identically to an event `+=`, with a mirrored `Delegate.Remove` self-assignment recognized as the matching unsubscription. A `-=` written with a different lambda instance is recognized as the classic no-op unsubscribe bug: the subscription still reports and the diagnostic points at the ineffective `-=`.
 
-**Why it matters:** This is the most common managed memory leak in .NET. The publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots **every subscriber instance the container ever creates** — each resolution leaks a handler plus the full object graph behind it, and every event raise fans out to thousands of stale handlers executing against released state. Catching it precisely requires knowing registration lifetimes, which is exactly what this analyzer knows and lifetime-blind analyzers cannot.
+**Why it matters:** the publisher's delegate list holds a strong reference to every handler target, so a singleton publisher roots every subscriber instance the container ever creates — the most common managed memory leak in .NET, plus stale handlers executing against released state on every event raise.
+
+> **Explain Like I'm Ten:** If every visitor ties a balloon to the school gate and nobody ever unties one, the gate ends up dragging a thousand balloons.
+
+**Problem:**
 
 ```csharp
 services.AddSingleton<IMessageBus, MessageBus>();
@@ -1186,14 +1252,14 @@ public class OrderHandler
     public OrderHandler(IMessageBus bus)
     {
         _bus = bus;
-        _bus.MessageReceived += OnMessage; // DI025: every OrderHandler instance stays rooted by the singleton
+        _bus.MessageReceived += OnMessage; // every OrderHandler instance stays rooted
     }
 
     private void OnMessage(object sender, EventArgs e) { }
 }
 ```
 
-**Correct pattern:** store the subscription and remove it when the subscriber is released:
+**Better pattern:**
 
 ```csharp
 public class OrderHandler : IDisposable
@@ -1212,22 +1278,26 @@ public class OrderHandler : IDisposable
 }
 ```
 
-DI025 stays quiet when the pairing is safe or unprovable: singleton subscribers (a bounded population of one cannot grow the delegate list — hosted services subscribing to singleton buses stay silent), transient publishers (scoped publishers report the [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) Info tier instead), any matching `-=` anywhere in the type (Dispose, `StopAsync`, a `Detach()` teardown, or the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas (they do not root the subscriber), publishers assigned from `new` or from ordinary method parameters, user-defined or value-changing receiver conversions, chained receivers whose projection is not provably stable (a settable or computed segment may hand out a different instance per access, and metadata-only or virtual segments cannot be inspected), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations whose implementation type is unknown. Casted and uncast receiver syntax canonicalize to the same publisher identity when matching `+=` with `-=`.
+**Guardrails:** singleton subscribers stay silent (a population of one cannot grow the delegate list — hosted services subscribing to singleton buses are the canonical safe shape), as do transient publishers (scoped publishers report the [DI026](#di026-event-subscription-on-scoped-publisher-without-unsubscribe) Info tier instead), any matching `-=` anywhere in the type (Dispose, `StopAsync`, teardown methods, the unsubscribe-then-resubscribe idiom) with the same method group — override chains normalized — or the same stored delegate field/local, static handlers and `this`-free lambdas, publishers assigned from `new` or ordinary method parameters, user-defined or value-changing receiver conversions, chained receivers whose projection is not provably stable (settable or computed segments, metadata-only or virtual segments), unregistered subscriber or publisher types, keyed-only publisher registrations, `EventSource`-derived publishers, and factory registrations with unknown implementation types. Casted and uncast receiver syntax canonicalize to the same publisher identity when matching `+=` with `-=`. Removals are recorded structurally, so a branch-conditional `-=` (`if (_attached) { _bus.E -= H; }`) suppresses unconditionally — a deliberate, documented FN that favours FP-safety over proving the guard always runs.
 
-**Code Fix:** Yes, in three tiers, all gated on a method-group handler whose receiver (a field/property, a field/property-rooted chain, or a static event) still resolves inside `Dispose`. (1) **Insert into an existing Dispose** — when the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable` — a method merely named Dispose is never called by the container), the fix inserts the mirrored `-=` at the top of that method. (2) **Create the Dispose path when the contract is inherited** — when disposability comes from a base type following the standard virtual `Dispose(bool)` pattern, the fix adds a `protected override void Dispose(bool disposing)` that unsubscribes and calls `base.Dispose(disposing)`; inherited shapes with no such hook (a non-virtual or explicitly-implemented base `Dispose`) are refused so the fix can never add a method the container won't call. (3) **Implement `IDisposable` for scoped subscribers** — a subscriber registered **scoped** that implements neither disposal interface gets `IDisposable` plus a `public void Dispose()` that unsubscribes, since its owning scope disposes it deterministically. Introducing `IDisposable` on a **transient** subscriber stays refused — that is the DI008 disposable-transient-capture shape, so the fix never trades a DI025 for a DI008 — and hoisting a lambda into a field stays refused because it changes capture semantics.
+**Code Fix:** Yes, in three tiers, all gated on a method-group handler whose receiver (a field/property, a field/property-rooted chain, or a static event) still resolves inside `Dispose`. (1) **Insert into an existing Dispose** — when the type already declares a block-bodied `Dispose()`, `Dispose(bool)`, or `DisposeAsync()` and implements the matching disposal interface (`IDisposable`/`IAsyncDisposable`), the fix inserts the mirrored `-=` at the top of that method. (2) **Create the Dispose path when the contract is inherited** — when disposability comes from a base type that follows the standard virtual `Dispose(bool)` pattern, the fix adds a `protected override void Dispose(bool disposing)` that unsubscribes and chains to `base.Dispose(disposing)`; overriding the pattern is what guarantees the unsubscribe actually runs (through the base's `Dispose()` → `Dispose(true)` dispatch). Inherited shapes with no such hook — a non-virtual or explicitly-implemented base `Dispose` — are refused, because an added method the container never calls would be a fake repair. (3) **Implement `IDisposable` outright for scoped subscribers** — a subscriber registered **scoped** that implements neither disposal interface gets `IDisposable` added to its base list plus a `public void Dispose()` that unsubscribes; its owning scope disposes it deterministically, so no leak is introduced. Introducing `IDisposable` on a **transient** subscriber is refused — that is exactly the DI008 disposable-transient-capture shape, so the fix must never trade a DI025 for a DI008 — and hoisting a lambda into a field stays refused because it changes capture semantics.
 
 ---
 
 ## DI026: Event Subscription On Scoped Publisher Without Unsubscribe
 
-**What it catches:** The scope-bounded tier of DI025: a **transient**-registered service subscribes an instance-capturing handler to an event on a **scoped** registered publisher — same receiver, identity/reference-cast, handler, and unsubscription proofs as DI025 — and never unsubscribes. The publisher's registration lifetime is resolved with the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded), so a publisher registered both scoped and singleton reports DI026, because only the scope-bounded claim is provable.
+**What it catches:** The scope-bounded tier of DI025: a **transient**-registered service subscribes an instance-capturing handler to an event on a **scoped** registered publisher — the receiver, identity/reference-cast, handler, and unsubscription proofs are exactly DI025's — and never unsubscribes. Publisher lifetime resolution follows the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded), so a publisher registered both scoped and singleton reports DI026: only the scope-bounded claim is provable.
 
-**Why it matters:** A transient injected with a scoped publisher is resolved from that same scope, so every transient instance the scope creates stays rooted in the publisher's delegate list **until the scope is disposed**, and the event keeps invoking handlers on instances the container has already released. In a short per-request scope the accumulation usually dies quickly; in long-lived scopes — SignalR connections, Blazor circuits, hosted-service loop scopes — it is a real leak. DI026 reports at Info because the impact depends on scope longevity; raise it per team policy:
+**Why it matters:** A transient injected with a scoped publisher is resolved from that same scope, so every transient instance the scope creates stays rooted in the publisher's delegate list until the scope is disposed, and the event keeps invoking handlers on instances the container has already released. Per-request scopes make this mostly benign; long-lived scopes — SignalR connections, Blazor circuits, hosted-service loop scopes — make it a real accumulation. DI026 reports at Info because the impact depends on scope longevity; raise it per team policy:
 
 ```ini
 [*.cs]
 dotnet_diagnostic.DI026.severity = warning
 ```
+
+> **Explain Like I'm Ten:** Balloons tied to the classroom door instead of the school gate — they all pop when the classroom closes for the day, but a classroom that stays open all year still ends up dragging a lot of balloons.
+
+**Problem:**
 
 ```csharp
 services.AddScoped<IMessageBus, MessageBus>();
@@ -1237,26 +1307,30 @@ public class OrderHandler
 {
     public OrderHandler(IMessageBus bus)
     {
-        bus.MessageReceived += OnMessage; // DI026: rooted by the scoped bus until the scope is disposed
+        bus.MessageReceived += OnMessage; // rooted by the scoped bus until the scope is disposed
     }
 
     private void OnMessage(object sender, EventArgs e) { }
 }
 ```
 
-**Correct pattern:** identical to DI025 — store the subscription and remove it with `-=` when the subscriber is released (for example in `Dispose`).
+**Better pattern:** identical to DI025 — store the subscription and remove it with `-=` when the subscriber is released (for example in `Dispose`).
 
-DI026 shares every DI025 guardrail: scoped subscribers on scoped publishers stay silent (equal lifetimes are torn down together), any matching `-=` anywhere in the type suppresses, and all silence-on-unknown legs (unstable chained projections, `new`-assigned members, keyed-only publishers, `EventSource` publishers, factory registrations) apply unchanged — stable chained receivers report the tier exactly like direct receivers.
+**Guardrails:** every DI025 guardrail applies unchanged. Additionally, scoped subscribers on scoped publishers stay silent — equal lifetimes resolve from the same scope and are torn down together.
 
-**Code Fix:** Yes — the same tier-1 (insert into existing `Dispose`) and tier-2 (override an inherited virtual `Dispose(bool)`) repairs as DI025, with the same gates. The tier-3 implement-`IDisposable` assist is never offered here, because DI026 only fires for **transient** subscribers and making a transient `IDisposable` is exactly the DI008 shape the fixer refuses.
+**Code Fix:** Yes — the same tier-1 (insert into existing `Dispose`) and tier-2 (override an inherited virtual `Dispose(bool)`) repairs as DI025, with the same gates. The tier-3 implement-`IDisposable` assist is never offered here: DI026 only fires for **transient** subscribers, and making a transient `IDisposable` is precisely the DI008 shape the fixer refuses.
 
 ---
 
 ## DI027: Rx Subscription On Longer-Lived Observable Without Dispose
 
-**What it catches:** The Rx twin of DI025. `IObservable<T>.Subscribe(...)` returns an `IDisposable` token that unsubscribes the observer when disposed — there is no `-=` to prove missing, so the leak proof inverts to a **discarded token**. A **transient** or **scoped** registered service subscribes an instance-capturing handler (method group, `this`-capturing lambda, or stored delegate) to an observable exposed by a longer-lived publisher — an injected **singleton** dependency, or a **scoped** publisher shared by a transient subscriber — and throws the returned token away. The observable is reached through the same classified receivers as DI025 (an injected member proven ctor-assigned, a constructor parameter, or a stable chained projection such as `_source.Ticks`), and the publisher's registration lifetime is resolved with the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded).
+**What it catches:** The Rx twin of DI025. `IObservable<T>.Subscribe(...)` returns an `IDisposable` token that unsubscribes the observer when disposed, so there is no `-=` to prove missing — the leak proof inverts to a **discarded token**. A **transient** or **scoped** registered service subscribes an instance-capturing handler (method group, `this`-capturing lambda, or stored delegate) to an observable exposed by a longer-lived publisher — an injected **singleton** dependency, or a **scoped** publisher shared by a transient subscriber — and discards the returned token. The observable is reached through DI025's classified receivers (an injected member proven ctor-assigned, a constructor parameter, or a stable chained projection such as `_source.Ticks`), and publisher lifetime resolution follows the same rules (most conservative registration wins, closed registrations preferred over open-generic fallbacks, keyed-only registrations excluded). Matching is FQN-light: any method named `Subscribe` returning `System.IDisposable`, invoked on a `System.IObservable<T>` receiver, so `System.Reactive`, community Rx, and hand-rolled extensions all bind.
 
-**Why it matters:** A discarded subscription is a live one. The observable holds the observer, the observer captures the subscriber, and nothing ever releases it, so the longer-lived publisher roots every subscriber instance the container creates — leaking memory on each resolution and invoking stale observers against released state. DI027 is a single **Warning** tier: whether the publisher is singleton or a scope-shared scoped, a discarded token that outlives the subscriber is a definite leak.
+**Why it matters:** A discarded subscription is a live one. The observable holds the observer, the observer captures the subscriber, and nothing releases it, so the longer-lived publisher roots every subscriber instance the container creates — leaking memory on each resolution and firing stale observers against released state. Unlike the DI025/DI026 Info split, DI027 is a single **Warning** tier: a token that outlives its subscriber is a definite leak whether the publisher is singleton or a scope-shared scoped.
+
+> **Explain Like I'm Ten:** Subscribing hands you a "cancel" ticket. If you drop the ticket in the bin instead of keeping it, you can never cancel — and the newsletter keeps piling up in your mailbox forever.
+
+**Problem:**
 
 ```csharp
 services.AddSingleton<ITicker, Ticker>();   // Ticker : IObservable<int>
@@ -1266,14 +1340,14 @@ public class TickHandler
 {
     public TickHandler(ITicker ticker)
     {
-        ticker.Subscribe(OnTick); // DI027: the IDisposable is discarded; every TickHandler stays rooted
+        ticker.Subscribe(OnTick); // the IDisposable is discarded; every TickHandler stays rooted
     }
 
     private void OnTick(int value) { }
 }
 ```
 
-**Correct pattern:** store the token and dispose it when the subscriber is released (for example in `Dispose`, or via a `CompositeDisposable`).
+**Better pattern:** store the token and dispose it when the subscriber is released (for example in `Dispose`, or via a `CompositeDisposable`).
 
 ```csharp
 public class TickHandler : IDisposable
@@ -1288,11 +1362,11 @@ public class TickHandler : IDisposable
 }
 ```
 
-DI027 recognizes both idiomatic receiver syntax (`source.Subscribe(handler)`) and direct static extension syntax (`ObservableExtensions.Subscribe(source, handler)`). Static calls must bind to a real extension method; Roslyn's bound parameter mapping identifies the observable even when named arguments are reordered, and the source argument is never mistaken for a handler.
+DI027 recognizes both idiomatic receiver syntax (`source.Subscribe(handler)`) and direct static extension syntax (`ObservableExtensions.Subscribe(source, handler)`). Static calls must bind to a real extension method; bound parameter mapping identifies the observable even when named arguments are reordered, and the source argument is excluded from handler capture analysis.
 
-The BCL observer overload is also covered when the subscriber passes itself directly (`source.Subscribe(this)`): the argument must bind to `IObserver<T>` and reduce semantically to the containing instance. Separate observer objects remain silent because they do not prove that the registered subscriber is retained.
+The BCL observer overload is also covered when the subscriber passes itself directly (`source.Subscribe(this)`): the argument must bind to `IObserver<T>` and reduce semantically to the containing instance. Separate observer objects remain silent because they do not prove subscriber capture.
 
-**Guardrails (silent, by design):** DI027 only fires on the highest-confidence discard shapes — an ignored expression statement (`obs.Subscribe(H);`), a discard assignment (`_ = obs.Subscribe(H)`), a local initialized with the token or assigned it in a standalone statement and never otherwise referenced (and not a `using` declaration), or a simple assignment to a private field declared on the subscriber when that field has no other symbol-bound reference across any partial declaration. An assignment expression consumed by `return`, `using`, an argument, or another expression stays silent, as does a later disposal, return, argument pass, reassignment, or any other field access; inherited and public/internal/protected fields also stay silent because external handling cannot be ruled out. A direct static readonly reference-type observable field counts as a process-lifetime publisher only when its declaration initializes it exactly once with an object creation through an identity or implicit reference conversion; mutating a member of that publisher or creating a `ref readonly` local alias does not change its identity. Mutable, value-type, null-initialized, static-constructor-assigned or reassigned fields—including deconstruction, compound, and increment/decrement writes—writable `ref`/`out` argument or ref-local escapes, null-producing conversions, and static properties remain conservative. `using`/`using var`, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable`, and more complex field flows remain conservative. As with DI025, singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, separate observer objects, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, non-extension static helpers named `Subscribe`, and non-observer `Subscribe(this)` overloads all stay silent.
+**Guardrails:** DI027 fires only on the highest-confidence discard shapes — an ignored expression statement, a discard assignment (`_ = obs.Subscribe(H)`), a local initialized with the token or assigned it in a standalone statement and never otherwise referenced (and not a `using` declaration), or a simple assignment to a private field declared on the subscriber when that field has no other symbol-bound reference across any partial declaration. An assignment expression consumed by `return`, `using`, an argument, or another expression stays silent, as does a later disposal, return, argument pass, reassignment, or other field access; inherited and public/internal/protected fields also stay silent because external handling cannot be ruled out. A direct static readonly reference-type observable field counts as a process-lifetime publisher only when its declaration initializes it exactly once with an object creation through an identity or implicit reference conversion; mutating a member of that publisher or creating a `ref readonly` local alias does not change its identity. Mutable, value-type, null-initialized, static-constructor-assigned or reassigned fields—including deconstruction, compound, and increment/decrement writes—writable `ref`/`out` argument or ref-local escapes, null-producing conversions, and static properties remain conservative. `using`/`using var`, `CompositeDisposable`/`DisposeWith`/`AddTo`/`SerialDisposable`, and more complex field flows remain conservative. DI025's silence-on-unknown legs all apply: singleton subscribers, transient publishers, scoped-on-scoped pairs, static or `this`-free lambdas, separate observer objects, unregistered subscriber/publisher types, keyed-only publishers, unstable chained projections, non-extension static helpers named `Subscribe`, and non-observer `Subscribe(this)` overloads.
 
 **Code Fix:** No — planned. The safe repair (introduce `IDisposable`, store the token, dispose it) depends on the subscriber's registered lifetime exactly like the DI025 tier-3 assist, and is deferred to a follow-up.
 
@@ -1300,22 +1374,20 @@ The BCL observer overload is also covered when the subscriber passes itself dire
 
 ## DI028: Discarded Callback Registration On A Longer-Lived Source
 
-**What it catches:** The third member of the DI025/DI027 family. Where DI025 proves a missing `-=` and DI027 proves a discarded `Subscribe` token, DI028 covers every remaining way .NET hands out a callback registration: `IOptionsMonitor<T>.OnChange`, `CancellationToken.Register` / `UnsafeRegister`, `ChangeToken.OnChange`, `IChangeToken.RegisterChangeCallback`, and `CancellationTokenSource.CreateLinkedTokenSource`. Each returns a registration that detaches the callback when disposed. A **transient** or **scoped** registered service registers a callback on a longer-lived source — an injected singleton options monitor, `IHostApplicationLifetime.ApplicationStopping`, a token from a singleton-held `CancellationTokenSource`, a configuration reload token — and discards the registration. The callback must provably capture the subscriber, either through the handler (method group, `this`-capturing lambda, stored delegate) or through the `object? state` argument.
+**What it catches:** The third member of the DI025/DI027 family. Where DI025 proves a missing `-=` and DI027 proves a discarded `Subscribe` token, DI028 covers every remaining way .NET hands out a callback registration: `IOptionsMonitor<T>.OnChange`, `CancellationToken.Register` / `UnsafeRegister`, `ChangeToken.OnChange`, `IChangeToken.RegisterChangeCallback`, and `CancellationTokenSource.CreateLinkedTokenSource`. A **transient** or **scoped** registered service registers a callback on a longer-lived source — an injected singleton options monitor, `IHostApplicationLifetime.ApplicationStopping`, a token from a singleton-held `CancellationTokenSource`, a configuration reload token — and discards the registration that would detach it.
 
-**Why it matters:** A discarded registration is a live one. The source holds the callback, the callback captures the subscriber, and nothing detaches it, so the source roots every subscriber instance the container creates — along with everything that subscriber holds, which for a typical service means a `DbContext` and its change tracker. `ApplicationStopping` lives for the whole process, so the leak grows once per resolution and is never reclaimed. `CancellationToken.Register` is the sharpest case: it looks local and cheap, but a registration on a process-lifetime token is permanent.
+**Why it matters:** A discarded registration is a live one. The callback must provably capture the subscriber, either through the handler (method group, `this`-capturing lambda, stored delegate) or through the `object? state` argument, so the source roots every subscriber instance the container creates along with everything it holds — for a typical service, a `DbContext` and its change tracker. `ApplicationStopping` lives for the whole process, so the leak grows once per resolution and is never reclaimed.
 
 **Problem:**
 
 ```csharp
-services.AddSingleton<IHostApplicationLifetime, ApplicationLifetime>();
 services.AddScoped<OrderProcessor>();
 
 public class OrderProcessor
 {
     public OrderProcessor(IHostApplicationLifetime lifetime, AppDbContext db)
     {
-        // DI028: the registration is discarded; every OrderProcessor (and its DbContext)
-        // stays rooted in the shutdown token for the life of the process.
+        // DI028: the registration is discarded; every OrderProcessor stays rooted
         lifetime.ApplicationStopping.Register(() => Flush(db));
     }
 
@@ -1339,19 +1411,19 @@ public class OrderProcessor : IDisposable
 }
 ```
 
-DI028 recognizes both the instance form (`monitor.OnChange(h)`) and the static extension form (`OptionsMonitorExtensions.OnChange(monitor, h)`), binding the source through Roslyn's parameter mapping so reordered named arguments are handled. The `state` overloads are covered too: `token.Register(static s => ((Worker)s!).Run(), this)` has a static callback yet still pins the subscriber through `state`, and DI028 reports it.
+Both the instance form (`monitor.OnChange(h)`) and the static extension form (`OptionsMonitorExtensions.OnChange(monitor, h)`) are recognized, with the source bound through Roslyn's parameter mapping so reordered named arguments resolve correctly. The `state` overloads are covered too: `token.Register(static s => ((Worker)s!).Run(), this)` has a static callback yet still pins the subscriber.
 
-**Guardrails (silent, by design):** the subscriber must be registered and shorter-lived than the source — a **singleton** or hosted-service subscriber registering on `ApplicationStopping` is the idiomatic, correct pattern and never fires. Method-parameter tokens stay silent (an ASP.NET `RequestAborted` registration is request-scoped and correct), as do locally created `CancellationTokenSource` tokens, `IOptionsSnapshot` sources above scoped subscribers, and any scoped-on-scoped or equal-lifetime pair. Discard proof mirrors DI027 exactly: only an ignored expression statement, a `_ =` discard, a never-referenced non-`using` local, or an otherwise-unused private field report. `using`/`using var`, a later `Dispose`, a `return`, an argument pass (including into a `CompositeDisposable`), a reassignment, or any other field reference all stay silent. Chained sources are only followed through provably stable projections, and the framework projections `CancellationTokenSource.Token` and `IHostApplicationLifetime.ApplicationStopping`/`ApplicationStarted`/`ApplicationStopped` are accepted only as a contiguous suffix, so nothing can be laundered through them. Known false negatives: the common `var linked = CreateLinkedTokenSource(...); await X(linked.Token);` shape stays silent because the local is referenced — proving that case needs DI014-class disposal analysis and is a follow-up; static-held `CancellationTokenSource` fields, `IChangeToken` reached through a field or local, and non-trivial `ChangeToken.OnChange` producer lambdas are also silent.
+**Guardrails:** the subscriber must be registered and shorter-lived than the source, so a **singleton** or hosted-service subscriber registering on `ApplicationStopping` — the idiomatic, correct pattern — never fires. Method-parameter tokens stay silent (an ASP.NET `RequestAborted` registration is request-scoped and correct), as do locally created `CancellationTokenSource` tokens, `IOptionsSnapshot` sources above scoped subscribers, and any scoped-on-scoped or equal-lifetime pair. A static source qualifies only when the receiver is the exact framework `Token` property on an exact private `static readonly CancellationTokenSource` field initialized inline by the exact parameterless framework constructor and every compilation-visible use is either a direct `Register`/`UnsafeRegister` receiver read or a provably infinite `CancelAfter`; timed, already-canceled, factory-created, reassigned, canceled, disposed, mutable, public, aliased, and stored-token sources remain silent, while `Timeout.Infinite`, `-1`, and `Timeout.InfiniteTimeSpan` preserve the process-lifetime proof. Discard proof mirrors DI027 for callback registrations: an ignored expression statement, a `_ =` discard, a never-referenced non-`using` local, or an otherwise-unused private field reports. Linked token sources also report when a declaration initializer or assignment to a predeclared local—including an assignment expression used as the `Token` receiver—is consumed through ordinary or conditional-access `Token` reads and is not reliably disposed. A conditional read remains visible when another operation such as `Register` is chained after `Token`; disposing that later operation does not dispose the linked source. Direct `.Token` or `?.Token` extraction reports too because it loses the only handle through which the linked source can be disposed. The ownership proof is shared with DI014: `using`, reachable straight-line or `finally` disposal, and unconditional return to the caller stay silent; conditional or bypassed cleanup and reassignment before disposal report. Parentheses, null-forgiving operators, and identity casts cannot hide a `Token` read or wrapped initializer, and real cleanup through the same wrappers remains recognized; extension methods merely named `Dispose` or `DisposeAsync` do not establish cleanup. References before the current assignment belong to the older local value and are ignored; capture by a nested local function or lambda stays conservative because execution order is not proven. Unknown transfer calls—including fluent calls before a later `.Token` read—stay conservative and silent. Chained sources are followed only through provably stable projections; the metadata-only framework projections `CancellationTokenSource.Token` and `IHostApplicationLifetime.ApplicationStopping`/`ApplicationStarted`/`ApplicationStopped` are accepted only as a contiguous suffix, so nothing can be laundered through them. Known false negatives: `IChangeToken` reached through a field or local and non-trivial `ChangeToken.OnChange` producer lambdas are silent.
 
-**Code Fix:** No — planned. Introducing `IDisposable` on a **transient** subscriber recreates the DI008 disposable-transient shape, the linked-source arm needs a different repair from the registration arm, and `CancellationTokenRegistration` is a struct with defensive-copy pitfalls. Deferred rather than shipped half-correct.
+**Code Fix:** No — planned. Introducing `IDisposable` on a transient subscriber recreates the DI008 disposable-transient shape, the linked-source arm needs a different repair from the registration arm, and `CancellationTokenRegistration` is a struct with defensive-copy pitfalls.
 
 ---
 
 ## DI029: HttpClient Lifetime Misuse
 
-**What it catches:** Two opposite lifetime errors on the same connection pool. **Socket exhaustion** — a registered service constructs `new HttpClient(...)` on a per-invocation path (a method, an accessor, a lambda, any loop body, or the constructor of a transient service). **Stale DNS** — an `HttpClient` is handed to the container as a singleton (`AddSingleton<HttpClient>`, `AddSingleton(new HttpClient())`, a singleton `ServiceDescriptor`, or a keyed singleton) or held in a `static` field or property.
+**What it catches:** Two opposite lifetime errors on the same connection pool. **Socket exhaustion** — a registered service constructs `new HttpClient(...)` on a per-invocation path (a method, accessor, lambda, any loop body, or the constructor of a transient service). **Stale DNS** — an `HttpClient` is handed to the container as a singleton (`AddSingleton<HttpClient>`, `AddSingleton(new HttpClient())`, a singleton `ServiceDescriptor`, or a keyed singleton) or held in a `static` field or property.
 
-**Why it matters:** Each `HttpClient` constructed per call opens its own connection pool, and disposing it does not free the socket — the connection sits in `TIME_WAIT` for minutes. Under load the ephemeral port range runs out and the application starts failing with `SocketException`. Wrapping the construction in `using` makes it worse, not better, because disposal is exactly what strands the socket. The usual fix — make it a singleton — trades the problem for its mirror image: one handler holds its connections for the life of the process and never re-resolves DNS, so after a failover or deployment the client keeps routing to an endpoint that has moved. `IHttpClientFactory` is the only shape that gets both connection reuse and DNS freshness, because it pools handlers and retires them on a rotation interval.
+**Why it matters:** Each per-call client opens its own connection pool, and disposing it does not free the socket — the connection sits in `TIME_WAIT` for minutes, so under load the ephemeral port range runs out and the application fails with `SocketException`. Wrapping the construction in `using` makes it worse, not better, because disposal is exactly what strands the socket. The usual fix — make it a singleton — trades the problem for its mirror image: one handler holds its connections for the life of the process and never re-resolves DNS, so after a failover or deployment the client keeps routing to an endpoint that has moved. `IHttpClientFactory` is the only shape that gets both connection reuse and DNS freshness.
 
 **Problem:**
 
@@ -1362,13 +1434,13 @@ public class ApiClient
 {
     public async Task<Order> GetAsync(int id)
     {
-        // DI029: one socket per call, stranded in TIME_WAIT after disposal.
-        using var http = new HttpClient();
+        using var http = new HttpClient();  // DI029: one socket per call
         return await http.GetFromJsonAsync<Order>($"/orders/{id}");
     }
 }
 
-services.AddSingleton<HttpClient>();  // DI029: handler never rotates, DNS never refreshes
+services.AddSingleton<HttpClient>();  // DI029: handler never rotates
+services.AddScoped<HttpClient>();     // DI029: one handler pool per scope
 ```
 
 **Better pattern:** let the container own the handler pool.
@@ -1386,9 +1458,9 @@ public class ApiClient
 }
 ```
 
-**Guardrails (silent, by design):** the socket-exhaustion tier only fires when the containing type is provably a registered implementation in the same compilation, so tests, `Program`/top-level statements, and unregistered helpers stay silent — a compilation with no registrations reports nothing at all. It also requires `IHttpClientFactory` to be available, so a diagnostic is never raised where the fix is unavailable. A handler supplied by the caller (a parameter, field, or injected value rather than an inline construction) transfers pool ownership and stays silent, as does `disposeHandler: false` and any non-constant `disposeHandler`. Construction in the constructor of a **scoped** or **singleton** service outside a loop is an accepted false negative. Handler arguments are bound by parameter symbol rather than position, so named and reordered arguments are handled. A bare handler construction stays silent: constructing `HttpClientHandler` or `SocketsHttpHandler` opens no connection until something sends through it, and the leak shape that matters — `new HttpClient(new SocketsHttpHandler())` — is already reported through the client. A client whose handler sets `PooledConnectionLifetime` is also silent at both stale-DNS tiers: that handler retires pooled connections on an interval and re-resolves DNS with them, which is the documented way to run a long-lived client without the factory. The stale-DNS tier is singleton-only: `AddTransient<HttpClient>` is **DI008**'s disposable-transient finding and DI029 deliberately does not double-report it, and `AddScoped<HttpClient>` is an accepted false negative. `HttpClient` subclasses are excluded at both gates, `Lazy<HttpClient>` and dictionary-of-clients static wrappers are accepted false negatives, and a singleton factory that provably delegates to `IHttpClientFactory.CreateClient` stays silent. A single construction never produces two findings: static initializers belong to the static-member tier, and a construction passed as an argument belongs to the registration tier.
+**Guardrails:** the socket-exhaustion tier fires only when the containing type is provably a registered implementation in the same compilation, so tests, `Program`/top-level statements, and unregistered helpers stay silent — a compilation with no registrations reports nothing at all. It also requires `IHttpClientFactory` to be available, so a diagnostic is never raised where the fix is unavailable. A handler supplied by the caller transfers pool ownership and stays silent, as does `disposeHandler: false` and any non-constant `disposeHandler`; handler arguments are bound by parameter symbol rather than position. A client stored in a member is judged against the owner's lifetime, since one pool shared by a singleton is correct while a transient owner rebuilds it per resolution. A bare handler construction stays silent: constructing `HttpClientHandler` or `SocketsHttpHandler` opens no connection until something sends through it, and the leak shape that matters — `new HttpClient(new SocketsHttpHandler())` — is already reported through the client. A client whose handler sets `PooledConnectionLifetime` is also silent at both stale-DNS tiers: that handler retires pooled connections on an interval and re-resolves DNS with them, which is the documented way to run a long-lived client without the factory. Exact type-backed scoped self-bindings now report when `IHttpClientFactory` is available because each scope creates and disposes an independent handler pool; direct, keyed, and `ServiceDescriptor` forms share that boundary. Factory-backed scoped registrations, scoped `HttpClient` subclasses, and projects without the factory API remain conservative and silent. `AddTransient<HttpClient>` remains **DI008**'s finding and is deliberately not double-reported. `HttpClient` subclasses are excluded at the singleton and static gates, `Lazy<HttpClient>` and dictionary-of-clients static wrappers are accepted false negatives, and a singleton factory that provably delegates to `IHttpClientFactory.CreateClient` stays silent. A single construction never yields two findings: static initializers belong to the static-member tier and an argument-position construction to the registration tier.
 
-**Code Fix:** No — planned. Rewriting `new HttpClient()` into an injected `IHttpClientFactory` requires adding `services.AddHttpClient()` at a registration site that may be in another document or another project, and possibly adding a `PackageReference` — which a code fix cannot do. Applying only the constructor and call-site half produces code that compiles and then throws `InvalidOperationException: No service for type 'IHttpClientFactory'`, so it is deferred rather than shipped as a fake repair.
+**Code Fix:** No — planned. Rewriting `new HttpClient()` into an injected `IHttpClientFactory` requires adding `services.AddHttpClient()` at a registration site that may be in another document or project, and possibly a `PackageReference` — which a code fix cannot do. Applying only the constructor and call-site half produces code that compiles and then throws `InvalidOperationException: No service for type 'IHttpClientFactory'`.
 
 ---
 
@@ -1396,7 +1468,7 @@ public class ApiClient
 
 **What it catches:** Two shapes of a store that never shrinks. **Unbounded growth** — a `private` field of a concrete mutable collection (`ConcurrentDictionary<,>`, `Dictionary<,>`, `List<>`, `HashSet<>`, `Queue<>`, `ConcurrentBag<>`, `ConcurrentQueue<>`) that is `static` or owned by a **singleton**-registered service, written on a per-invocation path with a key derived from request input, where nothing in the declaring type ever removes, clears, drains, or size-checks it. **Unbounded cache entries** — an `IMemoryCache.Set` / `GetOrCreate` / `CreateEntry` call with an unbounded key and neither an expiration nor a `Size`, in a compilation whose cache has no `SizeLimit`.
 
-**Why it matters:** A store held by a singleton or a static field lives as long as the process. Keyed by a user id, tenant id, or correlation id, it accumulates one entry per distinct caller forever: memory climbs monotonically, GC pressure rises with it, and the process eventually dies of `OutOfMemoryException` — typically days into a deployment, which makes it one of the hardest leaks to attribute. `IMemoryCache` is not automatically safer: with no expiration, no entry size, and no configured `SizeLimit` it is an unbounded dictionary with extra steps.
+**Why it matters:** A store held by a singleton or a static field lives as long as the process. Keyed by a user id, tenant id, or correlation id, it accumulates one entry per distinct caller forever: memory climbs monotonically and the process eventually dies of `OutOfMemoryException`, typically days into a deployment — which makes it one of the hardest leaks to attribute. `IMemoryCache` is not automatically safer: with no expiration, no entry size, and no configured `SizeLimit` it is an unbounded dictionary with extra steps.
 
 **Problem:**
 
@@ -1408,14 +1480,13 @@ public class PriceService
     private readonly ConcurrentDictionary<string, Quote> _cache = new();
 
     public Quote Get(string userId) =>
-        // DI030: unbounded key space, nothing in this type ever removes or caps.
-        _cache.GetOrAdd(userId, id => Load(id));
+        _cache.GetOrAdd(userId, id => Load(id));  // DI030: unbounded, never evicted
 
     private Quote Load(string id) => new();
 }
 ```
 
-**Better pattern:** bound the store — an expiration, a size limit, or an explicit eviction path tied to the lifetime of what the entry describes.
+**Better pattern:** bound the store — an expiration, a size limit, or an explicit eviction path.
 
 ```csharp
 public class PriceService
@@ -1435,7 +1506,7 @@ public class PriceService
 }
 ```
 
-**Guardrails (silent, by design):** reported at **Info**, because a key space that is unbounded in the type system may be bounded in production — a dictionary keyed by tenant id in a four-tenant deployment is fine. The "never evicted" proof is sound rather than heuristic: the field must be `private`, so every reference to it lives inside the declaring type and a complete scan of that type is a complete proof. Anything the analyzer does not recognize as a write or a pure read makes it silent — a `Remove`/`TryRemove`/`Clear`/`Dequeue`/`Pop`, any read of `Count` or `Length` (a size cap), the field passed as an argument, reassigned, iterated with `foreach`, used in LINQ, or captured into a lambda (a background eviction timer). Eviction in another type is impossible for a private field, and eviction in a lambda or helper silences the report. Bounded keys are excluded up front: any compile-time constant, and any `enum`, `bool`, `System.Type`, or `char` key. One-time initialization is excluded too — constructor, static-constructor and initializer writes, assembly and `Enum.GetValues` scans, `Lazy<>` factories, and one-shot flag guards. Interface-typed fields (`IDictionary<,>`) stay silent because the backing type may be frozen or capped, as do `ImmutableDictionary`/`FrozenDictionary`, lock registries (`SemaphoreSlim`, `Lazy<>`, `Task`, `Mutex`-shaped value types), non-private fields, and types registered both singleton and scoped. Shapes owned by other rules are excluded rather than duplicated: a scope-resolved value stored into a collection is **DI002**, a scoped service cached by a singleton is **DI003**, and a static dictionary of providers is **DI006**. For `IMemoryCache`, options built anywhere other than inline at the call site stay silent, and a compilation-wide `MemoryCacheOptions.SizeLimit` disables the tier entirely. Two editorconfig knobs are available: `dotnet_code_quality.DI030.allowed_cache_types` and `dotnet_code_quality.DI030.detect_memory_cache_bounds`.
+**Guardrails:** reported at **Info**, because a key space that is unbounded in the type system may be bounded in production. The "never evicted" proof is sound rather than heuristic: the field must be `private`, so every reference to it lives inside the declaring type and a complete scan of that type is a complete proof. Anything not recognized as a write or a pure read makes the candidate silent — a `Remove`/`TryRemove`/`Clear`/`Dequeue`/`Pop`, any read of `Count` or `Length` (a size cap), the field passed as an argument, reassigned, iterated with `foreach`, used in LINQ, or captured into a lambda (a background eviction timer). Bounded keys are excluded up front: any compile-time constant, and any `enum`, `bool`, `System.Type`, or `char` key. One-time initialization is excluded too — constructor, static-constructor and initializer writes, assembly and `Enum.GetValues` scans, `Lazy<>` factories, and one-shot flag guards. Interface-typed fields (`IDictionary<,>`) stay silent because the backing type may be frozen or capped, as do `ImmutableDictionary`/`FrozenDictionary`, lock registries (`SemaphoreSlim`, `Lazy<>`, `Task`, `Mutex`-shaped value types), non-private fields, and types registered both singleton and scoped. Shapes owned by other rules are excluded rather than duplicated: a scope-resolved value stored into a collection is **DI002**, a scoped service cached by a singleton is **DI003**, and a static dictionary of providers is **DI006**. For `IMemoryCache`, options built anywhere other than inline at the call site stay silent, and a compilation-wide `MemoryCacheOptions.SizeLimit` disables the tier entirely. Two editorconfig knobs are available: `dotnet_code_quality.DI030.allowed_cache_types` and `dotnet_code_quality.DI030.detect_memory_cache_bounds`. Accepted false negatives: a key reached through a local alias, non-private and static-property caches, multi-level nested dictionaries, and collection types outside the seven recognized generics.
 
 **Code Fix:** No — and none planned. There is no single correct eviction policy: LRU, a TTL, a size cap, or a documented decision that the key space really is bounded are all valid answers, and a fixer that silently picks one would be worse than the diagnostic.
 
