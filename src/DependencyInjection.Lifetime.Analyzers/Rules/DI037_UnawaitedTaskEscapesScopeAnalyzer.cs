@@ -726,7 +726,43 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// runs straight on.
     /// </summary>
     private static bool Suspends(AwaitExpressionSyntax await) =>
-        !IsCompletedTaskExpression(await.Expression);
+        !IsCompletedTaskExpression(await.Expression)
+        && !(
+            // `var done = Task.CompletedTask; await done;` is the same nothing, one name later.
+            await.Expression is IdentifierNameSyntax name
+            && FindLocalInitializer(name) is { } initializer
+            && IsCompletedTaskExpression(initializer)
+        );
+
+    /// <summary>
+    /// The initializer of the local a name refers to, when that local is declared in the same
+    /// body and initialised where it is declared.
+    /// </summary>
+    private static ExpressionSyntax? FindLocalInitializer(IdentifierNameSyntax name)
+    {
+        for (var scope = name.Parent; scope is not null; scope = scope.Parent)
+        {
+            if (ExecutableSyntaxHelper.IsExecutableBoundary(scope))
+            {
+                break;
+            }
+
+            foreach (
+                var declarator in scope
+                    .ChildNodes()
+                    .OfType<LocalDeclarationStatementSyntax>()
+                    .SelectMany(statement => statement.Declaration.Variables)
+            )
+            {
+                if (declarator.Identifier.ValueText == name.Identifier.ValueText)
+                {
+                    return declarator.Initializer?.Value;
+                }
+            }
+        }
+
+        return null;
+    }
 
     private static bool IsInLoopContainingSuspension(SyntaxNode node, SyntaxNode body) =>
         node.Ancestors()
@@ -753,7 +789,25 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             .GetMembers()
             .OfType<IMethodSymbol>()
             .Where(member => member.Name is "Dispose" or "DisposeAsync")
-            .Any(Blocks);
+            .Any(member => Blocks(member) || AwaitsPendingWork(member));
+
+    /// <summary>
+    /// Whether a disposal awaits something other than a disposal of its own — the escaped task
+    /// itself, most often — which means it cannot complete before the work does.
+    /// </summary>
+    private static bool AwaitsPendingWork(IMethodSymbol method) =>
+        method.DeclaringSyntaxReferences.Length == 1
+        && ExecutableSyntaxHelper.TryGetExecutableBody(
+            method.DeclaringSyntaxReferences[0].GetSyntax(),
+            out var body
+        )
+        && body
+            .DescendantNodesAndSelf()
+            .OfType<AwaitExpressionSyntax>()
+            .Any(await =>
+                await.Expression is not InvocationExpressionSyntax call
+                || GetInvokedName(call) is not ("Dispose" or "DisposeAsync")
+            );
 
     /// <summary>
     /// Whether a later call on the same service waits for the work before the scope ends. A
