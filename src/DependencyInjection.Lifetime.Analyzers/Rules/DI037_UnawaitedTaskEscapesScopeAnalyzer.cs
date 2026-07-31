@@ -72,6 +72,19 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// Calls that put what they are handed into a store rather than acting on it, so the task is
     /// being kept for after the scope rather than waited on inside it.
     /// </summary>
+    /// <summary>
+    /// Calls that block until something finishes. A disposal that makes one of these is waiting
+    /// for the work rather than pulling the floor out from under it.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> JoiningCallNames = ImmutableHashSet.Create(
+        "Wait",
+        "WaitOne",
+        "WaitAll",
+        "WaitAny",
+        "GetResult",
+        "Join"
+    );
+
     private static readonly ImmutableHashSet<string> CollectionAddNames = ImmutableHashSet.Create(
         "Add",
         "AddLast",
@@ -523,8 +536,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         // A singleton resolved through a child scope belongs to the root provider, which no
         // `using` here disposes, so the work has nothing torn down underneath it. Neither does a
-        // service the scope's disposal provably leaves alone.
-        return !lifetimes.IsSingleton(serviceType) && !lifetimes.NothingToDispose(serviceType);
+        // service the scope's disposal provably leaves alone, nor one whose disposal waits.
+        return !lifetimes.IsSingleton(serviceType)
+            && !lifetimes.NothingToDispose(serviceType)
+            && !DisposalJoinsTheWork(lifetimes.GetImplementationType(serviceType));
     }
 
     /// <summary>
@@ -571,11 +586,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         // Work that never touches the service cannot be hurt by the service being disposed:
         // `PauseAsync() => Task.Delay(10)` hands back a timer, not a piece of this instance.
-        // Nested delegates count here — a lambda is where a capture of `this` hides.
-        if (
-            !body.DescendantNodesAndSelf()
-                .Any(node => IsInstanceStateReference(node, method.ContainingType))
-        )
+        if (!TouchesInstanceStateWhileRunning(method, body))
         {
             return true;
         }
@@ -606,6 +617,75 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             && returns.All(statement =>
                 statement.Expression is { } value && IsCompletedTaskExpression(value)
             );
+    }
+
+    /// <summary>
+    /// Whether the service's own state is read or written by work that is still running after the
+    /// method hands its task back. A method that is not <c>async</c> runs to its end before the
+    /// caller sees the task, so what it reads then — `Task.Delay(_delayMs)` — is already read;
+    /// only a delegate it leaves behind can touch the instance later. An <c>async</c> body, by
+    /// contrast, resumes inside the instance, so every mention of it counts.
+    /// </summary>
+    private static bool TouchesInstanceStateWhileRunning(IMethodSymbol method, SyntaxNode body)
+    {
+        foreach (var node in body.DescendantNodesAndSelf())
+        {
+            if (!IsInstanceStateReference(node, method.ContainingType))
+            {
+                continue;
+            }
+
+            if (method.IsAsync || IsInsideNestedFunction(node, body))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the service's own disposal waits for work to finish. A type that blocks in
+    /// <c>Dispose</c> has arranged the join itself, so the scope tearing it down is the moment
+    /// the work is collected rather than the moment it is orphaned.
+    /// </summary>
+    private static bool DisposalJoinsTheWork(INamedTypeSymbol? implementation)
+    {
+        if (implementation is null)
+        {
+            return false;
+        }
+
+        foreach (
+            var disposeMethod in implementation
+                .GetMembers()
+                .OfType<IMethodSymbol>()
+                .Where(member => member.Name is "Dispose" or "DisposeAsync")
+        )
+        {
+            if (
+                disposeMethod.DeclaringSyntaxReferences.Length != 1
+                || !ExecutableSyntaxHelper.TryGetExecutableBody(
+                    disposeMethod.DeclaringSyntaxReferences[0].GetSyntax(),
+                    out var disposeBody
+                )
+            )
+            {
+                continue;
+            }
+
+            if (
+                disposeBody
+                    .DescendantNodesAndSelf()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(call => GetInvokedName(call) is { } name && JoiningCallNames.Contains(name))
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

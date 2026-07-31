@@ -1287,4 +1287,131 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task InstanceStateReadBeforeTheTaskStarts_NoDiagnostic()
+    {
+        // Codex round 10: the field is read while the method still runs, and what it hands back
+        // is an independent timer.
+        var source =
+            Usings
+            + """
+                public sealed class DelayWorker : IDisposable
+                {
+                    private readonly int _delayMs = 10;
+
+                    public Task RunAsync() => Task.Delay(_delayMs);
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<DelayWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task DisposalWaitsForTheWork_NoDiagnostic()
+    {
+        // Codex round 10: the service blocks in Dispose until its work finishes, so the scope
+        // tearing it down is when the work is collected rather than orphaned.
+        var source =
+            Usings
+            + """
+                public sealed class LatchedWorker : IDisposable
+                {
+                    private readonly CountdownEvent _done = new CountdownEvent(1);
+
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        _done.AddCount();
+
+                        try
+                        {
+                            await Task.Delay(10);
+                            _count++;
+                        }
+                        finally
+                        {
+                            _done.Signal();
+                        }
+                    }
+
+                    public void Dispose()
+                    {
+                        _done.Signal();
+                        _done.Wait();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<LatchedWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task DelegateCapturingTheServiceRunsLater_ReportsDiagnostic()
+    {
+        // A non-async method still reports when the delegate it leaves behind reaches back into
+        // the instance.
+        var source =
+            Usings
+            + """
+                public sealed class DeferredWorker : IDisposable
+                {
+                    private int _count;
+
+                    public Task RunAsync() => Task.Run(() => _count++);
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = {|DI037:scope.ServiceProvider.GetRequiredService<DeferredWorker>().RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
