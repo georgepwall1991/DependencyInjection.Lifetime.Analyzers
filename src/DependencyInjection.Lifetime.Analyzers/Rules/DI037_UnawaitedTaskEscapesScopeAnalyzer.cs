@@ -793,11 +793,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             var argument = arguments[index];
 
             var position = argument.NameColon is { } named
-                ? called.Parameters.IndexOf(
-                    called.Parameters.FirstOrDefault(parameter =>
-                        parameter.Name == named.Name.Identifier.ValueText
-                    )
-                )
+                ? FindParameterPosition(called, named.Name.Identifier.ValueText)
                 : index;
 
             if (position < 0 || position >= method.Parameters.Length)
@@ -819,6 +815,22 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         }
 
         return flags;
+    }
+
+    /// <summary>
+    /// Where a named argument lands in the parameter list, or -1 when it names nothing.
+    /// </summary>
+    private static int FindParameterPosition(IMethodSymbol method, string name)
+    {
+        for (var index = 0; index < method.Parameters.Length; index++)
+        {
+            if (method.Parameters[index].Name == name)
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>
@@ -1449,6 +1461,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+#pragma warning disable RS1030
         return compilation.GetSemanticModel(name.SyntaxTree).GetSymbolInfo(name).Symbol is
             {
                 IsStatic: false
@@ -1459,6 +1472,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     or SymbolKind.Method
                     or SymbolKind.Event
             && SymbolEqualityComparer.Default.Equals(symbol.ContainingType, declaringType);
+#pragma warning restore RS1030
     }
 
     private static bool IsCompletedTaskExpression(ExpressionSyntax expression) =>
@@ -1982,8 +1996,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 return null;
             }
 
+#pragma warning disable RS1030
             return _compilation.GetSemanticModel(creation.SyntaxTree).GetTypeInfo(creation).Type
                 as INamedTypeSymbol;
+#pragma warning restore RS1030
         }
 
         public bool IsSingleton(ITypeSymbol? serviceType)
