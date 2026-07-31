@@ -300,6 +300,66 @@ public sealed class DiscoverabilityMetadataTests
         );
     }
 
+    [Fact]
+    public void Readme_rule_sections_match_the_canonical_rules_reference()
+    {
+        var readme = RuleSections(File.ReadAllText(Path.Combine(RepositoryRoot, "README.md")));
+        var reference = RuleSections(
+            File.ReadAllText(Path.Combine(RepositoryRoot, "docs", "RULES.md"))
+        );
+
+        Assert.NotEmpty(reference);
+
+        var drifted = reference
+            .Where(entry =>
+                readme.TryGetValue(entry.Key, out var body)
+                && !string.Equals(body, entry.Value, StringComparison.Ordinal)
+            )
+            .Select(entry => entry.Key)
+            .ToList();
+
+        Assert.True(
+            drifted.Count == 0,
+            "README.md and docs/RULES.md describe these rules differently: "
+                + string.Join(", ", drifted)
+                + ". The docs site is generated from README.md, so drift publishes whichever "
+                + "copy is stale. Update both when a rule's behaviour changes."
+        );
+    }
+
+    /// <summary>
+    /// Rule sections keyed by diagnostic id. A section runs to the next '## ' heading; the
+    /// trailing horizontal rule is not part of the content.
+    /// </summary>
+    private static Dictionary<string, string> RuleSections(string markdown)
+    {
+        var sections = new Dictionary<string, string>(StringComparer.Ordinal);
+        var headings = Regex.Matches(markdown, @"^## (DI\d{3}): .+$", RegexOptions.Multiline);
+
+        for (var index = 0; index < headings.Count; index++)
+        {
+            var start = headings[index].Index;
+            var end = index + 1 < headings.Count ? headings[index + 1].Index : markdown.Length;
+
+            var nextHeading = Regex.Match(
+                markdown[(start + headings[index].Length)..],
+                @"^## ",
+                RegexOptions.Multiline
+            );
+
+            if (nextHeading.Success)
+            {
+                end = start + headings[index].Length + nextHeading.Index;
+            }
+
+            var body = markdown[start..end];
+            body = Regex.Replace(body, @"\n---\s*\n*$", string.Empty).Trim();
+            sections[headings[index].Groups[1].Value] = body;
+        }
+
+        return sections;
+    }
+
     private static SortedSet<string> RuleSectionIds(string markdown) =>
         new(
             Regex

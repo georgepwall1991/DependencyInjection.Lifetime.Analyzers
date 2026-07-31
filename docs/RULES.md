@@ -1009,9 +1009,46 @@ public void Handle(int orderId)
 
 **Why it matters:** The hosted-service idiom is scope per iteration. A hoisted scope keeps the same scoped instances alive for the process lifetime: an EF Core `DbContext` serves stale data and its change tracker grows without bound, and one failed iteration poisons all subsequent ones.
 
+**Problem:**
+
+```csharp
+public class PollingService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope(); // DI024: one scope for the process lifetime
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var processor = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();
+            await processor.ProcessPendingAsync(stoppingToken);
+        }
+    }
+}
+```
+
+**Better pattern:** create the scope inside the loop body so each iteration gets fresh scoped services.
+
+```csharp
+protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+{
+    while (!stoppingToken.IsCancellationRequested)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();
+        await processor.ProcessPendingAsync(stoppingToken);
+    }
+}
+```
+
 **Guardrails:** Scopes created inside the loop (including inner batch loops reusing the outer iteration's scope), startup scopes consumed entirely before the loop, dispose-and-recreate scopes reassigned inside the loop, hoisted scopes whose every resolution is provably singleton (including keyed singletons matched by compile-time key), bounded loops (including cancellation-plus-counter conjunctions, plain `foreach` batches, and `await foreach` over non-channel sources — a repository-style `ReadAllAsync` is a bounded enumeration, so only `System.Threading.Channels.ChannelReader<T>` sources qualify), shutdown paths (`StopAsync` and the stopping/stopped lifecycle callbacks), hoisted services with unprovable lifetimes, fields assigned anywhere outside field initializers/constructors/execution methods (a helper method may reassign per iteration), locals whose closest pre-loop write is a null/default clear, dynamic keyed resolutions, uncalled or deferred helpers, transitive and cross-declaration helpers, helper parameter/field flow, and provider aliases repointed inside the loop all stay silent.
 
 **Code Fix:** No. Moving the scope into the loop body is a statement-level rewrite with disposal implications; apply it manually.
+
+---
 
 ## DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe
 
