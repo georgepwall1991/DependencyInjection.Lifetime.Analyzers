@@ -694,8 +694,43 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 continue;
             }
 
-            if (!IsServiceCollection(semanticModel.GetTypeInfo(expression).Type, knownTypes))
+            var readType = semanticModel.GetTypeInfo(expression).Type;
+
+            if (!IsServiceCollection(readType, knownTypes))
             {
+                // A host builder carries the collection with it. Handing the builder itself to
+                // something else — an argument, a field, a returned value — leaves a `Build()`
+                // this rule never sees free to freeze the collection later. Reaching through the
+                // builder for one of its members does not: the collection stays here, and
+                // `builder.Services` is scanned in its own right.
+                if (
+                    !IsHostBuilder(readType, knownTypes)
+                    || expression.Parent is MemberAccessExpressionSyntax parentAccess
+                        && parentAccess.Expression == expression
+                )
+                {
+                    continue;
+                }
+
+                if (
+                    FindServicesProperty(readType, knownTypes) is { } servicesProperty
+                    && CollectionKey.TryCreate(
+                        expression,
+                        semanticModel,
+                        knownTypes,
+                        reassignedSymbols,
+                        out var builderKey
+                    )
+                )
+                {
+                    reads.Add(
+                        new CollectionRead(
+                            builderKey.Append(servicesProperty),
+                            expression.SpanStart
+                        )
+                    );
+                }
+
                 continue;
             }
 

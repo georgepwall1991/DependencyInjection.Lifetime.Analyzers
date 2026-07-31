@@ -1832,4 +1832,70 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task HostBuilderHandedToHelper_NoDiagnostic()
+    {
+        // Codex round 13: the builder itself is passed on, and what receives it calls the
+        // `Build()` that freezes the collection.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
+
+            public interface IAudit { }
+
+            public class Audit : IAudit { }
+
+            public class Composition
+            {
+                public IHost Configure()
+                {
+                    var builder = Host.CreateApplicationBuilder();
+                    var probe = builder.Services.BuildServiceProvider();
+                    builder.Services.AddSingleton<IAudit, Audit>();
+                    return Finish(builder);
+                }
+
+                private static IHost Finish(HostApplicationBuilder builder) => builder.Build();
+            }
+            """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsWithReferencesAsync(
+            source,
+            HostingReferences
+        );
+    }
+
+    [Fact]
+    public async Task HostBuilderMembersReadAroundRegistration_ReportsDiagnostic()
+    {
+        // Reaching through the builder for one of its own members keeps the collection here, so
+        // the flagship shape still reports.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+            using Microsoft.Extensions.Hosting;
+
+            public interface IAudit { }
+
+            public class Audit : IAudit { }
+
+            public class Composition
+            {
+                public void Configure()
+                {
+                    var builder = Host.CreateApplicationBuilder();
+                    var host = builder.Build();
+                    var name = builder.Environment.ApplicationName;
+                    {|DI036:builder.Services.AddSingleton<IAudit, Audit>()|};
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            HostingReferences
+        );
+    }
 }
