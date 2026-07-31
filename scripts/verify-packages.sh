@@ -22,6 +22,12 @@ do
   cmp "$asset" <(unzip -p "$analyzer_package" "$asset")
 done
 
+# Docs-site-only assets must not ride along in the package consumers download.
+if unzip -l "$analyzer_package" | grep -q "social-card"; then
+  echo "Analyzer package contains docs-site-only social card assets; keep them in site-assets/." >&2
+  exit 1
+fi
+
 # Discoverability metadata: high-intent DI lifetime terms (NuGet search).
 analyzer_nuspec="$(unzip -p "$analyzer_package" DependencyInjection.Lifetime.Analyzers.nuspec)"
 

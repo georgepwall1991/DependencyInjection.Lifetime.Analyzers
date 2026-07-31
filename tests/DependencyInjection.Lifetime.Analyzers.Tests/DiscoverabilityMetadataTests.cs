@@ -232,9 +232,9 @@ public sealed class DiscoverabilityMetadataTests
     public void Social_card_rule_count_matches_the_documented_rule_count()
     {
         var readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
-        var cardPath = Path.Combine(RepositoryRoot, "assets", "social-card.svg");
+        var cardPath = Path.Combine(RepositoryRoot, "site-assets", "social-card.svg");
 
-        Assert.True(File.Exists(cardPath), "Missing social card source: assets/social-card.svg");
+        Assert.True(File.Exists(cardPath), "Missing social card source: site-assets/social-card.svg");
 
         var card = File.ReadAllText(cardPath);
         var documented = RuleSectionIds(readme).Count;
@@ -243,31 +243,31 @@ public sealed class DiscoverabilityMetadataTests
 
         Assert.True(
             claimed.Success,
-            "assets/social-card.svg no longer states a rule count; the link-preview claim and the "
+            "site-assets/social-card.svg no longer states a rule count; the link-preview claim and the "
                 + "README would drift apart silently."
         );
 
         Assert.True(
             int.Parse(claimed.Groups[1].Value) == documented,
-            $"assets/social-card.svg advertises {claimed.Groups[1].Value} rules but README documents "
-                + $"{documented}. Re-render assets/social-card.png after correcting the number."
+            $"site-assets/social-card.svg advertises {claimed.Groups[1].Value} rules but README documents "
+                + $"{documented}. Re-render site-assets/social-card.png after correcting the number."
         );
 
-        var rendered = new FileInfo(Path.Combine(RepositoryRoot, "assets", "social-card.png"));
-        Assert.True(rendered.Exists, "Missing rendered social card: assets/social-card.png");
-        Assert.True(rendered.Length > 0, "Empty rendered social card: assets/social-card.png");
+        var rendered = new FileInfo(Path.Combine(RepositoryRoot, "site-assets", "social-card.png"));
+        Assert.True(rendered.Exists, "Missing rendered social card: site-assets/social-card.png");
+        Assert.True(rendered.Length > 0, "Empty rendered social card: site-assets/social-card.png");
 
         // og:image serves the PNG, not the SVG. Without this the SVG could be corrected and
         // the stale count would stay visible in every link preview.
         var sidecarPath = Path.Combine(
             RepositoryRoot,
-            "assets",
+            "site-assets",
             "social-card.png.source-sha256"
         );
 
         Assert.True(
             File.Exists(sidecarPath),
-            "Missing assets/social-card.png.source-sha256. Run scripts/render-social-card.sh."
+            "Missing site-assets/social-card.png.source-sha256. Run scripts/render-social-card.sh."
         );
 
         var renderedFrom = File.ReadAllText(sidecarPath).Trim();
@@ -277,7 +277,7 @@ public sealed class DiscoverabilityMetadataTests
 
         Assert.True(
             string.Equals(renderedFrom, currentSource, StringComparison.OrdinalIgnoreCase),
-            "assets/social-card.png was rendered from an older assets/social-card.svg, so link "
+            "site-assets/social-card.png was rendered from an older site-assets/social-card.svg, so link "
                 + "previews still serve the previous artwork. Run scripts/render-social-card.sh."
         );
     }

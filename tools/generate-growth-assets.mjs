@@ -12,9 +12,12 @@ const SOCIAL_CARD_PATH = "/social-card.png";
 const SOCIAL_CARD_ALT =
   "DependencyInjection.Lifetime.Analyzers — catch captive dependencies and scope leaks at compile time";
 
-/** Files copied verbatim from the repository root into the generated site. */
+/**
+ * Files copied verbatim from the repository root into the generated site.
+ * assets/ ships inside the NuGet package (README visuals); site-assets/ is docs-site only.
+ */
 const siteStaticAssets = [
-  { source: "assets/social-card.png", target: "social-card.png" },
+  { source: "site-assets/social-card.png", target: "social-card.png" },
   { source: "assets/flow-ide-diagnostics.svg", target: "assets/flow-ide-diagnostics.svg" },
   { source: "assets/flow-before-after-fix.svg", target: "assets/flow-before-after-fix.svg" },
   { source: "assets/flow-ci-analyzer-loop.svg", target: "assets/flow-ci-analyzer-loop.svg" },
