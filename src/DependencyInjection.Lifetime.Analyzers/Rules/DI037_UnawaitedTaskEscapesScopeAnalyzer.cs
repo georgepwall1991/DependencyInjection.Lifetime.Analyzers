@@ -931,6 +931,56 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        return WaitsOnSomethingFrom(service, invocation, semanticModel, scope);
+    }
+
+    /// <summary>
+    /// Whether something later in the scope blocks on, or awaits, a value reached from the
+    /// service: <c>worker.Completion.GetAwaiter().GetResult()</c> is a join written through a
+    /// property rather than a method of its own.
+    /// </summary>
+    private static bool WaitsOnSomethingFrom(
+        ILocalSymbol service,
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        ScopeRegion scope
+    )
+    {
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(scope.Region))
+        {
+            if (node.SpanStart <= invocation.SpanStart)
+            {
+                continue;
+            }
+
+            var waitedOn = node switch
+            {
+                AwaitExpressionSyntax await => await.Expression,
+                InvocationExpressionSyntax
+                {
+                    Expression: MemberAccessExpressionSyntax blocking
+                } when JoiningCallNames.Contains(blocking.Name.Identifier.ValueText) =>
+                    blocking.Expression,
+                _ => null,
+            };
+
+            if (
+                waitedOn is not null
+                && waitedOn
+                    .DescendantNodesAndSelf()
+                    .OfType<SimpleNameSyntax>()
+                    .Any(name =>
+                        SymbolEqualityComparer.Default.Equals(
+                            semanticModel.GetSymbolInfo(name).Symbol,
+                            service
+                        )
+                    )
+            )
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -1111,6 +1161,14 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     is "FromResult"
                         or "FromCanceled"
                         or "FromException"
+                // A zero-length delay is finished before it is handed back, as is
+                // `Task.WhenAll()` over nothing — or over work that has already finished.
+                || (
+                    GetInvokedName(call) is "Delay"
+                    && call.ArgumentList.Arguments.Count > 0
+                    && call.ArgumentList.Arguments[0].Expression
+                        is LiteralExpressionSyntax { Token.ValueText: "0" }
+                )
                 // `Task.WhenAll()` over nothing — or over work that has already finished — is
                 // finished before it is handed back.
                 || (

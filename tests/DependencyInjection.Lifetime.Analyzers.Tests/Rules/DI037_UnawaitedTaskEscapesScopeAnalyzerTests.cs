@@ -2195,4 +2195,81 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AwaitOfAZeroLengthDelay_NoDiagnostic()
+    {
+        // Codex round 19: `Task.Delay(0)` is finished before it is handed back.
+        var source =
+            Usings
+            + """
+                public sealed class NoDelayWorker : IDisposable
+                {
+                    private int _processed;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(0);
+                        _processed++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<NoDelayWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task JoinThroughACompletionProperty_NoDiagnostic()
+    {
+        // Codex round 19: the join is written through a property of the service rather than a
+        // method of its own, and it still happens before the scope ends.
+        var source =
+            Usings
+            + """
+                public interface IJobWorker
+                {
+                    Task Completion { get; }
+
+                    Task RunAsync();
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IJobWorker>();
+                            worker.RunAsync();
+                            worker.Completion.GetAwaiter().GetResult();
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
