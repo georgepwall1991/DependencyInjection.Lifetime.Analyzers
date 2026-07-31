@@ -374,7 +374,8 @@ public static class DiagnosticDescriptors
         category: Category,
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
-        description: "A using scope is disposed the moment control leaves it, and disposing a scope disposes every scoped service it created. Returning, discarding, or storing a task started on one of those services hands back work that keeps running against services already torn down: an ObjectDisposedException from a DbContext at best, and silent operation on half-disposed state at worst. Await the task inside the scope, or give the work a scope of its own that it disposes when it finishes."
+        description: "A using scope is disposed the moment control leaves it, and disposing a scope disposes every scoped service it created. Returning, discarding, or storing a task started on one of those services hands back work that keeps running against services already torn down: an ObjectDisposedException from a DbContext at best, and silent operation on half-disposed state at worst. Await the task inside the scope, or give the work a scope of its own that it disposes when it finishes.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
     );
 
     /// <summary>

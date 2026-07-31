@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -28,6 +29,23 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// Members that hand back the same pending work in another wrapper, so what happens to the
     /// wrapper decides the original's fate.
     /// </summary>
+    /// <summary>
+    /// How deep an alias chain from a resolution to the receiver is followed before the service
+    /// type is left unknown.
+    /// </summary>
+    private const int MaxResolutionDepth = 8;
+
+    /// <summary>
+    /// Generic resolution methods whose type argument names the service that was resolved.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ResolutionMethodNames =
+        ImmutableHashSet.Create(
+            "GetRequiredService",
+            "GetService",
+            "GetRequiredKeyedService",
+            "GetKeyedService"
+        );
+
     private static readonly ImmutableHashSet<string> TaskForwardingNames = ImmutableHashSet.Create(
         "AsTask",
         "ConfigureAwait",
@@ -52,28 +70,88 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            // Registrations decide whether the scope owns what it resolved: a singleton comes
+            // from the root provider and outlives every scope that hands it out.
+            var registrationCollector = RegistrationCollector.Create(compilationContext.Compilation);
+            if (registrationCollector is null)
+            {
+                return;
+            }
+
+            var executableRoots = new ConcurrentBag<SyntaxNode>();
+            var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
+
             compilationContext.RegisterSyntaxNodeAction(
-                syntaxContext => AnalyzeExecutableBody(syntaxContext, wellKnownTypes),
-                SyntaxKind.MethodDeclaration,
-                SyntaxKind.ConstructorDeclaration,
-                SyntaxKind.LocalFunctionStatement,
-                SyntaxKind.GetAccessorDeclaration,
-                SyntaxKind.SetAccessorDeclaration
+                syntaxContext =>
+                {
+                    registrationCollector.AnalyzeInvocation(
+                        (InvocationExpressionSyntax)syntaxContext.Node,
+                        syntaxContext.SemanticModel
+                    );
+
+                    semanticModelsByTree.TryAdd(
+                        syntaxContext.SemanticModel.SyntaxTree,
+                        syntaxContext.SemanticModel
+                    );
+                },
+                SyntaxKind.InvocationExpression
             );
+
+            compilationContext.RegisterSyntaxNodeAction(
+                syntaxContext =>
+                {
+                    executableRoots.Add(syntaxContext.Node);
+                    semanticModelsByTree.TryAdd(
+                        syntaxContext.SemanticModel.SyntaxTree,
+                        syntaxContext.SemanticModel
+                    );
+                },
+                ExecutableSyntaxHelper.ExecutableRootKinds
+            );
+
+            compilationContext.RegisterCompilationEndAction(endContext =>
+            {
+                var lifetimes = new ServiceLifetimeLookup(
+                    registrationCollector,
+                    new KnownServiceLifetimeClassifier(wellKnownTypes)
+                );
+
+                foreach (var executableRoot in executableRoots)
+                {
+                    if (
+                        !semanticModelsByTree.TryGetValue(
+                            executableRoot.SyntaxTree,
+                            out var semanticModel
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
+                    AnalyzeExecutableBody(
+                        endContext,
+                        executableRoot,
+                        semanticModel,
+                        wellKnownTypes,
+                        lifetimes
+                    );
+                }
+            });
         });
     }
 
     private static void AnalyzeExecutableBody(
-        SyntaxNodeAnalysisContext context,
-        WellKnownTypes wellKnownTypes
+        CompilationAnalysisContext context,
+        SyntaxNode executableRoot,
+        SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes,
+        ServiceLifetimeLookup lifetimes
     )
     {
-        if (!ExecutableSyntaxHelper.TryGetExecutableBody(context.Node, out var executableBody))
+        if (!ExecutableSyntaxHelper.TryGetExecutableBody(executableRoot, out var executableBody))
         {
             return;
         }
-
-        var semanticModel = context.SemanticModel;
 
         // Only a scope this body disposes itself proves the defect: the `using` fixes the moment
         // of teardown. A scope without one has no proven disposal point here, which is DI001's
@@ -88,19 +166,18 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         foreach (var scope in scopes)
         {
-            AnalyzeScope(context, executableBody, scope, reassignedLocals);
+            AnalyzeScope(context, semanticModel, scope, reassignedLocals, lifetimes);
         }
     }
 
     private static void AnalyzeScope(
-        SyntaxNodeAnalysisContext context,
-        SyntaxNode executableBody,
+        CompilationAnalysisContext context,
+        SemanticModel semanticModel,
         ScopeRegion scope,
-        HashSet<ILocalSymbol> reassignedLocals
+        HashSet<ILocalSymbol> reassignedLocals,
+        ServiceLifetimeLookup lifetimes
     )
     {
-        var semanticModel = context.SemanticModel;
-
         if (reassignedLocals.Contains(scope.Local))
         {
             return;
@@ -127,7 +204,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
             if (
                 !IsAwaitableInvocation(invocation, semanticModel)
-                || !IsStartedOnScopedService(invocation, semanticModel, scope, scopeDerived)
+                || !IsStartedOnScopedService(
+                    invocation,
+                    semanticModel,
+                    scope,
+                    scopeDerived,
+                    lifetimes
+                )
             )
             {
                 continue;
@@ -327,7 +410,8 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         ScopeRegion scope,
-        HashSet<ILocalSymbol> scopeDerived
+        HashSet<ILocalSymbol> scopeDerived,
+        ServiceLifetimeLookup lifetimes
     )
     {
         if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
@@ -347,7 +431,58 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        return ReferencesScopeDerived(receiver, semanticModel, scopeDerived);
+        if (!ReferencesScopeDerived(receiver, semanticModel, scopeDerived))
+        {
+            return false;
+        }
+
+        // A singleton resolved through a child scope belongs to the root provider, which no
+        // `using` here disposes, so the work has nothing torn down underneath it.
+        return !lifetimes.IsSingleton(GetResolvedServiceType(receiver, semanticModel, 0));
+    }
+
+    /// <summary>
+    /// The service type a receiver was resolved as, followed back through the locals it passed
+    /// through. <see langword="null"/> when the resolution cannot be read here, which leaves the
+    /// lifetime unknown rather than proven.
+    /// </summary>
+    private static ITypeSymbol? GetResolvedServiceType(
+        ExpressionSyntax receiver,
+        SemanticModel semanticModel,
+        int depth
+    )
+    {
+        if (depth > MaxResolutionDepth)
+        {
+            return null;
+        }
+
+        switch (receiver)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return GetResolvedServiceType(parenthesized.Expression, semanticModel, depth);
+
+            case InvocationExpressionSyntax invocation
+                when semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol
+                {
+                    TypeArguments.Length: 1
+                } resolution
+                    && ResolutionMethodNames.Contains(resolution.Name):
+                return resolution.TypeArguments[0];
+
+            case IdentifierNameSyntax identifier
+                when semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol
+                {
+                    DeclaringSyntaxReferences.Length: 1
+                } local:
+                return local.DeclaringSyntaxReferences[0].GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                    ? GetResolvedServiceType(initializer, semanticModel, depth + 1)
+                    : null;
+
+            default:
+                return null;
+        }
     }
 
     /// <summary>
@@ -412,6 +547,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     when assignment.Right == current
                         || assignment.Right.Span.Contains(current.Span):
                     return IsStorageOutsideScope(assignment.Left, semanticModel, scope)
+                        && !IsConsumedInsideScope(assignment.Left, semanticModel, scope)
                         ? methodName
                         : null;
 
@@ -477,7 +613,54 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        return IsStorageOutsideScope(member.Expression, semanticModel, scope);
+        return IsStorageOutsideScope(member.Expression, semanticModel, scope)
+            && !IsConsumedInsideScope(member.Expression, semanticModel, scope);
+    }
+
+    /// <summary>
+    /// Whether the storage the task was written to is awaited, or blocked on, before the scope
+    /// ends. Somewhere to put a task is not an escape when the scope waits for it anyway.
+    /// </summary>
+    private static bool IsConsumedInsideScope(
+        ExpressionSyntax target,
+        SemanticModel semanticModel,
+        ScopeRegion scope
+    )
+    {
+        if (semanticModel.GetSymbolInfo(target).Symbol is not { } storage)
+        {
+            return false;
+        }
+
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(scope.Region))
+        {
+            var consumed = node switch
+            {
+                AwaitExpressionSyntax await => await.Expression,
+                MemberAccessExpressionSyntax member
+                    when BlockingConsumerNames.Contains(member.Name.Identifier.ValueText) =>
+                    member.Expression,
+                _ => null,
+            };
+
+            if (
+                consumed is not null
+                && consumed
+                    .DescendantNodesAndSelf()
+                    .OfType<SimpleNameSyntax>()
+                    .Any(name =>
+                        SymbolEqualityComparer.Default.Equals(
+                            semanticModel.GetSymbolInfo(name).Symbol,
+                            storage
+                        )
+                    )
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsDeclaredOutside(ILocalSymbol local, ScopeRegion scope)
@@ -534,6 +717,43 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Answers whether a service type is provably a singleton, from the registrations in this
+    /// compilation and from the framework services whose lifetime is fixed.
+    /// </summary>
+    private sealed class ServiceLifetimeLookup
+    {
+        private readonly RegistrationCollector _registrations;
+        private readonly KnownServiceLifetimeClassifier _knownLifetimes;
+
+        public ServiceLifetimeLookup(
+            RegistrationCollector registrations,
+            KnownServiceLifetimeClassifier knownLifetimes
+        )
+        {
+            _registrations = registrations;
+            _knownLifetimes = knownLifetimes;
+        }
+
+        public bool IsSingleton(ITypeSymbol? serviceType)
+        {
+            if (serviceType is null)
+            {
+                return false;
+            }
+
+            if (
+                _knownLifetimes.TryGetLifetime(serviceType, isKeyed: false, out var knownLifetime)
+                && knownLifetime == ServiceLifetime.Singleton
+            )
+            {
+                return true;
+            }
+
+            return _registrations.GetLifetime(serviceType) == ServiceLifetime.Singleton;
+        }
     }
 
     /// <summary>

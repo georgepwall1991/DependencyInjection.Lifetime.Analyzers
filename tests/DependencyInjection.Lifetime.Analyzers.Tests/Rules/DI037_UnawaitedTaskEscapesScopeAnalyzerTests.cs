@@ -491,4 +491,131 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task TaskStoredInOuterLocalButAwaitedInsideScope_NoDiagnostic()
+    {
+        // Codex round 1: the local is declared outside the using block, but the await happens
+        // inside it, so the scope outlives the work.
+        var source =
+            Usings
+            + """
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public async Task Dispatch()
+                    {
+                        Task pending;
+
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            pending = worker.RunAsync();
+                            await pending;
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task SingletonResolvedThroughScope_NoDiagnostic()
+    {
+        // Codex round 1: a singleton comes from the root provider, which this scope's disposal
+        // never touches.
+        var source =
+            Usings
+            + """
+                public class Worker : IWorker
+                {
+                    public Task RunAsync() => Task.CompletedTask;
+
+                    public Task<int> CountAsync() => Task.FromResult(0);
+
+                    public ValueTask SaveAsync() => default;
+
+                    public void Fire() { }
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddSingleton<IWorker, Worker>();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public Task Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        return worker.RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ScopedServiceRegisteredAsScoped_ReportsDiagnostic()
+    {
+        // The same source with a scoped registration still reports: that instance dies with the
+        // scope.
+        var source =
+            Usings
+            + """
+                public class Worker : IWorker
+                {
+                    public Task RunAsync() => Task.CompletedTask;
+
+                    public Task<int> CountAsync() => Task.FromResult(0);
+
+                    public ValueTask SaveAsync() => default;
+
+                    public void Fire() { }
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddScoped<IWorker, Worker>();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public Task Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        return {|DI037:worker.RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
