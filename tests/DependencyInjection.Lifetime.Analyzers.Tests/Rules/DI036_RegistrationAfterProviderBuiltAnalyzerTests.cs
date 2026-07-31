@@ -1491,4 +1491,70 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ExtensionBuildingThroughProviderFactory_NoDiagnostic()
+    {
+        // Codex round 8: building a container is spelled more than one way.
+        var source =
+            Usings
+            + """
+                public static class RuntimeExtensions
+                {
+                    public static IServiceProvider Current = null!;
+
+                    public static IServiceCollection AddRuntime(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        Current = new DefaultServiceProviderFactory().CreateServiceProvider(
+                            services
+                        );
+                        return services;
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddRuntime();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CustomCollectionForwardingAdd_NoDiagnostic()
+    {
+        // Codex round 8: a user implementation of IServiceCollection can forward the descriptor
+        // straight into a container that is already live.
+        var source =
+            Usings
+            + """
+                public sealed class LiveServices : List<ServiceDescriptor>, IServiceCollection
+                {
+                    public new void Add(ServiceDescriptor descriptor) => base.Add(descriptor);
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new LiveServices();
+                        var probe = services.BuildServiceProvider();
+                        services.Add(ServiceDescriptor.Singleton<IAudit, Audit>());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

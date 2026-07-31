@@ -78,6 +78,18 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     private static readonly ImmutableArray<string> ConventionalExtensionNamespacePrefixes =
         ImmutableArray.Create("Microsoft.Extensions.", "Microsoft.AspNetCore.");
 
+    /// <summary>Ways a service collection is turned into a container.</summary>
+    private static readonly ImmutableHashSet<string> ProviderBuildingMethodNames =
+        ImmutableHashSet.Create("BuildServiceProvider", "CreateServiceProvider", "CreateBuilder");
+
+    /// <summary>
+    /// Namespaces whose collection members are the framework's own. A user type implementing
+    /// <c>IServiceCollection</c> may declare an <c>Add</c> that forwards the descriptor straight
+    /// into a live container, which this rule cannot see.
+    /// </summary>
+    private static readonly ImmutableArray<string> FrameworkMemberNamespacePrefixes =
+        ImmutableArray.Create("System.", "Microsoft.Extensions.", "Microsoft.AspNetCore.");
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.RegistrationAfterProviderBuilt);
@@ -338,6 +350,10 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         else if (
             !IsServiceCollection(semanticModel.GetTypeInfo(receiver).Type, knownTypes)
             || !TakesServiceDescriptor(definition, knownTypes)
+            || !IsInNamespaceStartingWith(
+                definition.ContainingType,
+                FrameworkMemberNamespacePrefixes
+            )
         )
         {
             // `services.Add(descriptor)` and friends are `ICollection<ServiceDescriptor>`
@@ -429,32 +445,59 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return IsConventionalExtension(definition);
         }
 
+        var collectionParameterName = definition.Parameters.Length > 0
+            ? definition.Parameters[0].Name
+            : null;
+
         foreach (var reference in definition.DeclaringSyntaxReferences)
         {
-            var declaration = reference.GetSyntax();
-            var buildsProvider = declaration
-                .DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .Any(invocation =>
-                    invocation.Expression is MemberAccessExpressionSyntax memberAccess
-                        && memberAccess.Name.Identifier.ValueText == "BuildServiceProvider"
-                );
-
-            if (buildsProvider)
+            foreach (
+                var invocation in reference
+                    .GetSyntax()
+                    .DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+            )
             {
-                return false;
+                // Building a container is spelled more than one way.
+                if (
+                    invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                    && ProviderBuildingMethodNames.Contains(
+                        memberAccess.Name.Identifier.ValueText
+                    )
+                )
+                {
+                    return false;
+                }
+
+                // The helper hands its collection to something else, which may build it.
+                if (
+                    collectionParameterName is not null
+                    && invocation.ArgumentList.Arguments.Any(argument =>
+                        argument.Expression is IdentifierNameSyntax identifier
+                        && identifier.Identifier.ValueText == collectionParameterName
+                    )
+                )
+                {
+                    return false;
+                }
             }
         }
 
         return true;
     }
 
-    private static bool IsConventionalExtension(IMethodSymbol definition)
+    private static bool IsConventionalExtension(IMethodSymbol definition) =>
+        IsInNamespaceStartingWith(definition.ContainingType, ConventionalExtensionNamespacePrefixes);
+
+    private static bool IsInNamespaceStartingWith(
+        ISymbol? symbol,
+        ImmutableArray<string> prefixes
+    )
     {
-        var containingNamespace = definition.ContainingNamespace?.ToDisplayString();
+        var containingNamespace = symbol?.ContainingNamespace?.ToDisplayString();
 
         return containingNamespace is not null
-            && ConventionalExtensionNamespacePrefixes.Any(prefix =>
+            && prefixes.Any(prefix =>
                 containingNamespace.StartsWith(prefix, StringComparison.Ordinal)
             );
     }
