@@ -1809,4 +1809,87 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task CollectorThatWaitsRatherThanStores_NoDiagnostic()
+    {
+        // Codex round 15: a call named Add can turn out to wait once its body is visible.
+        var source =
+            Usings
+            + """
+                public sealed class JoiningBag
+                {
+                    public void Add(Task task) => task.GetAwaiter().GetResult();
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        var joiner = new JoiningBag();
+
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            joiner.Add(worker.RunAsync());
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task PropertySetterThatWaits_NoDiagnostic()
+    {
+        // Codex round 15: a setter is a method like any other, and this one blocks before the
+        // assignment returns.
+        var source =
+            Usings
+            + """
+                public sealed class JoiningSlot
+                {
+                    private Task _pending = Task.CompletedTask;
+
+                    public Task Pending
+                    {
+                        get => _pending;
+                        set
+                        {
+                            _pending = value;
+                            value.GetAwaiter().GetResult();
+                        }
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        var holder = new JoiningSlot();
+
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            holder.Pending = worker.RunAsync();
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

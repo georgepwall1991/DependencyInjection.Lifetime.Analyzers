@@ -1200,7 +1200,9 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             // `_ = worker.RunAsync()` names the fire-and-forget outright: nothing will ever
             // observe the task, let alone wait for it.
             IDiscardSymbol => true,
-            IFieldSymbol or IPropertySymbol => true,
+            // A setter is a method like any other, and this one may wait on what it is given.
+            IPropertySymbol property => property.SetMethod is not { } setter || !Blocks(setter),
+            IFieldSymbol => true,
             ILocalSymbol local => IsDeclaredOutside(local, scope),
             _ => false,
         };
@@ -1220,8 +1222,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             argument.Parent?.Parent is not InvocationExpressionSyntax call
             || call.Expression is not MemberAccessExpressionSyntax member
             // Handing a task to an arbitrary method proves nothing — it may well wait on it.
-            // Only a call that puts the task somewhere names it as kept for later.
+            // Only a call that puts the task somewhere names it as kept for later, and even a
+            // call named `Add` may turn out to wait when its body is visible.
             || !CollectionAddNames.Contains(member.Name.Identifier.ValueText)
+            || (
+                semanticModel.GetSymbolInfo(call).Symbol is IMethodSymbol collector
+                && Blocks(collector)
+            )
         )
         {
             return false;
