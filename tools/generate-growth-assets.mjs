@@ -1775,7 +1775,6 @@ function renderNotFoundPage(site) {
 }
 
 function renderSitemap(site) {
-  const lastmod = site.latestRelease?.date;
   const entries = [
     { path: "/", priority: "1.0" },
     { path: "/rules/", priority: "0.9" },
@@ -1787,16 +1786,16 @@ function renderSitemap(site) {
     ...site.problemPages.map((page) => ({ path: page.pagePath, priority: "0.8" })),
   ];
 
+  // No <lastmod>: the site republishes on every push to main, so the only date available
+  // here is the last package release, which is not when these pages changed. A wrong
+  // lastmod is worse than none — crawlers discount the signal once it disagrees with what
+  // they fetch.
   const urls = entries
     .map((entry) => {
       // The home canonical carries a trailing slash; the sitemap must agree or the two
       // URLs compete as separate documents.
       const loc = entry.path === "/" ? `${site.baseUrl}/` : `${site.baseUrl}${entry.path}`;
-      return (
-        `<url><loc>${escapeXml(loc)}</loc>` +
-        (lastmod ? `<lastmod>${escapeXml(lastmod)}</lastmod>` : "") +
-        `<priority>${entry.priority}</priority></url>`
-      );
+      return `<url><loc>${escapeXml(loc)}</loc><priority>${entry.priority}</priority></url>`;
     })
     .join("");
 
@@ -1998,13 +1997,65 @@ function buildSiteScript() {
 
     input.addEventListener("input", function () {
       var query = input.value.trim();
+      updateCardFilter(query);
+
       if (!query) return close();
+
       load().then(function () {
         render(query);
       });
     });
 
     input.addEventListener("focus", load);
+
+    // On the rule index the query also filters the grid in place. It has to track the input,
+    // not just the arrival query, or editing the box leaves the grid filtered by the old one.
+    var cards = document.querySelectorAll("[data-rule-id]");
+    var notice = null;
+
+    function updateCardFilter(query) {
+      if (cards.length === 0) return;
+
+      var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+      var shown = 0;
+
+      Array.prototype.forEach.call(cards, function (card) {
+        var matches =
+          terms.length === 0 ||
+          terms.every(function (term) {
+            return card.textContent.toLowerCase().indexOf(term) !== -1;
+          });
+
+        card.hidden = !matches;
+        if (matches) shown += 1;
+      });
+
+      if (terms.length === 0) {
+        if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
+        notice = null;
+        return;
+      }
+
+      if (!notice) {
+        notice = document.createElement("p");
+        notice.className = "filter-notice";
+        var intro = document.querySelector(".page-intro");
+        if (intro) {
+          intro.appendChild(notice);
+        } else {
+          notice = null;
+          return;
+        }
+      }
+
+      notice.textContent = shown + " of " + cards.length + ' rules match "' + query + '".';
+
+      var reset = document.createElement("a");
+      reset.href = window.location.pathname;
+      reset.textContent = "Show all rules";
+      notice.appendChild(document.createTextNode(" "));
+      notice.appendChild(reset);
+    }
 
     // The home page advertises a SearchAction against /rules/?q=... — honour it on arrival.
     function applyQueryParameter() {
@@ -2019,46 +2070,13 @@ function buildSiteScript() {
       if (!query) return;
 
       input.value = query;
+      updateCardFilter(query);
 
-      var cards = document.querySelectorAll("[data-rule-id]");
-
-      if (cards.length > 0) {
-        filterCards(cards, query);
-        return;
-      }
-
-      load().then(function () {
-        render(query);
-      });
-    }
-
-    function filterCards(cards, query) {
-      var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
-      var shown = 0;
-
-      Array.prototype.forEach.call(cards, function (card) {
-        var haystack = card.textContent.toLowerCase();
-        var matches = terms.every(function (term) {
-          return haystack.indexOf(term) !== -1;
+      if (cards.length === 0) {
+        load().then(function () {
+          render(query);
         });
-
-        card.hidden = !matches;
-        if (matches) shown += 1;
-      });
-
-      var notice = document.createElement("p");
-      notice.className = "filter-notice";
-      notice.textContent =
-        shown + " of " + cards.length + ' rules match "' + query + '".';
-
-      var reset = document.createElement("a");
-      reset.href = window.location.pathname;
-      reset.textContent = "Show all rules";
-      notice.appendChild(document.createTextNode(" "));
-      notice.appendChild(reset);
-
-      var intro = document.querySelector(".page-intro");
-      if (intro) intro.appendChild(notice);
+      }
     }
 
     applyQueryParameter();
