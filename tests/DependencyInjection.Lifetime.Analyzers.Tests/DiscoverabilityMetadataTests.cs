@@ -168,6 +168,129 @@ public sealed class DiscoverabilityMetadataTests
     }
 
     [Fact]
+    public void Readme_rule_index_links_resolve_to_rule_sections()
+    {
+        var readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+
+        var indexRows = Regex
+            .Matches(readme, @"^\| \[(DI\d{3})\]\(#([a-z0-9-]+)\) \|", RegexOptions.Multiline)
+            .ToList();
+
+        Assert.NotEmpty(indexRows);
+
+        var sectionAnchors = Regex
+            .Matches(readme, @"^## (DI\d{3}): (.+)$", RegexOptions.Multiline)
+            .ToDictionary(
+                match => match.Groups[1].Value,
+                match => GitHubAnchor($"{match.Groups[1].Value}: {match.Groups[2].Value.Trim()}"),
+                StringComparer.Ordinal
+            );
+
+        foreach (var row in indexRows)
+        {
+            var id = row.Groups[1].Value;
+            var anchor = row.Groups[2].Value;
+
+            Assert.True(
+                sectionAnchors.TryGetValue(id, out var expectedAnchor),
+                $"README Rule Index links to '#{anchor}' for {id}, but README has no '## {id}: ...' "
+                    + "section. The link is dead on GitHub and NuGet, and the docs site emits no page for it."
+            );
+
+            Assert.True(
+                string.Equals(expectedAnchor, anchor, StringComparison.Ordinal),
+                $"README Rule Index anchor for {id} is '#{anchor}' but its section renders as '#{expectedAnchor}'."
+            );
+        }
+    }
+
+    [Fact]
+    public void Readme_documents_every_rule_that_the_canonical_rules_reference_documents()
+    {
+        var readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+        var rulesReference = File.ReadAllText(
+            Path.Combine(RepositoryRoot, "docs", "RULES.md")
+        );
+
+        var readmeRules = RuleSectionIds(readme);
+        var referenceRules = RuleSectionIds(rulesReference);
+
+        Assert.NotEmpty(referenceRules);
+
+        var missing = referenceRules.Except(readmeRules, StringComparer.Ordinal).ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "README is missing rule sections documented in docs/RULES.md: "
+                + string.Join(", ", missing)
+                + ". Each missing section costs a docs-site landing page and breaks its Rule Index link."
+        );
+    }
+
+    [Fact]
+    public void Social_card_rule_count_matches_the_documented_rule_count()
+    {
+        var readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+        var cardPath = Path.Combine(RepositoryRoot, "assets", "social-card.svg");
+
+        Assert.True(File.Exists(cardPath), "Missing social card source: assets/social-card.svg");
+
+        var card = File.ReadAllText(cardPath);
+        var documented = RuleSectionIds(readme).Count;
+
+        var claimed = Regex.Match(card, @"(\d+) rules");
+
+        Assert.True(
+            claimed.Success,
+            "assets/social-card.svg no longer states a rule count; the link-preview claim and the "
+                + "README would drift apart silently."
+        );
+
+        Assert.True(
+            int.Parse(claimed.Groups[1].Value) == documented,
+            $"assets/social-card.svg advertises {claimed.Groups[1].Value} rules but README documents "
+                + $"{documented}. Re-render assets/social-card.png after correcting the number."
+        );
+
+        var rendered = new FileInfo(Path.Combine(RepositoryRoot, "assets", "social-card.png"));
+        Assert.True(rendered.Exists, "Missing rendered social card: assets/social-card.png");
+        Assert.True(rendered.Length > 0, "Empty rendered social card: assets/social-card.png");
+    }
+
+    [Fact]
+    public void Readme_table_of_contents_lists_every_rule_section()
+    {
+        var readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+
+        var tocIds = Regex
+            .Matches(readme, @"^- \[(DI\d{3}): ", RegexOptions.Multiline)
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var missing = RuleSectionIds(readme).Except(tocIds, StringComparer.Ordinal).ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "README table of contents does not list documented rules: " + string.Join(", ", missing)
+        );
+    }
+
+    private static SortedSet<string> RuleSectionIds(string markdown) =>
+        new(
+            Regex
+                .Matches(markdown, @"^## (DI\d{3}): ", RegexOptions.Multiline)
+                .Select(match => match.Groups[1].Value),
+            StringComparer.Ordinal
+        );
+
+    /// <summary>
+    /// Mirrors GitHub's heading-anchor slug for the rule headings used here: lowercase, every run
+    /// of non-alphanumeric characters collapsed to a single hyphen, no leading or trailing hyphen.
+    /// </summary>
+    private static string GitHubAnchor(string heading) =>
+        Regex.Replace(Regex.Replace(heading.ToLowerInvariant(), "[^a-z0-9]+", "-"), "^-+|-+$", "");
+
+    [Fact]
     public void Analyzer_packs_all_assets_for_nuget_readme_rendering()
     {
         var analyzer = XDocument.Load(

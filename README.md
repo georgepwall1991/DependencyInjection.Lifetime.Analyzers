@@ -167,6 +167,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [DI020: Middleware Captures Scoped Service In Constructor](#di020-middleware-captures-scoped-service-in-constructor)
 - [DI021: Non-Thread-Safe Service Shared Across Concurrent Handler Invocations](#di021-non-thread-safe-service-shared-across-concurrent-handler-invocations)
 - [DI022: Service Instance Reused Across Handler Invocations](#di022-service-instance-reused-across-handler-invocations)
+- [DI023: Fire-and-Forget Background Work Captures a Scope](#di023-fire-and-forget-background-work-captures-a-scope)
 - [DI024: Hosted Service Creates Scope Outside Execution Loop](#di024-hosted-service-creates-scope-outside-execution-loop)
 - [DI025: Event Subscription On Longer-Lived Publisher Without Unsubscribe](#di025-event-subscription-on-longer-lived-publisher-without-unsubscribe)
 - [DI026: Event Subscription On Scoped Publisher Without Unsubscribe](#di026-event-subscription-on-scoped-publisher-without-unsubscribe)
@@ -174,6 +175,13 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [DI028: Discarded Callback Registration On A Longer-Lived Source](#di028-discarded-callback-registration-on-a-longer-lived-source)
 - [DI029: HttpClient Lifetime Misuse](#di029-httpclient-lifetime-misuse)
 - [DI030: Unbounded Singleton Or Static Cache](#di030-unbounded-singleton-or-static-cache)
+- [DI031: Shared Implementation Registered Under Several Service Types](#di031-shared-implementation-registered-under-several-service-types)
+- [DI032: Service Implements Only IAsyncDisposable](#di032-service-implements-only-iasyncdisposable)
+- [DI033: Container Will Not Dispose a Pre-Built Instance](#di033-container-will-not-dispose-a-pre-built-instance)
+- [DI034: HttpContext Used in Fire-and-Forget Background Work](#di034-httpcontext-used-in-fire-and-forget-background-work)
+- [DI035: Non-Thread-Safe Service Shared Across a Fan-Out](#di035-non-thread-safe-service-shared-across-a-fan-out)
+- [DI036: Registration Added After The Provider Was Built](#di036-registration-added-after-the-provider-was-built)
+- [DI037: Un-awaited Task Escapes The Scope That Created It](#di037-un-awaited-task-escapes-the-scope-that-created-it)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -1078,6 +1086,44 @@ When `MaxConcurrentCalls` is a compile-time constant greater than 1, the diagnos
 
 ---
 
+## DI023: Fire-and-Forget Background Work Captures a Scope
+
+**What it catches:** a `using` scope, a local bound to its `ServiceProvider`, or any local resolved from it, captured by background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away — an expression statement, a `_ =` discard, or a finite/cancelable `Wait(...)` whose Boolean result is stored or returned while the task may continue.
+
+**Why it matters:** `using` disposes the scope the instant the starting method returns, which for a discarded task is almost always before the work has finished. The background work then resolves from, or calls into, a disposed scope: `ObjectDisposedException` at best, and at worst a service that quietly operates on torn-down state such as a closed `DbContext` connection. The failure is timing-dependent, so it passes locally and fails under load.
+
+**Problem:**
+
+```csharp
+public void Handle(int orderId)
+{
+    using var scope = _scopeFactory.CreateScope();
+    var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+
+    _ = Task.Run(async () => await archiver.ArchiveAsync(orderId));  // DI023
+}   // <- scope disposed here, while ArchiveAsync is still running
+```
+
+**Better pattern:** give the background work a scope of its own, or await it before leaving.
+
+```csharp
+public void Handle(int orderId)
+{
+    _ = Task.Run(async () =>
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+        await archiver.ArchiveAsync(orderId);
+    });
+}
+```
+
+**Guardrails:** capture tracking follows any number of hops (`scope` → `provider` → `service`) and covers method groups and delegate locals, not just inline lambdas. Values that cannot hold the scope's graph stay quiet: primitives, enums, and strings derived from it (`scope.GetHashCode()`), a local proved to be reassigned to something not scope-derived before the capture (same-block dominance; a branch-only or conditionally evaluated overwrite still reports), assignment targets, and `nameof(service)`. The scope must be disposed by a `using` in the same method — an undisposed scope has no proven teardown point here and is DI001's finding instead. A task that is awaited, returned, stored in a local, or waited on to guaranteed completion (parameterless `.Wait()`, infinite timeout with a non-cancelable token, `.GetAwaiter().GetResult()`) keeps the frame alive and stays silent. A framework `Task.Wait` with a finite timeout or cancelable token does not, even when its Boolean result is stored or returned, since either exit can leave the task running; arguments are bound to their parameters, so named and reordered forms classify correctly. User-defined extension methods named `Wait` and background work that captures nothing scope-derived stay silent.
+
+**Code Fix:** No — the repair is a design choice between awaiting the task and moving scope creation inside the background work, and the two produce different execution semantics.
+
+---
+
 ## DI024: Hosted Service Creates Scope Outside Execution Loop
 
 **What it catches:** A `BackgroundService.ExecuteAsync` override (or `IHostedService`/`IHostedLifecycleService` start method) that creates an `IServiceScope` once **before** its long-running execution loop — including direct or compound cancellation checks, `while (true)`, `for (;;)`, `PeriodicTimer` loops, and channel-consumer loops — and uses it inside the loop, either directly or through a service resolved from it. One-hop, directly invoked private helpers in the same type declaration receive the same helper-local analysis; deferred and transitive helper calls stay conservative. Generic and direct-`typeof(T)` non-generic `GetService`/`GetRequiredService` resolutions participate, including keyed `GetKeyedService`/`GetRequiredKeyedService` calls with compile-time keys; runtime `Type` values and dynamic keys stay conservative. Compound conditions stay conservative: nested `!` operators are reduced by polarity, every `&&` operand must be long-running, while one long-running `||` operand is sufficient; negated cancellation combinations use De Morgan semantics. It also catches a service whose registration is provably scoped resolved once before the loop and reused across iterations.
@@ -1395,65 +1441,154 @@ public class PriceService
 
 ---
 
-## Samples
+## DI031: Shared Implementation Registered Under Several Service Types
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI030`.
-- `samples/DI015InAction`: runnable unresolved-dependency demonstration.
+**What it catches:** one implementation type registered under two or more different service types with the same singleton or scoped lifetime, as plain type registrations on the same service-collection flow.
 
-## Configuration
+**Why it matters:** each registration is its own descriptor, and the container builds one instance per descriptor. `AddSingleton<IReader, Store>()` followed by `AddSingleton<IWriter, Store>()` reads like one shared `Store` but produces two: state written through one interface is invisible through the other, and anything the implementation owns — a timer, a connection, a cache — exists twice. The bug is silent, because both resolutions succeed and return a perfectly valid object.
 
-Suppress one diagnostic in code:
+**Problem:**
 
 ```csharp
-#pragma warning disable DI007
-var service = _provider.GetRequiredService<IMyService>();
-#pragma warning restore DI007
+services.AddSingleton<IFeatureReader, FeatureStore>();
+services.AddSingleton<IFeatureWriter, FeatureStore>();  // DI031: a second FeatureStore
 ```
 
-Or in `.editorconfig`:
+**Better pattern:** register the implementation once, then forward.
 
-```ini
-[*.cs]
-dotnet_diagnostic.DI007.severity = none
+```csharp
+services.AddSingleton<FeatureStore>();
+services.AddSingleton<IFeatureReader>(sp => sp.GetRequiredService<FeatureStore>());
+services.AddSingleton<IFeatureWriter>(sp => sp.GetRequiredService<FeatureStore>());
 ```
 
-## Adoption Guide
+**Guardrails:** transient registrations are exempt — a fresh instance per resolution is the contract, so there is no shared instance to lose. Registrations with different lifetimes, keyed registrations, factory registrations, pre-built instances, and registrations on different service-collection flows are all left alone, as is the same service type registered twice (that is DI012's duplicate registration). Registrations guarded by an `if`, `switch`, loop, or `try` never both run, so no two-instance claim is made, and neither do registrations in different executable bodies. Grouping is by constructed type, so `GenericStore<int>` and `GenericStore<string>` are distinct, and a `RemoveAll` or `Replace` that runs after the registration it removes withdraws the claim (a removal earlier in the method does not). Known false negatives: an open-generic registration paired with a closed one, and a fluent chain that removes a service type and then re-registers it in the same expression. Reported at Info: separate instances are occasionally deliberate, and the forwarding fix is a design decision.
 
-- Start with [docs/ADOPTION.md](docs/ADOPTION.md) if you are evaluating the package for a team or shared platform.
-- Use [docs/RULES.md](docs/RULES.md) if you want a rule-by-rule reference you can link from issues, pull requests, or internal docs.
+**Code Fix:** No — the repair chooses which service type keeps the concrete registration and rewrites the rest as factories, which changes registration order and is better made deliberately.
 
-## Requirements
+---
 
-- `.NET Standard 2.0` consumer compatibility.
-- `Microsoft.Extensions.DependencyInjection`.
+## DI032: Service Implements Only IAsyncDisposable
 
-## Known Limitations
+**What it catches:** a service the container creates — a plain type registration at any lifetime — whose implementation implements `IAsyncDisposable` but not `IDisposable`.
 
-- Compile-time analysis only; runtime registrations cannot be analysed.
-- Cross-assembly registration graphs are not fully tracked.
-- Lifetime inference follows single-service resolution paths and may not model every `IEnumerable<T>` multi-registration activation path.
+**Why it matters:** the container tracks everything it creates so it can dispose it, but a synchronous `Dispose()` on the provider or a scope has no synchronous disposal method to call. Rather than skipping the service, `ServiceProvider` throws `InvalidOperationException`: *"'X' type only implements IAsyncDisposable. Use DisposeAsync to dispose the container."* The failure surfaces at shutdown or at the end of a scope, which is exactly where it is hardest to notice in testing.
 
-## Frequently Asked Questions
+**Problem:**
 
-### What is a dependency injection lifetime analyser for C#?
+```csharp
+public sealed class UploadQueue : IUploadQueue, IAsyncDisposable
+{
+    public ValueTask DisposeAsync() => default;
+}
 
-It is a Roslyn analyser package that checks your DI registrations and DI usage during compilation, so lifetime and scope mistakes are found before production.
+services.AddSingleton<IUploadQueue, UploadQueue>();  // DI032
+using var provider = services.BuildServiceProvider();  // throws on Dispose()
+```
 
-### Can this analyser prevent ASP.NET Core runtime DI failures?
+**Better pattern:** implement both, so every disposal path has something to call.
 
-It helps prevent a large class of runtime failures, including captive dependencies, scope disposal mistakes, and unregistered direct/transitive dependencies in constructor and factory activation paths.
+```csharp
+public sealed class UploadQueue : IUploadQueue, IDisposable, IAsyncDisposable
+{
+    public void Dispose() { }
+    public ValueTask DisposeAsync() => default;
+}
+```
 
-### Does this work in Rider, Visual Studio, and CI builds?
+The alternative is to guarantee every disposal is asynchronous — `await provider.DisposeAsync()`, `CreateAsyncScope`, `await using` — which the generic host does for you but a hand-built provider does not.
 
-Yes. It runs in IDE diagnostics and standard `dotnet build` / CI workflows because it is delivered as a standard .NET analyser package.
+**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033). Factory registrations do count — the container creates and tracks a factory's result — when the lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A descriptor removed or replaced after it was added never reaches the provider. The diagnostic is conditional on the service being resolved at least once, since that is what puts it in the container's disposal list.
 
-## Contributing
+**Code Fix:** No — adding a synchronous `Dispose` means deciding what synchronous teardown of an inherently asynchronous resource should do, which the analyzer cannot answer.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+---
 
-## Licence
+## DI033: Container Will Not Dispose a Pre-Built Instance
 
-MIT Licence - see [LICENSE](LICENSE).
+**What it catches:** a disposable instance handed to the container as an existing object — `AddSingleton<TService>(new Thing())` or a descriptor carrying an implementation instance.
+
+**Why it matters:** the container disposes only the instances it creates. An instance built by the caller is registered as-is, and disposing the provider does not touch it, so its file handles, sockets, or timers live until the process ends. The registration reads exactly like the type-registration form that *is* disposed, which is what makes it easy to miss.
+
+**Problem:**
+
+```csharp
+services.AddSingleton<IMetricsSink>(new MetricsSink());  // DI033: never disposed by the container
+```
+
+**Better pattern:** hand the type over instead, and the container owns creation and disposal together.
+
+```csharp
+services.AddSingleton<IMetricsSink, MetricsSink>();
+```
+
+If the instance must be pre-built — it is shared with code outside the container, or its construction needs values the container does not have — dispose it deliberately at shutdown and treat the registration as a loan.
+
+**Guardrails:** non-disposable instances raise no ownership question, and factory registrations are exempt because the container *does* create and therefore dispose what a factory returns, as is a descriptor removed or replaced after it was added. Reported at Info: caller-owned disposal is a legitimate choice, just one worth making explicitly.
+
+**Code Fix:** No — rewriting to a type registration changes construction, and disposing at shutdown is a lifecycle decision.
+
+---
+
+## DI034: HttpContext Used in Fire-and-Forget Background Work
+
+**What it catches:** an `HttpContext` value — a parameter, local, or field of that type — or a read of `IHttpContextAccessor.HttpContext`, inside background work started with `Task.Run` or `TaskFactory.StartNew` whose task is thrown away or observed only through a finite/cancelable `Wait(...)` Boolean result.
+
+**Why it matters:** ASP.NET Core pools `HttpContext` and resets it as soon as the response has been written, and the accessor's backing `AsyncLocal` is cleared or reassigned to the next request. Work that outlives the request therefore reads a context whose request, response, features, and `RequestServices` have already been torn down. The usual symptom is a `NullReferenceException` or `ObjectDisposedException` under load, and the worst one is reading another user's request data from a recycled context.
+
+**Problem:**
+
+```csharp
+public void Handle(HttpContext context)
+{
+    _ = Task.Run(() => _audit.Write(context.TraceIdentifier));  // DI034
+}
+```
+
+**Better pattern:** take what the work needs out of the context first — plain values survive the request.
+
+```csharp
+public void Handle(HttpContext context)
+{
+    var traceId = context.TraceIdentifier;
+    _ = Task.Run(() => _audit.Write(traceId));
+}
+```
+
+**Guardrails:** a task that is awaited, returned, stored in a local, or waited on to guaranteed completion keeps the request alive until the work completes and stays silent. A framework `Task.Wait` with a finite timeout or cancelable token can return while work continues, so storing or returning its Boolean result still reports; user-defined extension methods named `Wait` stay conservative and silent. Background work that touches no context also stays silent. Reading the accessor *inside* the work is reported too, since by then the `AsyncLocal` has already moved on.
+
+**Code Fix:** No — which values to hoist out of the context is a decision about what the background work actually needs.
+
+---
+
+## DI035: Non-Thread-Safe Service Shared Across a Fan-Out
+
+**What it catches:** a documented non-thread-safe service — an EF Core `DbContext` or a derived context, `IDbContextTransaction`, or an ADO.NET connection, command, transaction, or reader — declared outside a `Task.WhenAll` projection and used inside every one of its tasks. This includes a service created once per outer `SelectMany` group and then shared by the inner tasks flattened into the same `WhenAll`.
+
+**Why it matters:** `Task.WhenAll` starts every task before awaiting any of them, so the projection's lambda runs concurrently on one shared instance. `DbContext` detects it and throws *"A second operation was started on this context before a previous operation completed"*; the ADO.NET types are less forgiving and can corrupt connection state instead. The code reads like a clean parallel speed-up, which is exactly why it survives review.
+
+**Problem:**
+
+```csharp
+await Task.WhenAll(orderIds.Select(id => _db.LoadAsync(id)));  // DI035
+```
+
+**Better pattern:** give each task its own scope, and therefore its own context.
+
+```csharp
+await Task.WhenAll(orderIds.Select(async id =>
+{
+    await using var scope = _scopeFactory.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.LoadAsync(id);
+}));
+```
+
+Processing the work sequentially with a `foreach` and `await` is equally correct when the parallelism is not worth a scope per item.
+
+**Guardrails:** only the selector of a `Select`/`SelectMany`, or a lambda handed to `WhenAll` directly, counts as a concurrent body — a `Where` predicate runs one element at a time during enumeration, and an unrelated lambda nested inside a selector is part of that selector's single task. The exception is an inner task-returning selector directly returned by an exact `System.Linq.Enumerable.SelectMany` collection selector: those tasks are flattened into the outer `WhenAll`, so a value declared in the outer selector is shared by the inner fan-out. Exact LINQ binding, exact `Task` return, and return ownership are required; returns inside nested lambdas or local functions do not qualify. Properties are excluded, since a computed property can return a fresh instance per access. Only values declared *outside* the concurrent body count — a context created or resolved inside the actual task lambda belongs to that one task. Thread-safe services are untouched, `nameof` is not a use, and a sequential `foreach` never fans out. `Parallel.For`/`ForEach`/`ForEachAsync` bodies and framework message handlers are DI021's territory; this rule covers the `Task.WhenAll` leg it documented as out of scope.
+
+**Code Fix:** No — the repair is a choice between a scope per task and sequential processing, with different throughput consequences.
 
 ---
 
@@ -1535,3 +1670,95 @@ public async Task Dispatch(int orderId)
 **Code Fix:** No — the repair is a choice between awaiting inside the scope, making the caller own the scope, and giving the background work a scope of its own, and only the author knows which of the three the surrounding code can support.
 
 ---
+
+## Samples
+
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI037`.
+- `samples/DI015InAction`: runnable unresolved-dependency demonstration.
+
+## Configuration
+
+Suppress one diagnostic in code:
+
+```csharp
+#pragma warning disable DI007
+var service = _provider.GetRequiredService<IMyService>();
+#pragma warning restore DI007
+```
+
+Or in `.editorconfig`:
+
+```ini
+[*.cs]
+dotnet_diagnostic.DI007.severity = none
+```
+
+## Adoption Guide
+
+- Start with [docs/ADOPTION.md](docs/ADOPTION.md) if you are evaluating the package for a team or shared platform.
+- Use [docs/RULES.md](docs/RULES.md) if you want a rule-by-rule reference you can link from issues, pull requests, or internal docs.
+
+## Requirements
+
+- `.NET Standard 2.0` consumer compatibility.
+- `Microsoft.Extensions.DependencyInjection`.
+
+## Known Limitations
+
+- Compile-time analysis only; runtime registrations cannot be analysed.
+- Cross-assembly registration graphs are not fully tracked.
+- Lifetime inference follows single-service resolution paths and may not model every `IEnumerable<T>` multi-registration activation path.
+
+## Frequently Asked Questions
+
+### What is a dependency injection lifetime analyser for C#?
+
+It is a Roslyn analyser package that checks your DI registrations and DI usage during compilation, so lifetime and scope mistakes are found before production.
+
+### Can this analyser prevent ASP.NET Core runtime DI failures?
+
+It helps prevent a large class of runtime failures, including captive dependencies, scope disposal mistakes, and unregistered direct/transitive dependencies in constructor and factory activation paths.
+
+### Does this work in Rider, Visual Studio, and CI builds?
+
+Yes. It runs in IDE diagnostics and standard `dotnet build` / CI workflows because it is delivered as a standard .NET analyser package.
+
+### Does this replace `ValidateScopes` and `ValidateOnBuild`?
+
+No — it moves the same class of failure earlier. `ValidateScopes` and `ValidateOnBuild` are runtime checks: they need the host to start, and `ValidateScopes` only reports a scoped service resolved from the root provider at the moment that resolution actually executes. This analyzer reports lifetime and registration faults while you type and during `dotnet build`, including paths a given test run never exercises. Use both: the analyzer for the compile-time pass, the runtime validation as the backstop.
+
+### Does it add a runtime dependency to my application?
+
+No. It is a development-time Roslyn analyzer, referenced with `PrivateAssets="all"`. Nothing is added to your published output, and nothing flows to consumers of your library.
+
+### Does it work with Autofac, DryIoc, Lamar, or other containers?
+
+Only where they are configured through the `Microsoft.Extensions.DependencyInjection` registration APIs this analyzer can see — the `IServiceCollection` calls in your composition code. Registrations made in a third-party container's own API are out of scope, and this project does not claim to analyse them.
+
+### Will it flood an existing codebase with warnings?
+
+The rules that report provable runtime failures and leaks default to `Warning` or `Error`; broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` so they stay out of your build log until you opt in. Every rule is a standard diagnostic ID, so you can raise, lower, or silence each one per project or per folder in `.editorconfig`. [docs/ADOPTION.md](docs/ADOPTION.md) sets out a staged rollout.
+
+### How do I turn a single rule off?
+
+Set its severity to `none` in `.editorconfig`:
+
+```ini
+[*.cs]
+dotnet_diagnostic.DI010.severity = none
+```
+
+Scope it to a folder by placing the setting in an `.editorconfig` closer to those files, or suppress one occurrence with `#pragma warning disable DI010`.
+
+### Why does it stay silent on a bug I know is there?
+
+By design. Each rule reports only what it can prove from the registrations, constructors, and scope usage visible to it; where the proof is not available it reports nothing rather than guessing. The rules with the most conditional analysis carry a **Guardrails** section that names their accepted false negatives, so you can see which shapes are deliberately not reported — for example work that escapes through a helper method, or a scope created in a different method than the one that uses it.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licence
+
+MIT Licence - see [LICENSE](LICENSE).
+
