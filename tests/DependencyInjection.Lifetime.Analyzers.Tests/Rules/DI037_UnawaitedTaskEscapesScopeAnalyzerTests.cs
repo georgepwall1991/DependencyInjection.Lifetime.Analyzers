@@ -2359,4 +2359,97 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AwaitOfAReadonlyFieldHoldingAFinishedTask_NoDiagnostic()
+    {
+        // Codex round 21: a readonly field settled at its declaration says the same thing a local
+        // does — the await runs straight on.
+        var source =
+            Usings
+            + """
+                public sealed class ReadyWorker : IDisposable
+                {
+                    private readonly Task _ready = Task.CompletedTask;
+                    private bool _disposed;
+
+                    public async Task RunAsync()
+                    {
+                        await _ready;
+
+                        if (_disposed)
+                        {
+                            throw new ObjectDisposedException(nameof(ReadyWorker));
+                        }
+                    }
+
+                    public void Dispose() => _disposed = true;
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<ReadyWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task LocalOfTheSameNameShadowingAFinishedField_Diagnostic()
+    {
+        // The field's initializer says nothing about a local that borrows its name: this await
+        // really does suspend, so the escape is still reported.
+        var source =
+            Usings
+            + """
+                public sealed class ShadowedReadyWorker : IDisposable
+                {
+                    private readonly Task _ready = Task.CompletedTask;
+                    private bool _disposed;
+
+                    public async Task RunAsync(Task pending)
+                    {
+                        var _ready = pending;
+                        await _ready;
+
+                        if (_disposed)
+                        {
+                            throw new ObjectDisposedException(nameof(ShadowedReadyWorker));
+                        }
+                    }
+
+                    public void Dispose() => _disposed = true;
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch(Task pending)
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider
+                            .GetRequiredService<ShadowedReadyWorker>();
+                        _ = {|DI037:worker.RunAsync(pending)|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

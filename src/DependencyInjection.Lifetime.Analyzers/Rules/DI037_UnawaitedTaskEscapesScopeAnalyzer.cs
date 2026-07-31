@@ -922,8 +922,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 Expression: MemberAccessExpressionSyntax forwarding
             } when TaskForwardingNames.Contains(forwarding.Name.Identifier.ValueText) =>
                 IsAlreadyFinished(forwarding.Expression),
-            // `var done = Task.CompletedTask; await done;` is the same nothing, one name later.
-            IdentifierNameSyntax name => FindLocalInitializer(name) is { } initializer
+            // `var done = Task.CompletedTask; await done;` is the same nothing, one name later —
+            // and a readonly field settled at its declaration says the same thing for the life of
+            // the object.
+            IdentifierNameSyntax name => (
+                FindLocalInitializer(name) ?? FindReadonlyFieldInitializer(name)
+            )
+                is { } initializer
                 && IsAlreadyFinished(initializer),
             _ => false,
         };
@@ -957,6 +962,53 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The initializer of the readonly field a name refers to, when nothing nearer to the name —
+    /// a local, a parameter — claims that name first.
+    /// </summary>
+    private static ExpressionSyntax? FindReadonlyFieldInitializer(IdentifierNameSyntax name)
+    {
+        var text = name.Identifier.ValueText;
+
+        for (var scope = name.Parent; scope is not null; scope = scope.Parent)
+        {
+            if (
+                scope
+                    .ChildNodes()
+                    .OfType<LocalDeclarationStatementSyntax>()
+                    .SelectMany(statement => statement.Declaration.Variables)
+                    .Any(declarator => declarator.Identifier.ValueText == text)
+            )
+            {
+                return null;
+            }
+
+            if (ExecutableSyntaxHelper.IsExecutableBoundary(scope))
+            {
+                if (
+                    scope is BaseMethodDeclarationSyntax method
+                    && method.ParameterList.Parameters.Any(parameter =>
+                        parameter.Identifier.ValueText == text
+                    )
+                )
+                {
+                    return null;
+                }
+
+                break;
+            }
+        }
+
+        return name.Ancestors()
+            .OfType<TypeDeclarationSyntax>()
+            .FirstOrDefault()
+            ?.Members.OfType<FieldDeclarationSyntax>()
+            .Where(field => field.Modifiers.Any(SyntaxKind.ReadOnlyKeyword))
+            .SelectMany(field => field.Declaration.Variables)
+            .FirstOrDefault(declarator => declarator.Identifier.ValueText == text)
+            ?.Initializer?.Value;
     }
 
     private static bool IsInLoopContainingSuspension(SyntaxNode node, SyntaxNode body) =>
