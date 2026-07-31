@@ -47,6 +47,7 @@ For the latest full rule content, see:
 | [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 | [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
+| [DI037](#di037-un-awaited-task-escapes-the-scope-that-created-it) | Un-awaited task escapes the scope that created it | Warning | No |
 
 ---
 
@@ -1480,3 +1481,43 @@ Anything that lets the collection out cancels the rule on it, wherever it appear
 Accepted false negatives, all of them deliberate: a build and a registration in different methods; `IHostBuilder.ConfigureServices` callbacks, whose registrations run inside `Build`, not after it; collections rooted in a parameter, field, or property; custom `IServiceCollection` implementations; helper extensions that build internally or hand the collection on; and any block where the collection or its builder escapes.
 
 **Code Fix:** No — the repair is a choice between moving the registration above the build and moving the build below it, and only the author knows whether anything between the two depends on the provider already existing.
+
+---
+
+## DI037: Un-awaited Task Escapes The Scope That Created It
+
+**What it catches:** a task started on a service resolved from a `using` service scope and then allowed to leave that scope without being awaited — returned to the caller, discarded with `_ =` or as a bare statement, assigned to a field or property, or collected into a list declared outside the scope to be awaited after it ends.
+
+**Why it matters:** disposing a scope disposes every scoped service it created. A task still running when the scope ends is work operating on services that have already been torn down: an `ObjectDisposedException` from a `DbContext` whose connection was closed underneath it, a half-written unit of work, or — worst of all — a silent partial success. The failure is timing-dependent, so short work passes locally and long work fails under load.
+
+> **Explain Like I'm Ten:** You cannot hand someone a cake and then take the oven away while it is still baking.
+
+**Problem:**
+
+```csharp
+public Task Dispatch(int orderId)
+{
+    using var scope = _scopeFactory.CreateScope();
+    var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+
+    return archiver.ArchiveAsync(orderId);  // DI037: scope disposed as this returns
+}
+```
+
+**Better pattern:** await inside the scope, so the scope outlives the work.
+
+```csharp
+public async Task Dispatch(int orderId)
+{
+    using var scope = _scopeFactory.CreateScope();
+    var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();
+
+    await archiver.ArchiveAsync(orderId);
+}
+```
+
+**Guardrails:** the scope must be disposed by the body that starts the work — a `using` declaration or a `using` statement — because that is what fixes the moment of teardown; a scope without one has no proven disposal point here and is DI001's finding instead. The receiver must be scope-derived: the scope's `ServiceProvider`, a service resolved through it, or a local that holds either, grown transitively and dropped entirely if any of those locals is reassigned or passed by `ref`/`out`. The call must hand back a `Task` or `ValueTask`; a synchronous call finishes inside the scope by definition. A task consumed where it stands is not reported — `await`, `await ... .ConfigureAwait(false)`, `.GetAwaiter().GetResult()`, `.Wait()`, or an `await` of the `Task.WhenAll` it was passed to — and neither is one whose fate this rule cannot name, such as a local declared inside the scope. Work started inside a lambda, a local function, or a query clause is skipped: a delegate runs when its consumer chooses, and background work started with `Task.Run` is DI023's finding rather than this rule's. Accepted false negatives: a task whose escape route runs through a helper method, a service resolved from a scope created in another method, and a scope-resolved singleton, which the scope does not own and therefore does not dispose.
+
+**Code Fix:** No — the repair is a choice between awaiting inside the scope, making the caller own the scope, and giving the background work a scope of its own, and only the author knows which of the three the surrounding code can support.
+
+---

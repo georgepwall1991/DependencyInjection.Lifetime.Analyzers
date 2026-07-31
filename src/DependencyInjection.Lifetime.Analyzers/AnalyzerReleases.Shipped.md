@@ -152,3 +152,10 @@ DI034 | DependencyInjection | Warning | HttpContext reaches fire-and-forget back
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI035 | DependencyInjection | Warning | One non-thread-safe service shared by every task of a Task.WhenAll fan-out
+
+## Release 3.6.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI036 | DependencyInjection | Warning | Registration runs after a provider was already built from the same IServiceCollection

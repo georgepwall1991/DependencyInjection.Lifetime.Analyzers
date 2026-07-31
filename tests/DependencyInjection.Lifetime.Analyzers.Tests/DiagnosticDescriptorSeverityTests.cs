@@ -55,6 +55,7 @@ public class DiagnosticDescriptorSeverityTests
             ["DI034", DiagnosticSeverity.Warning],
             ["DI035", DiagnosticSeverity.Warning],
             ["DI036", DiagnosticSeverity.Warning],
+        ["DI037", DiagnosticSeverity.Warning],
         ];
 
     [Theory]

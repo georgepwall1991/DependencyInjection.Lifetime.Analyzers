@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-07-31
+
+### Added
+
+- **DI037: Un-awaited task escapes the scope that created it** (new rule, Warning) — a task started on a service resolved from a `using` service scope and then allowed to leave that scope un-awaited is reported, because disposing a scope disposes every scoped service it created and the work is still running against them. Covers the task returned to the caller, discarded with `_ =` or as a bare statement, assigned to a field or property, and collected into a list declared outside the scope to be awaited after it ends; `Task` and `ValueTask` alike.
+  - The scope must be disposed by the body that starts the work — a `using` declaration or a `using` statement — since that is what fixes the moment of teardown; a scope without one is DI001's finding. The receiver must be scope-derived (the scope's `ServiceProvider`, a service resolved through it, or a local holding either, grown transitively), and every scope-derived local must be free of reassignment and `ref`/`out` writes.
+  - A task consumed where it stands is never reported: `await`, `await ... .ConfigureAwait(false)`, `.GetAwaiter().GetResult()`, `.Wait()`, or an `await` of the `Task.WhenAll` it was passed to. Work started inside a lambda, a local function, or a query clause is skipped — a delegate runs when its consumer chooses, and `Task.Run` fire-and-forget is DI023's finding.
+  - Accepted false negatives: a task whose escape route runs through a helper method, a service resolved from a scope created in another method, and a scope-resolved singleton, which the scope does not own and therefore does not dispose.
+
 ## [3.6.0] - 2026-07-30
 
 ### Added
