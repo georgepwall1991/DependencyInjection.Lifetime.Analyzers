@@ -456,7 +456,45 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             .Any(identifier =>
                 semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
                 && derived.Contains(local)
+                && CarriesTheScope(identifier, semanticModel)
             );
+
+    /// <summary>
+    /// Whether reaching through a scope-derived name yields something that could still be, or
+    /// hold, a service. Reading an id off a scoped service hands back a string, and the string
+    /// carries nothing of the scope with it.
+    /// </summary>
+    private static bool CarriesTheScope(
+        IdentifierNameSyntax identifier,
+        SemanticModel semanticModel
+    )
+    {
+        ExpressionSyntax reached = identifier;
+
+        while (true)
+        {
+            if (
+                reached.Parent is MemberAccessExpressionSyntax member
+                && member.Expression == reached
+            )
+            {
+                reached = member;
+                continue;
+            }
+
+            if (
+                reached.Parent is InvocationExpressionSyntax call && call.Expression == reached
+            )
+            {
+                reached = call;
+                continue;
+            }
+
+            break;
+        }
+
+        return CanHoldAService(semanticModel.GetTypeInfo(reached).Type);
+    }
 
     /// <summary>
     /// Whether the invocation hands back pending work: a <c>Task</c>, a <c>ValueTask</c>, or one
@@ -628,6 +666,12 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// </summary>
     private static bool TouchesInstanceStateWhileRunning(IMethodSymbol method, SyntaxNode body)
     {
+        var firstSuspension = ExecutableSyntaxHelper
+            .EnumerateSameBoundaryNodes(body)
+            .OfType<AwaitExpressionSyntax>()
+            .OrderBy(await => await.SpanStart)
+            .FirstOrDefault();
+
         foreach (var node in body.DescendantNodesAndSelf())
         {
             if (!IsInstanceStateReference(node, method.ContainingType))
@@ -635,7 +679,24 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (method.IsAsync || IsInsideNestedFunction(node, body))
+            // A delegate left behind runs whenever its consumer chooses.
+            if (IsInsideNestedFunction(node, body))
+            {
+                return true;
+            }
+
+            if (!method.IsAsync)
+            {
+                continue;
+            }
+
+            // Everything up to the first suspension has already run by the time the caller holds
+            // the task — unless a loop brings it back round after one.
+            if (
+                firstSuspension is null
+                || node.SpanStart >= firstSuspension.SpanStart
+                || IsInLoopContainingSuspension(node, body)
+            )
             {
                 return true;
             }
@@ -643,6 +704,20 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    private static bool IsInLoopContainingSuspension(SyntaxNode node, SyntaxNode body) =>
+        node.Ancestors()
+            .TakeWhile(ancestor => ancestor != body.Parent)
+            .Any(ancestor =>
+                ancestor
+                    is ForStatementSyntax
+                        or ForEachStatementSyntax
+                        or WhileStatementSyntax
+                        or DoStatementSyntax
+                && ExecutableSyntaxHelper
+                    .EnumerateSameBoundaryNodes(ancestor)
+                    .Any(inner => inner is AwaitExpressionSyntax)
+            );
 
     /// <summary>
     /// Whether the service's own disposal waits for work to finish. A type that blocks in

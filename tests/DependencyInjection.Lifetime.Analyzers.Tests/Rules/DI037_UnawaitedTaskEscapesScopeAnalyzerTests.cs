@@ -1414,4 +1414,137 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ValueReadOffAScopedServiceInline_NoDiagnostic()
+    {
+        // Codex round 11: reaching through a scoped service for a string hands back a string, and
+        // the worker built from it carries nothing of the scope.
+        var source =
+            Usings
+            + """
+                public sealed class ScopedData : IDisposable
+                {
+                    public string Id => "id";
+
+                    public void Dispose() { }
+                }
+
+                public sealed class IndependentWorker
+                {
+                    private readonly string _id;
+
+                    public IndependentWorker(string id) => _id = id;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                        _id.ToString();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var data = scope.ServiceProvider.GetRequiredService<ScopedData>();
+                        var worker = new IndependentWorker(data.Id);
+                        worker.RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task InstanceStateSnapshotBeforeFirstAwait_NoDiagnostic()
+    {
+        // Codex round 11: the field is copied while the method still runs, and only the copy is
+        // used after it suspends.
+        var source =
+            Usings
+            + """
+                public sealed class SnapshotWorker : IDisposable
+                {
+                    private readonly int _value = 1;
+
+                    public async Task RunAsync()
+                    {
+                        var snapshot = _value;
+                        await Task.Delay(10);
+                        Console.WriteLine(snapshot);
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<SnapshotWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task InstanceStateTouchedAcrossAnAwaitingLoop_ReportsDiagnostic()
+    {
+        // A loop brings the instance back round after a suspension, so the work is still using
+        // the service when the scope ends.
+        var source =
+            Usings
+            + """
+                public sealed class LoopingWorker : IDisposable
+                {
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        for (var index = 0; index < 3; index++)
+                        {
+                            _count++;
+                            await Task.Delay(10);
+                        }
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = {|DI037:scope.ServiceProvider.GetRequiredService<LoopingWorker>().RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
