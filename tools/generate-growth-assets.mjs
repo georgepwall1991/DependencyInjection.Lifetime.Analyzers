@@ -892,6 +892,20 @@ function validateSiteModel(site) {
         );
       }
     }
+
+    // A worked example present in the source but missing from the model means extraction
+    // failed silently, which is how every rule from DI023 on lost its fix example.
+    for (const [label, snippet] of [
+      ["**Problem:**", rule.problemSnippet],
+      ["**Better pattern:**", rule.betterPatternSnippet],
+    ]) {
+      if (sectionHasFenceAfter(rule.body, label) && !snippet.code.trim()) {
+        failures.push(
+          `Rule ${rule.id} has a code fence after '${label}' that did not survive extraction,` +
+            ` so its page would omit the example.`,
+        );
+      }
+    }
   }
 
   for (const page of site.problemPages) {
@@ -1074,7 +1088,9 @@ function parseRuleSections(readme, ruleIndex) {
       explainLikeImTen: extractMarkdownField(body, "> **Explain Like I'm Ten:**"),
       problemSnippet: extractCodeFenceAfterLabel(body, "**Problem:**"),
       betterPatternSnippet: extractCodeFenceAfterLabel(body, "**Better pattern:**"),
+      guardrails: sentenceCase(extractMarkdownField(body, "**Guardrails:**")),
       codeFixSummary: extractMarkdownField(body, "**Code Fix:**"),
+      body,
     });
   }
 
@@ -1567,6 +1583,20 @@ function renderRulePage(site, rule) {
       </article>`
       }
     </section>
+
+    ${
+      rule.guardrails
+        ? `<section>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Guardrails</p>
+          <h2>When ${rule.id} stays silent</h2>
+        </div>
+      </div>
+      <article class="card prose"><p>${renderInline(rule.guardrails)}</p></article>
+    </section>`
+        : ""
+    }
 
     <section>
       <div class="section-heading">
@@ -3249,8 +3279,18 @@ function extractMarkdownField(body, label) {
   return match[1].trim();
 }
 
+/** True when the source really does show an example under this label. */
+function sectionHasFenceAfter(body, label) {
+  return new RegExp(`${escapeRegex(label)}[^\\n]*\\n\\s*\\n\`\`\``).test(body ?? "");
+}
+
 function extractCodeFenceAfterLabel(body, label) {
-  const match = body.match(new RegExp(`${escapeRegex(label)}\\s*\\n\\n\`\`\`([\\w-]*)\\n([\\s\\S]*?)\\n\`\`\``));
+  // Most sections introduce the example with a sentence on the label's own line
+  // ("**Better pattern:** store the token and dispose it ..."). Requiring the label to
+  // stand alone silently dropped the example for every rule written that way.
+  const match = body.match(
+    new RegExp(`${escapeRegex(label)}[^\\n]*\\n\\s*\\n\`\`\`([\\w-]*)\\n([\\s\\S]*?)\\n\`\`\``),
+  );
   if (!match) {
     return { language: "", code: "" };
   }
