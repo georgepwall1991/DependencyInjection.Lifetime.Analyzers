@@ -618,4 +618,104 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task TaskStoredThenWaitedOnInsideScope_NoDiagnostic()
+    {
+        // Codex round 2: `Task.WaitAll` waits on what it is handed rather than on a receiver, so
+        // the work is finished before the scope ends.
+        var source =
+            Usings
+            + """
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    private Task _pending = Task.CompletedTask;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        _pending = worker.RunAsync();
+                        Task.WaitAll(_pending);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task MethodReturningCompletedTask_NoDiagnostic()
+    {
+        // Codex round 2: a body made of nothing but completed-task returns starts no work that
+        // could outlive the scope.
+        var source =
+            Usings
+            + """
+                public sealed class SyncWorker
+                {
+                    public Task RunAsync() => Task.CompletedTask;
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<SyncWorker>();
+                        worker.RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task MethodWithRealAsyncBody_ReportsDiagnostic()
+    {
+        // A body that actually awaits keeps running past the scope, so the concrete receiver is
+        // still reported.
+        var source =
+            Usings
+            + """
+                public sealed class RealWorker
+                {
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<RealWorker>();
+                        {|DI037:worker.RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

@@ -46,6 +46,19 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             "GetKeyedService"
         );
 
+    /// <summary>
+    /// Calls that wait on the tasks handed to them, so a task passed to one of these inside the
+    /// scope is finished before the scope is.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> WaitingMethodNames = ImmutableHashSet.Create(
+        "Wait",
+        "WaitAll",
+        "WaitAny",
+        "WhenAll",
+        "WhenAny",
+        "GetResult"
+    );
+
     private static readonly ImmutableHashSet<string> TaskForwardingNames = ImmutableHashSet.Create(
         "AsTask",
         "ConfigureAwait",
@@ -204,6 +217,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
             if (
                 !IsAwaitableInvocation(invocation, semanticModel)
+                || ReturnsCompletedTask(invocation, semanticModel)
                 || !IsStartedOnScopedService(
                     invocation,
                     semanticModel,
@@ -442,6 +456,77 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
+    /// Whether the method provably hands back a task that has already finished, so there is no
+    /// work left to outlive the scope. Only a body visible here and made of nothing but
+    /// completed-task returns proves it.
+    /// </summary>
+    private static bool ReturnsCompletedTask(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel
+    )
+    {
+        if (
+            semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol
+            {
+                IsAsync: false,
+                DeclaringSyntaxReferences.Length: 1
+            } method
+        )
+        {
+            return false;
+        }
+
+        var declaration = method.DeclaringSyntaxReferences[0].GetSyntax();
+
+        if (declaration is not BaseMethodDeclarationSyntax and not AccessorDeclarationSyntax)
+        {
+            return false;
+        }
+
+        if (
+            declaration is MethodDeclarationSyntax { ExpressionBody.Expression: { } expressionBody }
+        )
+        {
+            return IsCompletedTaskExpression(expressionBody);
+        }
+
+        var returns = declaration
+            .DescendantNodes(node => !ExecutableSyntaxHelper.IsExecutableBoundary(node))
+            .OfType<ReturnStatementSyntax>()
+            .ToList();
+
+        return returns.Count > 0
+            && returns.All(statement =>
+                statement.Expression is { } value && IsCompletedTaskExpression(value)
+            );
+    }
+
+    private static bool IsCompletedTaskExpression(ExpressionSyntax expression) =>
+        expression switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => IsCompletedTaskExpression(
+                parenthesized.Expression
+            ),
+            LiteralExpressionSyntax literal => literal.IsKind(SyntaxKind.DefaultLiteralExpression),
+            DefaultExpressionSyntax => true,
+            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText
+                is "CompletedTask",
+            InvocationExpressionSyntax call => GetInvokedName(call) is "FromResult" or "FromCanceled"
+                or "FromException",
+            ObjectCreationExpressionSyntax creation => creation.ArgumentList is null
+                or { Arguments.Count: 0 },
+            _ => false,
+        };
+
+    private static string? GetInvokedName(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+            SimpleNameSyntax name => name.Identifier.ValueText,
+            _ => null,
+        };
+
+    /// <summary>
     /// The service type a receiver was resolved as, followed back through the locals it passed
     /// through. <see langword="null"/> when the resolution cannot be read here, which leaves the
     /// lifetime unknown rather than proven.
@@ -640,6 +725,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 MemberAccessExpressionSyntax member
                     when BlockingConsumerNames.Contains(member.Name.Identifier.ValueText) =>
                     member.Expression,
+                // `Task.WaitAll(pending)` waits on what it is handed rather than on a receiver.
+                InvocationExpressionSyntax call
+                    when GetInvokedName(call) is { } name && WaitingMethodNames.Contains(name) =>
+                    call,
                 _ => null,
             };
 
