@@ -289,6 +289,18 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
+            if (
+                ServiceIsJoinedLater(
+                    invocation,
+                    ((MemberAccessExpressionSyntax)invocation.Expression).Expression,
+                    semanticModel,
+                    scope
+                )
+            )
+            {
+                continue;
+            }
+
             context.ReportDiagnostic(
                 Diagnostic.Create(
                     DiagnosticDescriptors.UnawaitedTaskEscapesScope,
@@ -641,7 +653,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         // task that is already finished.
         if (method.IsAsync)
         {
-            return !bodyNodes.Any(node => node is AwaitExpressionSyntax or YieldStatementSyntax);
+            return !bodyNodes.Any(node =>
+                node is YieldStatementSyntax
+                || (node is AwaitExpressionSyntax await && Suspends(await))
+            );
         }
 
         if (body is ExpressionSyntax expressionBody)
@@ -669,6 +684,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         var firstSuspension = ExecutableSyntaxHelper
             .EnumerateSameBoundaryNodes(body)
             .OfType<AwaitExpressionSyntax>()
+            .Where(Suspends)
             .OrderBy(await => await.SpanStart)
             .FirstOrDefault();
 
@@ -705,6 +721,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// Whether awaiting this actually gives up control. Awaiting a task that has already finished
+    /// runs straight on.
+    /// </summary>
+    private static bool Suspends(AwaitExpressionSyntax await) =>
+        !IsCompletedTaskExpression(await.Expression);
+
     private static bool IsInLoopContainingSuspension(SyntaxNode node, SyntaxNode body) =>
         node.Ancestors()
             .TakeWhile(ancestor => ancestor != body.Parent)
@@ -716,7 +739,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                         or DoStatementSyntax
                 && ExecutableSyntaxHelper
                     .EnumerateSameBoundaryNodes(ancestor)
-                    .Any(inner => inner is AwaitExpressionSyntax)
+                    .Any(inner => inner is AwaitExpressionSyntax await && Suspends(await))
             );
 
     /// <summary>
@@ -724,37 +747,48 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// <c>Dispose</c> has arranged the join itself, so the scope tearing it down is the moment
     /// the work is collected rather than the moment it is orphaned.
     /// </summary>
-    private static bool DisposalJoinsTheWork(INamedTypeSymbol? implementation)
+    private static bool DisposalJoinsTheWork(INamedTypeSymbol? implementation) =>
+        implementation is not null
+        && implementation
+            .GetMembers()
+            .OfType<IMethodSymbol>()
+            .Where(member => member.Name is "Dispose" or "DisposeAsync")
+            .Any(Blocks);
+
+    /// <summary>
+    /// Whether a later call on the same service waits for the work before the scope ends. A
+    /// service with a <c>Join</c> of its own is being used as a pair of calls, not forgotten
+    /// after the first.
+    /// </summary>
+    private static bool ServiceIsJoinedLater(
+        InvocationExpressionSyntax invocation,
+        ExpressionSyntax receiver,
+        SemanticModel semanticModel,
+        ScopeRegion scope
+    )
     {
-        if (implementation is null)
+        if (semanticModel.GetSymbolInfo(receiver).Symbol is not ILocalSymbol service)
         {
             return false;
         }
 
-        foreach (
-            var disposeMethod in implementation
-                .GetMembers()
-                .OfType<IMethodSymbol>()
-                .Where(member => member.Name is "Dispose" or "DisposeAsync")
-        )
+        foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(scope.Region))
         {
             if (
-                disposeMethod.DeclaringSyntaxReferences.Length != 1
-                || !ExecutableSyntaxHelper.TryGetExecutableBody(
-                    disposeMethod.DeclaringSyntaxReferences[0].GetSyntax(),
-                    out var disposeBody
+                node is not InvocationExpressionSyntax later
+                || later.SpanStart <= invocation.SpanStart
+                || later.Expression is not MemberAccessExpressionSyntax member
+                || !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(member.Expression).Symbol,
+                    service
                 )
             )
             {
                 continue;
             }
 
-            if (
-                disposeBody
-                    .DescendantNodesAndSelf()
-                    .OfType<InvocationExpressionSyntax>()
-                    .Any(call => GetInvokedName(call) is { } name && JoiningCallNames.Contains(name))
-            )
+            if (semanticModel.GetSymbolInfo(later).Symbol is IMethodSymbol laterMethod
+                && Blocks(laterMethod))
             {
                 return true;
             }
@@ -762,6 +796,20 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    /// <summary>
+    /// Whether a method's visible body waits for something to finish.
+    /// </summary>
+    private static bool Blocks(IMethodSymbol method) =>
+        method.DeclaringSyntaxReferences.Length == 1
+        && ExecutableSyntaxHelper.TryGetExecutableBody(
+            method.DeclaringSyntaxReferences[0].GetSyntax(),
+            out var body
+        )
+        && body
+            .DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Any(call => GetInvokedName(call) is { } name && JoiningCallNames.Contains(name));
 
     /// <summary>
     /// Whether the method, or a helper of its own type that it calls, stores a task in instance
