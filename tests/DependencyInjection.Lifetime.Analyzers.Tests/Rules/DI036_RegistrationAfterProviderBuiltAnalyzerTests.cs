@@ -1736,4 +1736,65 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task LocalPublishedToFieldOnDeclaration_NoDiagnostic()
+    {
+        // Codex round 11: the declaration stores the collection in a field as well, and the
+        // field is built again after the registration.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    private static IServiceCollection Shared = null!;
+
+                    public IServiceProvider Configure()
+                    {
+                        var services = Shared = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                        return Shared.BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task InterfaceTypedCustomCollection_NoDiagnostic()
+    {
+        // Codex round 11: the static type is the interface, but the collection behind it is a
+        // user implementation whose Add forwards into a container that is already running.
+        var source =
+            Usings
+            + """
+                public sealed class ForwardingServices : List<ServiceDescriptor>, IServiceCollection
+                {
+                    public IServiceProvider Live = null!;
+
+                    public new void Add(ServiceDescriptor descriptor)
+                    {
+                        base.Add(descriptor);
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        IServiceCollection services = new ForwardingServices();
+                        var probe = services.BuildServiceProvider();
+                        services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

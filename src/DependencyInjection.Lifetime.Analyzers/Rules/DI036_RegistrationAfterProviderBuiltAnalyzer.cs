@@ -388,6 +388,14 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
+        // Every registration path — extension or member — ends at the collection's own `Add`.
+        // A custom implementation is free to forward that descriptor straight into a container
+        // that is already running, in which case nothing is lost at all.
+        if (!IsFrameworkOwnedCollection(receiver, semanticModel, knownTypes, reassignedSymbols, 0))
+        {
+            return false;
+        }
+
         if (
             !CollectionKey.TryCreate(
                 receiver,
@@ -403,6 +411,79 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         collectionEvent = new CollectionEvent(invocation, receiver, registrationKey, method.Name);
         return true;
+    }
+
+    /// <summary>
+    /// True when the collection an invocation acts on is provably one the framework implements:
+    /// a framework collection class, or a framework host builder's own <c>Services</c>. A local
+    /// is followed to what it was initialised from, and a fluent registration to its receiver.
+    /// </summary>
+    private static bool IsFrameworkOwnedCollection(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        KnownTypes knownTypes,
+        ImmutableHashSet<ISymbol> reassignedSymbols,
+        int depth
+    )
+    {
+        switch (expression)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return IsFrameworkOwnedCollection(
+                    parenthesized.Expression,
+                    semanticModel,
+                    knownTypes,
+                    reassignedSymbols,
+                    depth
+                );
+
+            case InvocationExpressionSyntax fluent
+                when IsFrameworkFluentRegistration(fluent, semanticModel, knownTypes)
+                    is { } fluentReceiver:
+                return IsFrameworkOwnedCollection(
+                    fluentReceiver,
+                    semanticModel,
+                    knownTypes,
+                    reassignedSymbols,
+                    depth
+                );
+        }
+
+        // The declared type settles it whenever it names a class: an interface says nothing
+        // about whose `Add` runs.
+        if (
+            semanticModel.GetTypeInfo(expression).Type is INamedTypeSymbol
+            {
+                TypeKind: TypeKind.Class
+            } collectionType
+        )
+        {
+            return IsServiceCollection(collectionType, knownTypes)
+                && IsInNamespaceStartingWith(collectionType, FrameworkMemberNamespacePrefixes);
+        }
+
+        var symbol = semanticModel.GetSymbolInfo(expression).Symbol;
+
+        // A framework host builder creates and owns the collection behind `Services`.
+        if (
+            symbol is IPropertySymbol property
+            && CollectionKey.IsBuilderServicesProperty(property, knownTypes)
+        )
+        {
+            return true;
+        }
+
+        return symbol is ILocalSymbol
+            && depth < MaxAliasDepth
+            && !reassignedSymbols.Contains(symbol)
+            && CollectionKey.GetSingleAssignmentInitializer(symbol) is { } initializer
+            && IsFrameworkOwnedCollection(
+                initializer,
+                semanticModel,
+                knownTypes,
+                reassignedSymbols,
+                depth + 1
+            );
     }
 
     private static bool TakesServiceDescriptor(IMethodSymbol definition, KnownTypes knownTypes) =>
@@ -652,10 +733,27 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 case ArgumentSyntax argument when !argument.RefKindKeyword.IsKind(SyntaxKind.None):
                     AddSymbol(argument.Expression);
                     break;
+
+                // `var services = Shared = new ServiceCollection()` stores the collection in two
+                // places at once, so the local no longer stands for a collection only this
+                // block can reach.
+                case VariableDeclaratorSyntax { Initializer.Value: { } initializer } declarator
+                    when Unparenthesize(initializer) is AssignmentExpressionSyntax:
+                    if (semanticModel.GetDeclaredSymbol(declarator) is { } declaredLocal)
+                    {
+                        builder.Add(declaredLocal);
+                    }
+
+                    break;
             }
         }
 
         return builder.ToImmutable();
+
+        static ExpressionSyntax Unparenthesize(ExpressionSyntax expression) =>
+            expression is ParenthesizedExpressionSyntax parenthesized
+                ? Unparenthesize(parenthesized.Expression)
+                : expression;
 
         void AddSymbol(ExpressionSyntax expression)
         {
@@ -1274,7 +1372,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return true;
         }
 
-        private static bool IsBuilderServicesProperty(
+        public static bool IsBuilderServicesProperty(
             IPropertySymbol property,
             KnownTypes knownTypes
         ) =>
@@ -1301,7 +1399,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         /// The initializer of a local that is written exactly once, at its declaration. Callers
         /// have already excluded locals reassigned anywhere in the block.
         /// </summary>
-        private static ExpressionSyntax? GetSingleAssignmentInitializer(ISymbol symbol)
+        public static ExpressionSyntax? GetSingleAssignmentInitializer(ISymbol symbol)
         {
             if (symbol.DeclaringSyntaxReferences.Length != 1)
             {
