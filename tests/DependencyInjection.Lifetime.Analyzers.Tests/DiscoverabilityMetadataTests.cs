@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Xunit;
@@ -255,6 +256,30 @@ public sealed class DiscoverabilityMetadataTests
         var rendered = new FileInfo(Path.Combine(RepositoryRoot, "assets", "social-card.png"));
         Assert.True(rendered.Exists, "Missing rendered social card: assets/social-card.png");
         Assert.True(rendered.Length > 0, "Empty rendered social card: assets/social-card.png");
+
+        // og:image serves the PNG, not the SVG. Without this the SVG could be corrected and
+        // the stale count would stay visible in every link preview.
+        var sidecarPath = Path.Combine(
+            RepositoryRoot,
+            "assets",
+            "social-card.png.source-sha256"
+        );
+
+        Assert.True(
+            File.Exists(sidecarPath),
+            "Missing assets/social-card.png.source-sha256. Run scripts/render-social-card.sh."
+        );
+
+        var renderedFrom = File.ReadAllText(sidecarPath).Trim();
+        var currentSource = Convert
+            .ToHexString(SHA256.HashData(File.ReadAllBytes(cardPath)))
+            .ToLowerInvariant();
+
+        Assert.True(
+            string.Equals(renderedFrom, currentSource, StringComparison.OrdinalIgnoreCase),
+            "assets/social-card.png was rendered from an older assets/social-card.svg, so link "
+                + "previews still serve the previous artwork. Run scripts/render-social-card.sh."
+        );
     }
 
     [Fact]

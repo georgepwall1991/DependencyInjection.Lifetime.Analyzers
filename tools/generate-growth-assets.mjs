@@ -2006,6 +2006,63 @@ function buildSiteScript() {
 
     input.addEventListener("focus", load);
 
+    // The home page advertises a SearchAction against /rules/?q=... — honour it on arrival.
+    function applyQueryParameter() {
+      var query = "";
+
+      try {
+        query = (new URLSearchParams(window.location.search).get("q") || "").trim();
+      } catch (error) {
+        return;
+      }
+
+      if (!query) return;
+
+      input.value = query;
+
+      var cards = document.querySelectorAll("[data-rule-id]");
+
+      if (cards.length > 0) {
+        filterCards(cards, query);
+        return;
+      }
+
+      load().then(function () {
+        render(query);
+      });
+    }
+
+    function filterCards(cards, query) {
+      var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+      var shown = 0;
+
+      Array.prototype.forEach.call(cards, function (card) {
+        var haystack = card.textContent.toLowerCase();
+        var matches = terms.every(function (term) {
+          return haystack.indexOf(term) !== -1;
+        });
+
+        card.hidden = !matches;
+        if (matches) shown += 1;
+      });
+
+      var notice = document.createElement("p");
+      notice.className = "filter-notice";
+      notice.textContent =
+        shown + " of " + cards.length + ' rules match "' + query + '".';
+
+      var reset = document.createElement("a");
+      reset.href = window.location.pathname;
+      reset.textContent = "Show all rules";
+      notice.appendChild(document.createTextNode(" "));
+      notice.appendChild(reset);
+
+      var intro = document.querySelector(".page-intro");
+      if (intro) intro.appendChild(notice);
+    }
+
+    applyQueryParameter();
+
     form.addEventListener("keydown", function (event) {
       if (event.key === "Escape") {
         close();
@@ -2765,6 +2822,12 @@ function buildStyles() {
       padding: 0.75rem 0.9rem;
       color: var(--muted);
       font-size: 0.92rem;
+    }
+
+    .filter-notice {
+      margin: 0.75rem 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
     }
 
     .breadcrumbs ol {
