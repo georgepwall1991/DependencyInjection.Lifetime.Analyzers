@@ -593,8 +593,15 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             DefaultExpressionSyntax => true,
             MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText
                 is "CompletedTask",
-            InvocationExpressionSyntax call => GetInvokedName(call) is "FromResult" or "FromCanceled"
-                or "FromException",
+            InvocationExpressionSyntax call => GetInvokedName(call)
+                    is "FromResult"
+                        or "FromCanceled"
+                        or "FromException"
+                // `Task.WhenAll()` over nothing is finished before it is handed back.
+                || (
+                    GetInvokedName(call) is "WhenAll" or "WhenAny"
+                    && call.ArgumentList.Arguments.Count == 0
+                ),
             ObjectCreationExpressionSyntax creation => creation.ArgumentList is null
                 or { Arguments.Count: 0 },
             _ => false,
@@ -788,8 +795,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// Whether the storage the task was written to is awaited, or blocked on, before the scope
-    /// ends. Somewhere to put a task is not an escape when the scope waits for it anyway.
+    /// Whether the storage the task was written to is read again before the scope ends. Reading
+    /// it is how the scope waits — directly, through an alias, or by handing it to a helper that
+    /// blocks — so only storage nothing looks at again is provably abandoned. Adding to a
+    /// collection is the exception: that is the store being filled, not the task being watched.
     /// </summary>
     private static bool IsConsumedInsideScope(
         ExpressionSyntax target,
@@ -804,38 +813,43 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         foreach (var node in ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(scope.Region))
         {
-            var consumed = node switch
-            {
-                AwaitExpressionSyntax await => await.Expression,
-                MemberAccessExpressionSyntax member
-                    when BlockingConsumerNames.Contains(member.Name.Identifier.ValueText) =>
-                    member.Expression,
-                // Anything the storage is handed to may wait on it — `Task.WaitAll(pending)`
-                // does, and so does a helper of the codebase's own. Passing it on is not proof
-                // that the scope stops caring.
-                ArgumentSyntax argument => argument.Expression,
-                _ => null,
-            };
-
             if (
-                consumed is not null
-                && consumed
-                    .DescendantNodesAndSelf()
-                    .OfType<SimpleNameSyntax>()
-                    .Any(name =>
-                        SymbolEqualityComparer.Default.Equals(
-                            semanticModel.GetSymbolInfo(name).Symbol,
-                            storage
-                        )
-                    )
+                node is not SimpleNameSyntax name
+                || !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(name).Symbol,
+                    storage
+                )
             )
             {
-                return true;
+                continue;
             }
+
+            var reference = name.Parent is MemberAccessExpressionSyntax qualified
+                && qualified.Name == name
+                ? (ExpressionSyntax)qualified
+                : name;
+
+            if (IsWriteTarget(reference) || IsReceiverOfCollectionAdd(reference))
+            {
+                continue;
+            }
+
+            return true;
         }
 
         return false;
     }
+
+    private static bool IsWriteTarget(ExpressionSyntax reference) =>
+        reference.Parent is AssignmentExpressionSyntax assignment && assignment.Left == reference;
+
+    private static bool IsReceiverOfCollectionAdd(ExpressionSyntax reference) =>
+        reference.Parent is MemberAccessExpressionSyntax
+        {
+            Parent: InvocationExpressionSyntax
+        } member
+        && member.Expression == reference
+        && CollectionAddNames.Contains(member.Name.Identifier.ValueText);
 
     private static bool IsDeclaredOutside(ILocalSymbol local, ScopeRegion scope)
     {

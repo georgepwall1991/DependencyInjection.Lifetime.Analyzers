@@ -1045,4 +1045,71 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task StoredTaskAwaitedThroughAlias_NoDiagnostic()
+    {
+        // Codex round 7: the stored task is read into an alias and awaited through that, so the
+        // scope waits for the work after all.
+        var source =
+            Usings
+            + """
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    private Task _pending = Task.CompletedTask;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public async Task Dispatch()
+                    {
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            _pending = worker.RunAsync();
+                            var alias = _pending;
+                            await alias;
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task MethodReturningEmptyWhenAll_NoDiagnostic()
+    {
+        // Codex round 7: `Task.WhenAll()` over nothing is finished before it is handed back.
+        var source =
+            Usings
+            + """
+                public sealed class EmptyFanOutWorker : IDisposable
+                {
+                    public Task RunAsync() => Task.WhenAll();
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<EmptyFanOutWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
