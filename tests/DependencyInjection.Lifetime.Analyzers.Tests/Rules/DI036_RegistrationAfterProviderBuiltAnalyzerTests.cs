@@ -1658,4 +1658,82 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task ExtensionBuildingThroughMethodGroup_NoDiagnostic()
+    {
+        // Codex round 10: a method group defers the build without ever writing an invocation.
+        var source =
+            Usings
+            + """
+                public static class ObservedExtensions
+                {
+                    public static IServiceProvider Observed = null!;
+
+                    public static void AddObserved(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        Func<IServiceProvider> build = services.BuildServiceProvider;
+                        Observed = build();
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddObserved();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ExtensionHandingCollectionToConstructor_NoDiagnostic()
+    {
+        // Codex round 10: the collection leaves the helper through a constructor, and what
+        // receives it builds a provider of its own.
+        var source =
+            Usings
+            + """
+                public sealed class Holder
+                {
+                    public Holder(IServiceCollection services) =>
+                        Provider = services.BuildServiceProvider();
+
+                    public IServiceProvider Provider { get; }
+                }
+
+                public static class HolderExtensions
+                {
+                    public static Holder Observed = null!;
+
+                    public static void AddHeld(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        Observed = new Holder(services);
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddHeld();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

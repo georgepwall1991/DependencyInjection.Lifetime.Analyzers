@@ -477,31 +477,27 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         foreach (var reference in definition.DeclaringSyntaxReferences)
         {
-            foreach (
-                var invocation in reference
-                    .GetSyntax()
-                    .DescendantNodes()
-                    .OfType<InvocationExpressionSyntax>()
-            )
+            foreach (var node in reference.GetSyntax().DescendantNodes())
             {
-                // Building a container is spelled more than one way.
-                if (
-                    invocation.Expression is MemberAccessExpressionSyntax memberAccess
-                    && ProviderBuildingMethodNames.Contains(
-                        memberAccess.Name.Identifier.ValueText
-                    )
-                )
+                if (node is not SimpleNameSyntax name)
+                {
+                    continue;
+                }
+
+                // Building a container is spelled more than one way, and a method group defers
+                // the call without ever writing an invocation around the name.
+                if (ProviderBuildingMethodNames.Contains(name.Identifier.ValueText))
                 {
                     return false;
                 }
 
-                // The helper hands its collection to something else, which may build it.
+                // Anywhere the helper hands its collection on — an argument, a constructor, a
+                // field it is stored in — something else can build it. Calling through it and
+                // handing it back to the caller are the two uses that keep it here.
                 if (
                     collectionParameterName is not null
-                    && invocation.ArgumentList.Arguments.Any(argument =>
-                        argument.Expression is IdentifierNameSyntax identifier
-                        && identifier.Identifier.ValueText == collectionParameterName
-                    )
+                    && name.Identifier.ValueText == collectionParameterName
+                    && !IsContainedUseOfCollection(name)
                 )
                 {
                     return false;
@@ -511,6 +507,19 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 
         return true;
     }
+
+    /// <summary>
+    /// True when a mention of a helper's collection parameter cannot let the collection out:
+    /// calling a member on it, or answering the caller with it.
+    /// </summary>
+    private static bool IsContainedUseOfCollection(SimpleNameSyntax name) =>
+        name.Parent switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Expression == name,
+            ReturnStatementSyntax => true,
+            ArrowExpressionClauseSyntax => true,
+            _ => false,
+        };
 
     /// <summary>
     /// The receiver of an invocation that provably answers with the collection it was given: a
