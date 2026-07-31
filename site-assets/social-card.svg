@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="DependencyInjection.Lifetime.Analyzers — compile-time DI lifetime analyzer for .NET">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12161f"/>
+      <stop offset="0.55" stop-color="#171d2b"/>
+      <stop offset="1" stop-color="#101722"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#31c6a8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="8" fill="url(#accent)"/>
+
+  <g font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="80" y="132" fill="#8ea0bd" font-size="25" letter-spacing="3.5">ROSLYN ANALYZER · NUGET</text>
+
+    <text x="80" y="222" fill="#f4f7fc" font-size="66" font-weight="700">DependencyInjection</text>
+    <text x="80" y="298" fill="#f4f7fc" font-size="66" font-weight="700">.Lifetime.Analyzers</text>
+
+    <text x="80" y="368" fill="#b9c6dc" font-size="31">Catch captive dependencies and scope leaks at compile time.</text>
+
+    <g font-size="24" fill="#dfe7f5">
+      <rect x="80" y="406" width="265" height="52" rx="26" fill="#7c5cff" fill-opacity="0.17" stroke="#7c5cff" stroke-opacity="0.5"/>
+      <text x="100" y="439">Captive dependency</text>
+
+      <rect x="359" y="406" width="178" height="52" rx="26" fill="#31c6a8" fill-opacity="0.15" stroke="#31c6a8" stroke-opacity="0.45"/>
+      <text x="379" y="439">Scope leaks</text>
+
+      <rect x="551" y="406" width="290" height="52" rx="26" fill="#f0a13c" fill-opacity="0.15" stroke="#f0a13c" stroke-opacity="0.45"/>
+      <text x="571" y="439">BuildServiceProvider</text>
+    </g>
+
+    <text x="80" y="540" fill="#8ea0bd" font-size="26" font-family="'SF Mono', Consolas, monospace">dotnet add package DependencyInjection.Lifetime.Analyzers</text>
+
+    <text x="80" y="586" fill="#6c7d99" font-size="23">37 rules · ASP.NET Core, workers, generic host · no runtime dependency</text>
+  </g>
+
+  <g opacity="0.9" transform="translate(905 150)">
+    <circle cx="120" cy="120" r="118" fill="#7c5cff" fill-opacity="0.09" stroke="#7c5cff" stroke-opacity="0.28" stroke-width="2"/>
+    <circle cx="120" cy="120" r="78" fill="none" stroke="#31c6a8" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="7 9"/>
+    <circle cx="120" cy="120" r="30" fill="#31c6a8" fill-opacity="0.22" stroke="#31c6a8" stroke-opacity="0.6" stroke-width="2"/>
+    <circle cx="120" cy="2" r="13" fill="#7c5cff"/>
+    <circle cx="238" cy="120" r="10" fill="#31c6a8"/>
+    <circle cx="120" cy="238" r="10" fill="#f0a13c"/>
+    <circle cx="2" cy="120" r="10" fill="#7c5cff" fill-opacity="0.7"/>
+  </g>
+</svg>

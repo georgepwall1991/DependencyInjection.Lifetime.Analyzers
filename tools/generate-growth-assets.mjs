@@ -1,12 +1,30 @@
 #!/usr/bin/env node
 
-import { promises as fs, readFileSync } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
+
+const NOT_FOUND_PAGE_PATH = "/404.html";
+const SOCIAL_CARD_PATH = "/social-card.png";
+const SOCIAL_CARD_ALT =
+  "DependencyInjection.Lifetime.Analyzers — catch captive dependencies and scope leaks at compile time";
+
+/**
+ * Files copied verbatim from the repository root into the generated site.
+ * assets/ ships inside the NuGet package (README visuals); site-assets/ is docs-site only.
+ */
+const siteStaticAssets = [
+  { source: "site-assets/social-card.png", target: "social-card.png" },
+  { source: "assets/flow-ide-diagnostics.svg", target: "assets/flow-ide-diagnostics.svg" },
+  { source: "assets/flow-before-after-fix.svg", target: "assets/flow-before-after-fix.svg" },
+  { source: "assets/flow-ci-analyzer-loop.svg", target: "assets/flow-ci-analyzer-loop.svg" },
+  { source: "icon.svg", target: "icon.svg" },
+  { source: "icon.png", target: "icon.png" },
+];
 
 const paths = {
   readme: path.join(repoRoot, "README.md"),
@@ -745,6 +763,8 @@ async function generateSite(outputDir) {
   const metadata = await loadMetadata();
   const site = buildSiteModel(metadata);
 
+  validateSiteModel(site);
+
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(outputDir, { recursive: true });
 
@@ -767,9 +787,122 @@ async function generateSite(outputDir) {
 
   await writeOutput(outputDir, "sitemap.xml", renderSitemap(site));
   await writeOutput(outputDir, "robots.txt", renderRobots(site));
+  await writeOutput(outputDir, "llms.txt", renderLlmsTxt(site));
+  await writeOutput(outputDir, "site.js", buildSiteScript());
   await writeOutput(outputDir, "search-index.json", JSON.stringify(buildSearchIndex(site), null, 2));
 
-  console.log(`Generated docs site in ${outputDir}`);
+  for (const asset of siteStaticAssets) {
+    const source = path.join(repoRoot, asset.source);
+    const target = path.join(outputDir, asset.target);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target);
+  }
+
+  await verifyGeneratedSite(outputDir, site);
+
+  console.log(
+    `Generated docs site in ${outputDir}` +
+      ` (${site.rules.length} rule pages, ${site.problemPages.length} problem guides,` +
+      ` ${siteStaticAssets.length} static assets)`,
+  );
+}
+
+/**
+ * Search is only real if the index is reachable from the pages. Generating the JSON while no
+ * page loads the client is the exact state this site shipped in before, and nothing caught it,
+ * so the wiring is asserted against the written output rather than assumed.
+ */
+async function verifyGeneratedSite(outputDir, site) {
+  const failures = [];
+
+  const searchIndexPath = path.join(outputDir, "search-index.json");
+  let indexEntries = [];
+
+  try {
+    indexEntries = JSON.parse(await readText(searchIndexPath));
+  } catch (error) {
+    failures.push(`search-index.json is missing or not valid JSON: ${error.message}`);
+  }
+
+  if (indexEntries.length < site.rules.length) {
+    failures.push(
+      `search-index.json holds ${indexEntries.length} entries for ${site.rules.length} rules.`,
+    );
+  }
+
+  for (const entry of indexEntries) {
+    const target =
+      entry.path === "/"
+        ? path.join(outputDir, "index.html")
+        : path.join(outputDir, entry.path, "index.html");
+
+    if (!existsSync(target)) {
+      failures.push(`search-index.json points at '${entry.path}', which was not generated.`);
+    }
+  }
+
+  const pages = [
+    "index.html",
+    "404.html",
+    "rules/index.html",
+    ...site.rules.map((rule) => `rules/${rule.slug}/index.html`),
+  ];
+
+  for (const page of pages) {
+    const html = await readText(path.join(outputDir, page));
+
+    if (!html.includes("site.js")) {
+      failures.push(`${page} does not load site.js, so its search box would be inert.`);
+    }
+
+    if (!html.includes("data-search-root=")) {
+      failures.push(`${page} has no search input.`);
+    }
+  }
+
+  if (!existsSync(path.join(outputDir, "site.js"))) {
+    failures.push("site.js was not written.");
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Generated site verification failed (${failures.length} issue(s)):\n  - ${failures.join("\n  - ")}`,
+    );
+  }
+}
+
+/**
+ * A rule whose README section cannot be parsed still produces a page — an empty one, which is
+ * worse than no page at all because it is the URL search engines and release notes point at.
+ * Fail the build instead.
+ */
+function validateSiteModel(site) {
+  const failures = [];
+
+  if (site.rules.length === 0) {
+    failures.push("No rule sections were parsed from README.md.");
+  }
+
+  for (const rule of site.rules) {
+    for (const field of ["whatItCatches", "whyItMatters"]) {
+      if (!String(rule[field] ?? "").trim()) {
+        failures.push(
+          `Rule ${rule.id} has an empty '${field}'. Its page would render blank —` +
+            ` check the '## ${rule.id}: ...' section in README.md.`,
+        );
+      }
+    }
+  }
+
+  for (const page of site.problemPages) {
+    if (page.rules.length === 0) {
+      failures.push(`Problem guide '${page.slug}' resolves to no rules.`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Docs site validation failed (${failures.length} issue(s)):\n  - ${failures.join("\n  - ")}`);
+  }
 }
 
 async function generateReleaseNotes({ version, outputDir }) {
@@ -923,7 +1056,10 @@ function parseRuleSections(readme, ruleIndex) {
     const id = current[1];
     const title = current[2].trim();
     const start = current.index + current[0].length;
-    const end = next ? next.index : readme.indexOf("\n## Samples");
+    // The final rule section ends at the next non-rule heading. Anchoring on a named
+    // heading instead silently emptied the last rule's page whenever a new rule was
+    // appended below that heading.
+    const end = next ? next.index : nextNonRuleHeadingIndex(readme, start);
     const body = readme.slice(start, end).trim();
     const tableEntry = ruleIndex.get(id);
 
@@ -933,8 +1069,8 @@ function parseRuleSections(readme, ruleIndex) {
       title,
       severity: tableEntry?.severity ?? "Unknown",
       codeFixAvailability: tableEntry?.codeFix ?? "Unknown",
-      whatItCatches: extractMarkdownField(body, "**What it catches:**"),
-      whyItMatters: extractMarkdownField(body, "**Why it matters:**"),
+      whatItCatches: sentenceCase(extractMarkdownField(body, "**What it catches:**")),
+      whyItMatters: sentenceCase(extractMarkdownField(body, "**Why it matters:**")),
       explainLikeImTen: extractMarkdownField(body, "> **Explain Like I'm Ten:**"),
       problemSnippet: extractCodeFenceAfterLabel(body, "**Problem:**"),
       betterPatternSnippet: extractCodeFenceAfterLabel(body, "**Better pattern:**"),
@@ -943,6 +1079,25 @@ function parseRuleSections(readme, ruleIndex) {
   }
 
   return results;
+}
+
+/**
+ * These fields continue the sentence started by their README label ("What it catches: a call
+ * that ..."), so lifting them out leaves a lowercase opener in page ledes, meta descriptions,
+ * and search snippets. Only a plain lowercase first word is raised — an identifier such as
+ * `iterator` inside backticks, or a word with inner capitals, is left alone.
+ */
+function sentenceCase(text) {
+  const value = String(text ?? "");
+
+  return /^[a-z]+\b/.test(value) ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+function nextNonRuleHeadingIndex(readme, fromIndex) {
+  const pattern = /^## (?!DI\d{3}:)/gm;
+  pattern.lastIndex = fromIndex;
+  const match = pattern.exec(readme);
+  return match ? match.index : readme.length;
 }
 
 function parseChangelog(markdown) {
@@ -1215,7 +1370,7 @@ function renderIndexPage(site) {
         <p class="lede">Catch DI scope leaks, captive dependencies, BuildServiceProvider misuse, and unresolvable services before they become runtime bugs, flaky tests, or production-only failures.</p>
         <div class="hero-actions">
           <a class="button" href="https://www.nuget.org/packages/${site.packageId}">Install from NuGet</a>
-          <a class="button button-secondary" href="${rulesIndexHref}">Browse 16 rules</a>
+          <a class="button button-secondary" href="${rulesIndexHref}">Browse ${site.rules.length} rules</a>
           <a class="button button-secondary" href="${problemsIndexHref}">Solve a specific DI problem</a>
         </div>
       </div>
@@ -1295,29 +1450,45 @@ function renderRulesIndexPage(site) {
   const cards = site.rules
     .map(
       (rule) => `
-        <article class="card">
+        <article class="card" data-rule-id="${rule.id}">
           <p class="eyebrow">${rule.id}</p>
           <h2><a href="${siteHref(site, rule.pagePath)}">${escapeHtml(rule.title)}</a></h2>
-          <p>${escapeHtml(rule.whatItCatches)}</p>
-          <p class="meta">Severity: ${escapeHtml(rule.severity)} · Code fix: ${escapeHtml(rule.codeFixAvailability)}</p>
+          <p>${renderInline(rule.whatItCatches)}</p>
+          <p class="meta"><span class="severity-badge severity-${slugify(rule.severity)}">${escapeHtml(rule.severity)}</span> Code fix: ${escapeHtml(rule.codeFixAvailability)}</p>
         </article>`,
     )
     .join("");
+
+  const withCodeFixes = site.rules.filter((rule) =>
+    rule.codeFixAvailability.toLowerCase().startsWith("yes"),
+  ).length;
 
   const content = `
     <section class="page-intro">
       <p class="eyebrow">Rules</p>
       <h1>Rule index</h1>
-      <p class="lede">Browse all analyzer rules with rule summaries, README examples, and extracted sample-app snippets.</p>
+      <p class="lede">All ${site.rules.length} analyzer rules with rule summaries, README examples, and extracted sample-app snippets. ${withCodeFixes} ship a code fix.</p>
     </section>
     <section class="grid three-up">${cards}</section>
   `;
 
   return renderPage(site, {
     pagePath: "/rules/",
-    title: `Rule Index | ${site.packageId}`,
-    description: "All DependencyInjection.Lifetime.Analyzers rule pages with severity, code-fix availability, and sample-backed guidance.",
+    title: `All ${site.rules.length} DI Lifetime Rules | ${site.packageId}`,
+    description: `All ${site.rules.length} DependencyInjection.Lifetime.Analyzers rules — captive dependencies, scope leaks, BuildServiceProvider misuse and more — with default severity, code-fix availability, and sample-backed guidance.`,
     content,
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "CollectionPage",
+      name: `Rule index — ${site.packageId}`,
+      url: `${site.baseUrl}/rules/`,
+      hasPart: site.rules.map((rule) => ({
+        "@type": "TechArticle",
+        headline: `${rule.id}: ${rule.title}`,
+        url: `${site.baseUrl}${rule.pagePath}`,
+      })),
+    },
+    breadcrumbs: [{ label: "Rules", path: "/rules/" }],
   });
 }
 
@@ -1337,19 +1508,35 @@ function renderRulePage(site, rule) {
     .map((page) => `<li><a href="${siteHref(site, page.pagePath)}">${escapeHtml(page.title)}</a></li>`)
     .join("");
 
+  const position = site.rules.findIndex((entry) => entry.id === rule.id);
+  const previous = position > 0 ? site.rules[position - 1] : null;
+  const next = position >= 0 && position < site.rules.length - 1 ? site.rules[position + 1] : null;
+
+  const siblingCards = [previous, next, site.rules[(position + 2) % site.rules.length]]
+    .filter((entry, index, all) => entry && entry.id !== rule.id && all.indexOf(entry) === index)
+    .map(
+      (entry) => `
+        <article class="card">
+          <p class="eyebrow">${entry.id}</p>
+          <h3><a href="${siteHref(site, entry.pagePath)}">${escapeHtml(entry.title)}</a></h3>
+          <p class="meta">Severity: ${escapeHtml(entry.severity)} · Code fix: ${escapeHtml(entry.codeFixAvailability)}</p>
+        </article>`,
+    )
+    .join("");
+
   const content = `
     <section class="page-intro">
       <p class="eyebrow">${rule.id}</p>
       <h1>${escapeHtml(rule.title)}</h1>
-      <p class="lede">${escapeHtml(rule.whatItCatches)}</p>
-      <p class="meta">Default severity: ${escapeHtml(rule.severity)} · Code fix: ${escapeHtml(rule.codeFixAvailability)}</p>
+      <p class="lede">${renderInline(rule.whatItCatches)}</p>
+      <p class="meta"><span class="severity-badge severity-${slugify(rule.severity)}">${escapeHtml(rule.severity)}</span> Default severity · Code fix: ${escapeHtml(rule.codeFixAvailability)}</p>
     </section>
 
     <section class="grid two-up">
       <article class="card">
         <p class="eyebrow">Why it matters</p>
-        <p>${escapeHtml(rule.whyItMatters)}</p>
-        <blockquote>${escapeHtml(rule.explainLikeImTen)}</blockquote>
+        <p>${renderInline(rule.whyItMatters)}</p>
+        <blockquote>${renderInline(rule.explainLikeImTen)}</blockquote>
       </article>
       <article class="card card-contrast">
         <p class="eyebrow">Install</p>
@@ -1359,15 +1546,26 @@ function renderRulePage(site, rule) {
     </section>
 
     <section class="grid two-up">
-      <article class="card">
+      ${
+        rule.problemSnippet.code.trim()
+          ? `<article class="card">
         <p class="eyebrow">README problem example</p>
         <pre><code>${escapeHtml(rule.problemSnippet.code)}</code></pre>
-      </article>
-      <article class="card">
+      </article>`
+          : ""
+      }
+      ${
+        rule.betterPatternSnippet.code.trim()
+          ? `<article class="card">
         <p class="eyebrow">README better pattern</p>
         <pre><code>${escapeHtml(rule.betterPatternSnippet.code)}</code></pre>
-        <p class="meta">${escapeHtml(rule.codeFixSummary)}</p>
-      </article>
+        <p class="meta">${renderInline(rule.codeFixSummary)}</p>
+      </article>`
+          : `<article class="card">
+        <p class="eyebrow">Code fix</p>
+        <p class="meta">${renderInline(rule.codeFixSummary)}</p>
+      </article>`
+      }
     </section>
 
     <section>
@@ -1396,6 +1594,30 @@ function renderRulePage(site, rule) {
         </ul>
       </article>
     </section>
+
+    <nav class="rule-pager" aria-label="Rule navigation">
+      ${
+        previous
+          ? `<a class="rule-pager-link" rel="prev" href="${siteHref(site, previous.pagePath)}"><span>Previous rule</span><strong>${previous.id}: ${escapeHtml(previous.title)}</strong></a>`
+          : "<span></span>"
+      }
+      ${
+        next
+          ? `<a class="rule-pager-link is-next" rel="next" href="${siteHref(site, next.pagePath)}"><span>Next rule</span><strong>${next.id}: ${escapeHtml(next.title)}</strong></a>`
+          : "<span></span>"
+      }
+    </nav>
+
+    <section>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Nearby diagnostics</p>
+          <h2>Other rules in this family</h2>
+        </div>
+        <a class="text-link" href="${siteHref(site, "/rules/")}">All ${site.rules.length} rules</a>
+      </div>
+      <div class="grid three-up">${siblingCards}</div>
+    </section>
   `;
 
   return renderPage(site, {
@@ -1403,6 +1625,11 @@ function renderRulePage(site, rule) {
     title: `${rule.id}: ${rule.title} | ${site.packageId}`,
     description: rule.whatItCatches,
     content,
+    structuredData: buildRuleStructuredData(site, rule),
+    breadcrumbs: [
+      { label: "Rules", path: "/rules/" },
+      { label: rule.id, path: rule.pagePath },
+    ],
   });
 }
 
@@ -1420,6 +1647,7 @@ function renderProblemsIndexPage(site) {
 
   return renderPage(site, {
     pagePath: "/problems/",
+    breadcrumbs: [{ label: "Problems", path: "/problems/" }],
     title: `Problem Guides | ${site.packageId}`,
     description: "Search-targeted pages for common dependency injection failures such as captive dependencies, scope leaks, BuildServiceProvider misuse, and missing registrations.",
     content: `
@@ -1480,6 +1708,11 @@ function renderProblemPage(site, page) {
     title: `${page.title} | ${site.packageId}`,
     description: page.description,
     content,
+    structuredData: buildProblemStructuredData(site, page),
+    breadcrumbs: [
+      { label: "Problems", path: "/problems/" },
+      { label: page.title, path: page.pagePath },
+    ],
   });
 }
 
@@ -1522,6 +1755,7 @@ function renderComparePage(site) {
     title: `Analyzer Comparison Matrix | ${site.packageId}`,
     description: "Compare compile-time DI analyzer coverage against runtime validation and code review for lifetime bugs, scope leaks, and registration failures.",
     content,
+    breadcrumbs: [{ label: "Compare", path: "/compare/" }],
   });
 }
 
@@ -1545,6 +1779,7 @@ function renderAdoptionPage(site) {
     title: `Adoption Guide | ${site.packageId}`,
     description: "Install, evaluate, and roll out DependencyInjection.Lifetime.Analyzers with a staged severity policy and sample-backed documentation.",
     content,
+    breadcrumbs: [{ label: "Adoption", path: "/adoption/" }],
   });
 }
 
@@ -1581,15 +1816,16 @@ function renderLatestReleasePage(site) {
 
   return renderPage(site, {
     pagePath: "/releases/latest/",
-    title: `Latest Release | ${site.packageId}`,
-    description: `Latest curated release summary for ${site.packageId}, generated from CHANGELOG.md.`,
+    title: `Release ${site.latestRelease.version} | ${site.packageId}`,
+    description: `Latest curated release summary for ${site.packageId} ${site.latestRelease.version}, generated from CHANGELOG.md.`,
     content,
+    breadcrumbs: [{ label: `Release ${site.latestRelease.version}`, path: "/releases/latest/" }],
   });
 }
 
 function renderNotFoundPage(site) {
   return renderPage(site, {
-    pagePath: "/404.html",
+    pagePath: NOT_FOUND_PAGE_PATH,
     title: `Page Not Found | ${site.packageId}`,
     description: "Page not found.",
     content: `
@@ -1609,26 +1845,35 @@ function renderNotFoundPage(site) {
 }
 
 function renderSitemap(site) {
-  const pathsToPublish = [
-    "/",
-    "/rules/",
-    "/problems/",
-    "/compare/",
-    "/adoption/",
-    "/releases/latest/",
-    ...site.rules.map((rule) => rule.pagePath),
-    ...site.problemPages.map((page) => page.pagePath),
+  const entries = [
+    { path: "/", priority: "1.0" },
+    { path: "/rules/", priority: "0.9" },
+    { path: "/problems/", priority: "0.9" },
+    { path: "/compare/", priority: "0.6" },
+    { path: "/adoption/", priority: "0.7" },
+    { path: "/releases/latest/", priority: "0.6" },
+    ...site.rules.map((rule) => ({ path: rule.pagePath, priority: "0.8" })),
+    ...site.problemPages.map((page) => ({ path: page.pagePath, priority: "0.8" })),
   ];
 
-  const urls = pathsToPublish
-    .map((pagePath) => `<url><loc>${escapeHtml(`${site.baseUrl}${pagePath === "/" ? "" : pagePath}`)}</loc></url>`)
+  // No <lastmod>: the site republishes on every push to main, so the only date available
+  // here is the last package release, which is not when these pages changed. A wrong
+  // lastmod is worse than none — crawlers discount the signal once it disagrees with what
+  // they fetch.
+  const urls = entries
+    .map((entry) => {
+      // The home canonical carries a trailing slash; the sitemap must agree or the two
+      // URLs compete as separate documents.
+      const loc = entry.path === "/" ? `${site.baseUrl}/` : `${site.baseUrl}${entry.path}`;
+      return `<url><loc>${escapeXml(loc)}</loc><priority>${entry.priority}</priority></url>`;
+    })
     .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>\n`;
 }
 
 function renderRobots(site) {
-  return `User-agent: *\nAllow: /\nSitemap: ${site.baseUrl}/sitemap.xml\n`;
+  return `User-agent: *\nAllow: /\n\nSitemap: ${site.baseUrl}/sitemap.xml\n`;
 }
 
 function buildSearchIndex(site) {
@@ -1636,38 +1881,475 @@ function buildSearchIndex(site) {
     {
       title: site.packageId,
       path: "/",
+      kind: "Overview",
       description:
         "Compile-time DI analyzer for Microsoft.Extensions.DependencyInjection covering scope leaks, captive dependencies, BuildServiceProvider misuse, service locator usage, and unresolvable services.",
     },
     ...site.rules.map((rule) => ({
       title: `${rule.id}: ${rule.title}`,
       path: rule.pagePath,
-      description: rule.whatItCatches,
+      kind: rule.id,
+      description: toMetaDescription(rule.whatItCatches),
     })),
     ...site.problemPages.map((page) => ({
       title: page.title,
       path: page.pagePath,
-      description: page.description,
+      kind: "Problem guide",
+      description: toMetaDescription(page.description),
+    })),
+    ...["/rules/", "/problems/", "/compare/", "/adoption/", "/releases/latest/"].map((pagePath) => ({
+      title: site.navigation.find((item) => item.path === pagePath)?.label ?? pagePath,
+      path: pagePath,
+      kind: "Guide",
+      description: "",
     })),
   ];
 }
 
+function renderLlmsTxt(site) {
+  const rules = site.rules
+    .map(
+      (rule) =>
+        `- [${rule.id}: ${rule.title}](${site.baseUrl}${rule.pagePath}): ${toMetaDescription(rule.whatItCatches)}`,
+    )
+    .join("\n");
+
+  const problems = site.problemPages
+    .map((page) => `- [${page.title}](${site.baseUrl}${page.pagePath}): ${toMetaDescription(page.description)}`)
+    .join("\n");
+
+  return `# ${site.packageId}
+
+> Roslyn analyzer package for Microsoft.Extensions.DependencyInjection. It reports dependency
+> injection lifetime bugs at compile time — captive dependencies, scope leaks, undisposed scopes,
+> BuildServiceProvider misuse, service locator drift, unresolvable and circular registrations —
+> in Visual Studio, Rider, and dotnet build. It adds no runtime dependency and stays quiet when
+> a bug cannot be proven statically.
+
+Version ${site.version}. Install: \`dotnet add package ${site.packageId} --version ${site.version}\`
+(reference it with \`PrivateAssets="all"\`).
+
+## Rules
+
+${rules}
+
+## Problem guides
+
+${problems}
+
+## Reference
+
+- [Rule index](${site.baseUrl}/rules/): every diagnostic with default severity and code-fix availability.
+- [Adoption guide](${site.baseUrl}/adoption/): staged rollout and severity configuration.
+- [Comparison](${site.baseUrl}/compare/): how static analysis differs from runtime scope validation and code review.
+- [Latest release](${site.baseUrl}/releases/latest/): current release notes.
+- [Source](${site.repositoryUrl}): analyzer implementation, tests, and sample app.
+`;
+}
+
+function buildSiteScript() {
+  return normalizeNewlines(`(function () {
+  "use strict";
+
+  function escapeText(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function escapeAttribute(value) {
+    return escapeText(value).replace(/"/g, "&quot;");
+  }
+
+  function initSearch() {
+    var form = document.querySelector("[data-search-root]");
+    if (!form) return;
+
+    var input = form.querySelector("input[type=search]");
+    var results = form.querySelector(".site-search-results");
+    var root = form.getAttribute("data-search-root") || "./";
+    var entries = null;
+    var pending = null;
+    var active = -1;
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var first = results.querySelector("a");
+      if (first) window.location.href = first.href;
+    });
+
+    // One request, however fast the typing: without this every keystroke before the first
+    // response starts another fetch, and an earlier one finishing last would render results
+    // for a query the user has already moved past.
+    function load() {
+      if (entries) return Promise.resolve(entries);
+      if (pending) return pending;
+
+      pending = fetch(root + "search-index.json")
+        .then(function (response) {
+          return response.ok ? response.json() : [];
+        })
+        .catch(function () {
+          return [];
+        })
+        .then(function (data) {
+          entries = Array.isArray(data) ? data : [];
+          pending = null;
+          return entries;
+        });
+
+      return pending;
+    }
+
+    function score(entry, terms) {
+      var haystack = (entry.title + " " + (entry.kind || "") + " " + (entry.description || "")).toLowerCase();
+      var title = entry.title.toLowerCase();
+      var total = 0;
+
+      for (var i = 0; i < terms.length; i += 1) {
+        if (haystack.indexOf(terms[i]) === -1) return -1;
+        total += title.indexOf(terms[i]) === 0 ? 3 : title.indexOf(terms[i]) !== -1 ? 2 : 1;
+      }
+
+      return total;
+    }
+
+    function close() {
+      results.hidden = true;
+      results.innerHTML = "";
+      input.setAttribute("aria-expanded", "false");
+      active = -1;
+    }
+
+    function highlight(next) {
+      var links = results.querySelectorAll("a");
+      if (links.length === 0) return;
+      active = (next + links.length) % links.length;
+      for (var i = 0; i < links.length; i += 1) {
+        links[i].classList.toggle("is-active", i === active);
+      }
+      links[active].focus();
+    }
+
+    function render(query) {
+      var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+      if (terms.length === 0) return close();
+
+      var matches = entries
+        .map(function (entry) {
+          return { entry: entry, score: score(entry, terms) };
+        })
+        .filter(function (candidate) {
+          return candidate.score >= 0;
+        })
+        .sort(function (a, b) {
+          return b.score - a.score;
+        })
+        .slice(0, 8);
+
+      if (matches.length === 0) {
+        results.innerHTML = '<p class="site-search-empty">No matching rule or guide.</p>';
+        results.hidden = false;
+        input.setAttribute("aria-expanded", "true");
+        return;
+      }
+
+      results.innerHTML = matches
+        .map(function (match) {
+          var entry = match.entry;
+          var href = root.replace(/\\/$/, "") + entry.path;
+          return (
+            '<a role="option" href="' + escapeAttribute(href) + '">' +
+            '<span class="site-search-kind">' + escapeText(entry.kind || "Page") + "</span>" +
+            "<span>" + escapeText(entry.title) + "</span>" +
+            "</a>"
+          );
+        })
+        .join("");
+
+      results.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+      active = -1;
+    }
+
+    input.addEventListener("input", function () {
+      var query = input.value.trim();
+      updateCardFilter(query);
+
+      if (!query) return close();
+
+      load().then(function () {
+        // The box may have moved on while the index was loading.
+        if (input.value.trim() !== query) return;
+        render(query);
+      });
+    });
+
+    input.addEventListener("focus", load);
+
+    // On the rule index the query also filters the grid in place. It has to track the input,
+    // not just the arrival query, or editing the box leaves the grid filtered by the old one.
+    var cards = document.querySelectorAll("[data-rule-id]");
+    var notice = null;
+
+    function updateCardFilter(query) {
+      if (cards.length === 0) return;
+
+      var terms = query.toLowerCase().split(/\\s+/).filter(Boolean);
+      var shown = 0;
+
+      Array.prototype.forEach.call(cards, function (card) {
+        var matches =
+          terms.length === 0 ||
+          terms.every(function (term) {
+            return card.textContent.toLowerCase().indexOf(term) !== -1;
+          });
+
+        card.hidden = !matches;
+        if (matches) shown += 1;
+      });
+
+      if (terms.length === 0) {
+        if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
+        notice = null;
+        return;
+      }
+
+      if (!notice) {
+        notice = document.createElement("p");
+        notice.className = "filter-notice";
+        var intro = document.querySelector(".page-intro");
+        if (intro) {
+          intro.appendChild(notice);
+        } else {
+          notice = null;
+          return;
+        }
+      }
+
+      notice.textContent = shown + " of " + cards.length + ' rules match "' + query + '".';
+
+      var reset = document.createElement("a");
+      reset.href = window.location.pathname;
+      reset.textContent = "Show all rules";
+      notice.appendChild(document.createTextNode(" "));
+      notice.appendChild(reset);
+    }
+
+    // The home page advertises a SearchAction against /rules/?q=... — honour it on arrival.
+    function applyQueryParameter() {
+      var query = "";
+
+      try {
+        query = (new URLSearchParams(window.location.search).get("q") || "").trim();
+      } catch (error) {
+        return;
+      }
+
+      if (!query) return;
+
+      input.value = query;
+      updateCardFilter(query);
+
+      if (cards.length === 0) {
+        load().then(function () {
+          render(query);
+        });
+      }
+    }
+
+    applyQueryParameter();
+
+    form.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        close();
+        input.focus();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        highlight(active + 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        highlight(active - 1);
+      }
+    });
+
+    document.addEventListener("click", function (event) {
+      if (!form.contains(event.target)) close();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "/" && document.activeElement !== input && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
+        event.preventDefault();
+        input.focus();
+      }
+    });
+  }
+
+  function initCopyButtons() {
+    if (!navigator.clipboard) return;
+
+    var blocks = document.querySelectorAll("pre > code");
+
+    Array.prototype.forEach.call(blocks, function (code) {
+      var pre = code.parentNode;
+      if (!code.textContent.trim()) return;
+
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "copy-button";
+      button.textContent = "Copy";
+      button.setAttribute("aria-label", "Copy code to clipboard");
+
+      button.addEventListener("click", function () {
+        navigator.clipboard.writeText(code.textContent).then(function () {
+          button.textContent = "Copied";
+          button.classList.add("is-copied");
+          window.setTimeout(function () {
+            button.textContent = "Copy";
+            button.classList.remove("is-copied");
+          }, 1600);
+        });
+      });
+
+      pre.classList.add("has-copy");
+      pre.appendChild(button);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () {
+      initSearch();
+      initCopyButtons();
+    });
+  } else {
+    initSearch();
+    initCopyButtons();
+  }
+})();
+`);
+}
+
 function buildHomeStructuredData(site) {
+  const description =
+    "Roslyn analyzers for Microsoft.Extensions.DependencyInjection that catch scope leaks, captive dependencies, BuildServiceProvider misuse, service locator usage, and unresolvable services at compile time.";
+
   return {
     "@context": "https://schema.org",
-    "@type": "SoftwareSourceCode",
-    name: site.packageId,
-    codeRepository: site.repositoryUrl,
-    programmingLanguage: "C#",
-    runtimePlatform: ".NET",
-    version: site.version,
-    description:
-      "Roslyn analyzers for Microsoft.Extensions.DependencyInjection that catch scope leaks, captive dependencies, BuildServiceProvider misuse, service locator usage, and unresolvable services at compile time.",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${site.baseUrl}/#website`,
+        url: `${site.baseUrl}/`,
+        name: site.packageId,
+        description,
+        inLanguage: "en",
+        potentialAction: {
+          "@type": "SearchAction",
+          target: {
+            "@type": "EntryPoint",
+            urlTemplate: `${site.baseUrl}/rules/?q={search_term_string}`,
+          },
+          "query-input": "required name=search_term_string",
+        },
+      },
+      {
+        "@type": "SoftwareSourceCode",
+        "@id": `${site.baseUrl}/#software`,
+        name: site.packageId,
+        codeRepository: site.repositoryUrl,
+        programmingLanguage: "C#",
+        runtimePlatform: ".NET",
+        version: site.version,
+        license: "https://opensource.org/licenses/MIT",
+        description,
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${site.baseUrl}/#application`,
+        name: site.packageId,
+        applicationCategory: "DeveloperApplication",
+        operatingSystem: "Windows, macOS, Linux",
+        softwareVersion: site.version,
+        downloadUrl: `https://www.nuget.org/packages/${site.packageId}`,
+        description,
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "USD",
+        },
+      },
+    ],
   };
 }
 
-function renderPage(site, { pagePath, title, description, content, structuredData }) {
+function buildRuleStructuredData(site, rule) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    headline: `${rule.id}: ${rule.title}`,
+    description: toMetaDescription(rule.whatItCatches),
+    url: `${site.baseUrl}${rule.pagePath}`,
+    inLanguage: "en",
+    articleSection: "Diagnostic rule",
+    keywords: [
+      rule.id,
+      rule.title,
+      "dependency injection",
+      "service lifetime",
+      "Roslyn analyzer",
+      "Microsoft.Extensions.DependencyInjection",
+    ].join(", "),
+    about: {
+      "@type": "SoftwareSourceCode",
+      name: site.packageId,
+      programmingLanguage: "C#",
+      codeRepository: site.repositoryUrl,
+    },
+    isPartOf: {
+      "@type": "WebSite",
+      "@id": `${site.baseUrl}/#website`,
+    },
+  };
+}
+
+function buildProblemStructuredData(site, page) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: [
+      {
+        "@type": "Question",
+        name: page.title,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: toMetaDescription(`${page.summary} ${page.description}`),
+        },
+      },
+      ...page.rules.map((rule) => ({
+        "@type": "Question",
+        name: `Which diagnostic reports this — what does ${rule.id} catch?`,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: toMetaDescription(rule.whatItCatches),
+        },
+      })),
+    ],
+  };
+}
+
+function renderPage(site, { pagePath, title, description, content, structuredData, breadcrumbs }) {
   const canonical = pagePath === "/" ? `${site.baseUrl}/` : `${site.baseUrl}${pagePath}`;
+  // 404.html is served for any missing URL while the browser keeps that URL in the address
+  // bar, so a relative root would resolve its assets under the missing path. It alone must
+  // address the site root absolutely.
+  const root =
+    pagePath === NOT_FOUND_PAGE_PATH
+      ? `${site.basePath}/`
+      : pagePath === "/"
+        ? "./"
+        : relativeDepth(pagePath);
+  const metaDescription = toMetaDescription(description);
   const navigation = site.navigation
     .map((item) => {
       const href = item.href ?? siteHref(site, item.path);
@@ -1676,46 +2358,131 @@ function renderPage(site, { pagePath, title, description, content, structuredDat
     })
     .join("");
 
-  const structuredDataMarkup = structuredData
-    ? `<script type="application/ld+json">${JSON.stringify(structuredData)}</script>`
-    : "";
+  const graphs = [structuredData, buildBreadcrumbStructuredData(site, breadcrumbs)].filter(Boolean);
+  const structuredDataMarkup = graphs
+    .map((graph) => `<script type="application/ld+json">${JSON.stringify(graph)}</script>`)
+    .join("\n    ");
+
+  const breadcrumbTrail =
+    breadcrumbs && breadcrumbs.length > 0
+      ? `<nav class="breadcrumbs" aria-label="Breadcrumb"><ol>${[
+          { label: "Home", path: "/" },
+          ...breadcrumbs,
+        ]
+          .map((crumb, index, all) =>
+            index === all.length - 1
+              ? `<li aria-current="page">${escapeHtml(crumb.label)}</li>`
+              : `<li><a href="${siteHref(site, crumb.path)}">${escapeHtml(crumb.label)}</a></li>`,
+          )
+          .join("")}</ol></nav>`
+      : "";
 
   return normalizeNewlines(`<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f7f4ec" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#12161f" media="(prefers-color-scheme: dark)">
     <title>${escapeHtml(title)}</title>
-    <meta name="description" content="${escapeHtml(description)}">
+    <meta name="description" content="${escapeHtml(metaDescription)}">
+    <meta name="robots" content="${
+      pagePath === NOT_FOUND_PAGE_PATH
+        ? "noindex, follow"
+        : "index, follow, max-image-preview:large, max-snippet:-1"
+    }">
+    <link rel="canonical" href="${escapeHtml(canonical)}">
+    <meta property="og:site_name" content="${escapeHtml(site.packageId)}">
     <meta property="og:title" content="${escapeHtml(title)}">
-    <meta property="og:description" content="${escapeHtml(description)}">
+    <meta property="og:description" content="${escapeHtml(metaDescription)}">
     <meta property="og:type" content="website">
     <meta property="og:url" content="${escapeHtml(canonical)}">
-    <link rel="canonical" href="${escapeHtml(canonical)}">
-    <link rel="stylesheet" href="${pagePath === "/" ? "./styles.css" : `${relativeDepth(pagePath)}styles.css`}">
+    <meta property="og:locale" content="en_GB">
+    <meta property="og:image" content="${escapeHtml(`${site.baseUrl}${SOCIAL_CARD_PATH}`)}">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="${escapeHtml(SOCIAL_CARD_ALT)}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="${escapeHtml(title)}">
+    <meta name="twitter:description" content="${escapeHtml(metaDescription)}">
+    <meta name="twitter:image" content="${escapeHtml(`${site.baseUrl}${SOCIAL_CARD_PATH}`)}">
+    <meta name="twitter:image:alt" content="${escapeHtml(SOCIAL_CARD_ALT)}">
+    <link rel="icon" href="${root}icon.svg" type="image/svg+xml">
+    <link rel="icon" href="${root}icon.png" sizes="128x128" type="image/png">
+    <link rel="apple-touch-icon" href="${root}icon.png">
+    <link rel="stylesheet" href="${root}styles.css">
     ${structuredDataMarkup}
   </head>
   <body>
     <div class="site-shell">
+      <a class="skip-link" href="#main">Skip to content</a>
       <header class="site-header">
-        <a class="brand" href="${pagePath === "/" ? "./" : `${relativeDepth(pagePath)}`}">${escapeHtml(site.packageId)}</a>
+        <a class="brand" href="${root}">${escapeHtml(site.packageId)}</a>
         <nav>${navigation}</nav>
+        <form class="site-search" role="search" data-search-root="${root}" autocomplete="off">
+          <label class="visually-hidden" for="site-search-input">Search the rules and problem guides</label>
+          <input id="site-search-input" type="search" placeholder="Search rules (try DI003 or captive)" aria-controls="site-search-results" aria-expanded="false">
+          <div id="site-search-results" class="site-search-results" role="listbox" hidden></div>
+        </form>
       </header>
-      <main>
+      ${breadcrumbTrail}
+      <main id="main">
         ${content}
       </main>
       <footer class="site-footer">
-        <p>${escapeHtml(site.packageId)} · <a href="https://www.nuget.org/packages/${site.packageId}">NuGet</a> · <a href="${site.repositoryUrl}">GitHub</a> · <a href="${siteHref(site, "/releases/latest/")}">Latest release</a></p>
+        <p>${escapeHtml(site.packageId)} · <a href="https://www.nuget.org/packages/${site.packageId}">NuGet</a> · <a href="${site.repositoryUrl}">GitHub</a> · <a href="${siteHref(site, "/rules/")}">All rules</a> · <a href="${siteHref(site, "/releases/latest/")}">Latest release</a></p>
       </footer>
     </div>
+    <script src="${root}site.js" defer></script>
   </body>
 </html>`);
+}
+
+function buildBreadcrumbStructuredData(site, breadcrumbs) {
+  if (!breadcrumbs || breadcrumbs.length === 0) {
+    return null;
+  }
+
+  const trail = [{ label: "Home", path: "/" }, ...breadcrumbs];
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: trail.map((crumb, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: crumb.label,
+      item: crumb.path === "/" ? `${site.baseUrl}/` : `${site.baseUrl}${crumb.path}`,
+    })),
+  };
+}
+
+/**
+ * Meta descriptions are plain text: markdown emphasis and code ticks leak as literal
+ * punctuation into search snippets and link previews otherwise.
+ */
+function toMetaDescription(text) {
+  const plain = String(text ?? "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (plain.length <= 300) {
+    return plain;
+  }
+
+  const clipped = plain.slice(0, 297);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${(lastSpace > 200 ? clipped.slice(0, lastSpace) : clipped).replace(/[,;:]$/, "")}…`;
 }
 
 function buildStyles() {
   return normalizeNewlines(`
     :root {
-      color-scheme: light;
+      color-scheme: light dark;
       --bg: #f7f4ec;
       --panel: rgba(255, 255, 255, 0.9);
       --panel-strong: #17211c;
@@ -1728,6 +2495,29 @@ function buildStyles() {
       --shadow: 0 20px 50px rgba(23, 33, 28, 0.08);
       --radius: 24px;
       --max: 1160px;
+      --page-background:
+        radial-gradient(circle at top left, rgba(177, 77, 36, 0.12), transparent 26rem),
+        radial-gradient(circle at top right, rgba(23, 33, 28, 0.1), transparent 24rem),
+        linear-gradient(180deg, #f7f4ec 0%, #f0ece3 100%);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12161f;
+        --panel: rgba(31, 39, 54, 0.82);
+        --panel-strong: #0d1119;
+        --text: #eef2f9;
+        --muted: #9dabc4;
+        --line: rgba(224, 232, 245, 0.16);
+        --accent: #f0955f;
+        --accent-strong: #ffb98a;
+        --accent-soft: rgba(240, 149, 95, 0.16);
+        --shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+        --page-background:
+          radial-gradient(circle at top left, rgba(124, 92, 255, 0.16), transparent 26rem),
+          radial-gradient(circle at top right, rgba(49, 198, 168, 0.12), transparent 24rem),
+          linear-gradient(180deg, #12161f 0%, #0d1119 100%);
+      }
     }
 
     * {
@@ -1736,10 +2526,7 @@ function buildStyles() {
 
     html {
       min-height: 100%;
-      background:
-        radial-gradient(circle at top left, rgba(177, 77, 36, 0.12), transparent 26rem),
-        radial-gradient(circle at top right, rgba(23, 33, 28, 0.1), transparent 24rem),
-        linear-gradient(180deg, #f7f4ec 0%, #f0ece3 100%);
+      background: var(--page-background);
       font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
       color: var(--text);
     }
@@ -2045,6 +2832,265 @@ function buildStyles() {
 
       .site-header nav a {
         margin: 0 1rem 0 0;
+      }
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      background: var(--panel-strong);
+      color: #fff;
+      padding: 0.6rem 1rem;
+      border-radius: 0 0 12px 0;
+      z-index: 20;
+    }
+
+    .skip-link:focus {
+      left: 0;
+    }
+
+    .site-search {
+      position: relative;
+      flex: 0 1 22rem;
+      min-width: 12rem;
+    }
+
+    .site-search input {
+      width: 100%;
+      padding: 0.6rem 0.9rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.95rem;
+    }
+
+    .site-search input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .site-search-results {
+      position: absolute;
+      z-index: 30;
+      top: calc(100% + 0.45rem);
+      left: 0;
+      right: 0;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      max-height: 60vh;
+      overflow-y: auto;
+    }
+
+    .site-search-results a {
+      display: flex;
+      gap: 0.6rem;
+      align-items: baseline;
+      padding: 0.6rem 0.9rem;
+      text-decoration: none;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+    }
+
+    .site-search-results a:last-child {
+      border-bottom: 0;
+    }
+
+    .site-search-results a:hover,
+    .site-search-results a:focus,
+    .site-search-results a.is-active {
+      background: var(--accent-soft);
+    }
+
+    .site-search-kind {
+      flex: 0 0 auto;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .site-search-empty {
+      margin: 0;
+      padding: 0.75rem 0.9rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .filter-notice {
+      margin: 0.75rem 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .breadcrumbs ol {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      list-style: none;
+      margin: 0 0 1rem;
+      padding: 0;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .breadcrumbs li + li::before {
+      content: "/";
+      margin-right: 0.45rem;
+      opacity: 0.6;
+    }
+
+    .severity-badge {
+      display: inline-block;
+      padding: 0.1rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      font-size: 0.75rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-right: 0.4rem;
+    }
+
+    .severity-error {
+      background: rgba(203, 62, 43, 0.14);
+      border-color: rgba(203, 62, 43, 0.45);
+    }
+
+    .severity-warning {
+      background: rgba(240, 161, 60, 0.16);
+      border-color: rgba(240, 161, 60, 0.45);
+    }
+
+    .severity-info {
+      background: rgba(49, 158, 198, 0.14);
+      border-color: rgba(49, 158, 198, 0.4);
+    }
+
+    pre.has-copy {
+      position: relative;
+    }
+
+    .copy-button {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 120ms ease-in;
+    }
+
+    pre.has-copy:hover .copy-button,
+    .copy-button:focus-visible {
+      opacity: 1;
+    }
+
+    .copy-button.is-copied {
+      color: var(--accent-strong);
+      border-color: var(--accent);
+      opacity: 1;
+    }
+
+    .rule-pager {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin: 2rem 0 1rem;
+    }
+
+    .rule-pager-link {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      max-width: 22rem;
+      padding: 0.85rem 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      text-decoration: none;
+    }
+
+    .rule-pager-link.is-next {
+      margin-left: auto;
+      text-align: right;
+    }
+
+    .rule-pager-link span {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    @media (max-width: 720px) {
+      .rule-pager {
+        flex-direction: column;
+      }
+
+      .rule-pager-link.is-next {
+        margin-left: 0;
+        text-align: left;
+      }
+
+      .site-search {
+        flex: 1 1 100%;
+      }
+    }
+
+    /* The remaining light-mode literals: everything else already reads from the palette. */
+    @media (prefers-color-scheme: dark) {
+      a {
+        text-decoration-color: rgba(240, 149, 95, 0.55);
+      }
+
+      .hero {
+        background: linear-gradient(140deg, rgba(41, 51, 71, 0.88), rgba(27, 34, 49, 0.82));
+      }
+
+      code {
+        background: rgba(224, 232, 245, 0.1);
+      }
+
+      .card-contrast {
+        background: linear-gradient(160deg, rgba(9, 12, 18, 0.96), rgba(20, 26, 38, 0.92));
+      }
+
+      .severity-error {
+        background: rgba(255, 122, 102, 0.18);
+        border-color: rgba(255, 122, 102, 0.5);
+      }
+
+      .severity-warning {
+        background: rgba(255, 190, 110, 0.18);
+        border-color: rgba(255, 190, 110, 0.5);
+      }
+
+      .severity-info {
+        background: rgba(118, 200, 235, 0.18);
+        border-color: rgba(118, 200, 235, 0.45);
       }
     }
   `);
