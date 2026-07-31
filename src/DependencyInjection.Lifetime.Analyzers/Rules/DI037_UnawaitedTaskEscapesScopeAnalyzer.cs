@@ -726,13 +726,36 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// runs straight on.
     /// </summary>
     private static bool Suspends(AwaitExpressionSyntax await) =>
-        !IsCompletedTaskExpression(await.Expression)
-        && !(
+        !IsAlreadyFinished(await.Expression);
+
+    /// <summary>
+    /// Whether an awaited expression is work that has already finished, seen through the wrappers
+    /// that hand the same pending work back — <c>ConfigureAwait</c>, <c>AsTask</c> — and through a
+    /// local that names it.
+    /// </summary>
+    private static bool IsAlreadyFinished(ExpressionSyntax expression)
+    {
+        if (IsCompletedTaskExpression(expression))
+        {
+            return true;
+        }
+
+        return expression switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => IsAlreadyFinished(
+                parenthesized.Expression
+            ),
+            InvocationExpressionSyntax
+            {
+                Expression: MemberAccessExpressionSyntax forwarding
+            } when TaskForwardingNames.Contains(forwarding.Name.Identifier.ValueText) =>
+                IsAlreadyFinished(forwarding.Expression),
             // `var done = Task.CompletedTask; await done;` is the same nothing, one name later.
-            await.Expression is IdentifierNameSyntax name
-            && FindLocalInitializer(name) is { } initializer
-            && IsCompletedTaskExpression(initializer)
-        );
+            IdentifierNameSyntax name => FindLocalInitializer(name) is { } initializer
+                && IsAlreadyFinished(initializer),
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// The initializer of the local a name refers to, when that local is declared in the same
@@ -854,16 +877,41 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// Whether a method's visible body waits for something to finish.
     /// </summary>
-    private static bool Blocks(IMethodSymbol method) =>
-        method.DeclaringSyntaxReferences.Length == 1
-        && ExecutableSyntaxHelper.TryGetExecutableBody(
-            method.DeclaringSyntaxReferences[0].GetSyntax(),
-            out var body
+    private static bool Blocks(IMethodSymbol method) => Blocks(method, 0);
+
+    private static bool Blocks(IMethodSymbol method, int depth)
+    {
+        if (
+            depth > MaxHelperDepth
+            || method.DeclaringSyntaxReferences.Length != 1
+            || !ExecutableSyntaxHelper.TryGetExecutableBody(
+                method.DeclaringSyntaxReferences[0].GetSyntax(),
+                out var body
+            )
         )
-        && body
-            .DescendantNodesAndSelf()
-            .OfType<InvocationExpressionSyntax>()
-            .Any(call => GetInvokedName(call) is { } name && JoiningCallNames.Contains(name));
+        {
+            return false;
+        }
+
+        foreach (var call in body.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (GetInvokedName(call) is { } name && JoiningCallNames.Contains(name))
+            {
+                return true;
+            }
+
+            // The wait may be a helper or two down: `Dispose() => Drain();`.
+            if (
+                GetOwnInstanceMethod(call, method.ContainingType) is { } helper
+                && Blocks(helper, depth + 1)
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Whether the method, or a helper of its own type that it calls, stores a task in instance

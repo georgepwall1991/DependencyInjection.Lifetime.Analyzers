@@ -1722,4 +1722,91 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AwaitOfACompletedTaskThroughConfigureAwait_NoDiagnostic()
+    {
+        // Codex round 14: the wrapper hands back the same finished work, so awaiting it still
+        // never gives up control.
+        var source =
+            Usings
+            + """
+                public sealed class ConfiguredInstantWorker : IDisposable
+                {
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.CompletedTask.ConfigureAwait(false);
+                        _count++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider
+                            .GetRequiredService<ConfiguredInstantWorker>()
+                            .RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task DisposalJoiningThroughAHelper_NoDiagnostic()
+    {
+        // Codex round 14: the wait is a helper down from Dispose, and it still cannot finish
+        // before the work does.
+        var source =
+            Usings
+            + """
+                public sealed class DrainingWorker : IDisposable
+                {
+                    private readonly ManualResetEventSlim _done = new ManualResetEventSlim();
+
+                    private int _count;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.Delay(10);
+                        _count++;
+                        _done.Set();
+                    }
+
+                    public void Dispose() => Drain();
+
+                    private void Drain() => _done.Wait();
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<DrainingWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
