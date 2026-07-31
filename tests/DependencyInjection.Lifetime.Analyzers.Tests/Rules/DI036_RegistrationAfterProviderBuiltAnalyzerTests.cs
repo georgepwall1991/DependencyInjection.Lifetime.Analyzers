@@ -1797,4 +1797,39 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task BuildInsideDeferredQuery_NoDiagnostic()
+    {
+        // Codex round 12: a query clause defers the build until the sequence is enumerated,
+        // which happens after the registration.
+        // `using` clauses must precede the type declarations `Usings` carries, so this source is
+        // self-contained.
+        var source = """
+            using System;
+            using System.Linq;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IAudit { }
+
+            public class Audit : IAudit { }
+
+            public class Composition
+            {
+                public IServiceProvider Configure()
+                {
+                    var services = new ServiceCollection();
+                    var providers =
+                        from seed in new[] { 0 }
+                        select services.BuildServiceProvider();
+                    services.AddSingleton<IAudit, Audit>();
+                    return providers.Single();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

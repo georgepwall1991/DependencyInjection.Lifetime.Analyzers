@@ -244,14 +244,20 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         later.Span.Contains(earlier.Span) || later.SpanStart > earlier.SpanStart;
 
     /// <summary>
-    /// True when the node sits inside a lambda or local function declared within the code block,
-    /// so its execution order relative to the surrounding statements is not fixed.
+    /// True when the node sits inside a lambda, a local function, or a query clause declared
+    /// within the code block, so its execution order relative to the surrounding statements is
+    /// not fixed: the delegate or the query can run whenever its consumer chooses.
     /// </summary>
     private static bool IsInsideNestedFunction(SyntaxNode node, SyntaxNode codeBlock)
     {
         for (var current = node; current is not null && current != codeBlock; current = current.Parent)
         {
-            if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            if (
+                current
+                is AnonymousFunctionExpressionSyntax
+                    or LocalFunctionStatementSyntax
+                    or QueryExpressionSyntax
+            )
             {
                 return true;
             }
