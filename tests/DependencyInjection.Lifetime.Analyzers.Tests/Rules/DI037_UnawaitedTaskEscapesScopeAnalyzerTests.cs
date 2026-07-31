@@ -1892,4 +1892,127 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AwaitOfWhenAllOverFinishedWork_NoDiagnostic()
+    {
+        // Codex round 16: WhenAll over work that has already finished is finished work.
+        var source =
+            Usings
+            + """
+                public sealed class FanInWorker : IDisposable
+                {
+                    private int _state;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.WhenAll(Task.CompletedTask);
+                        _state++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<FanInWorker>();
+                        _ = worker.RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task LocalFunctionCalledInPlace_NoDiagnostic()
+    {
+        // Codex round 16: a local function nobody keeps a delegate to runs where it is called,
+        // which is before the task is handed back.
+        var source =
+            Usings
+            + """
+                public sealed class InlineWorker : IDisposable
+                {
+                    private int _state;
+
+                    public Task RunAsync()
+                    {
+                        void Read() => Console.WriteLine(_state);
+
+                        Read();
+                        return Task.Delay(10);
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<InlineWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task LocalFunctionHandedOffAsADelegate_ReportsDiagnostic()
+    {
+        // Once something takes the local function as a value, it can run whenever that value is
+        // called — including after the scope has gone.
+        var source =
+            Usings
+            + """
+                public sealed class DeferredInlineWorker : IDisposable
+                {
+                    private int _state;
+
+                    public Task RunAsync()
+                    {
+                        void Bump() => _state++;
+
+                        return Task.Run(Bump);
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = {|DI037:scope.ServiceProvider.GetRequiredService<DeferredInlineWorker>().RunAsync()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

@@ -1034,10 +1034,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     is "FromResult"
                         or "FromCanceled"
                         or "FromException"
-                // `Task.WhenAll()` over nothing is finished before it is handed back.
+                // `Task.WhenAll()` over nothing — or over work that has already finished — is
+                // finished before it is handed back.
                 || (
                     GetInvokedName(call) is "WhenAll" or "WhenAny"
-                    && call.ArgumentList.Arguments.Count == 0
+                    && call.ArgumentList.Arguments.All(argument =>
+                        IsAlreadyFinished(argument.Expression)
+                    )
                 ),
             ObjectCreationExpressionSyntax creation => creation.ArgumentList is null
                 or { Arguments.Count: 0 },
@@ -1337,18 +1340,43 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     {
         for (var current = node; current is not null && current != region; current = current.Parent)
         {
-            if (
-                current
-                is AnonymousFunctionExpressionSyntax
-                    or LocalFunctionStatementSyntax
-                    or QueryExpressionSyntax
-            )
+            if (current is AnonymousFunctionExpressionSyntax or QueryExpressionSyntax)
+            {
+                return true;
+            }
+
+            // A local function nobody keeps a delegate to runs where it is called, which is here.
+            if (current is LocalFunctionStatementSyntax localFunction && IsDeferred(localFunction))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Whether a local function could run later: something takes it as a value rather than
+    /// calling it outright.
+    /// </summary>
+    private static bool IsDeferred(LocalFunctionStatementSyntax localFunction)
+    {
+        var container = localFunction.Parent;
+
+        if (container is null)
+        {
+            return true;
+        }
+
+        var name = localFunction.Identifier.ValueText;
+
+        return container
+            .DescendantNodes()
+            .OfType<IdentifierNameSyntax>()
+            .Any(identifier =>
+                identifier.Identifier.ValueText == name
+                && identifier.Parent is not InvocationExpressionSyntax
+            );
     }
 
     /// <summary>
