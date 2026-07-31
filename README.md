@@ -1761,4 +1761,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Licence
 
 MIT Licence - see [LICENSE](LICENSE).
-

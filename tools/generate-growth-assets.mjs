@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { promises as fs, readFileSync } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -798,11 +798,77 @@ async function generateSite(outputDir) {
     await fs.copyFile(source, target);
   }
 
+  await verifyGeneratedSite(outputDir, site);
+
   console.log(
     `Generated docs site in ${outputDir}` +
       ` (${site.rules.length} rule pages, ${site.problemPages.length} problem guides,` +
       ` ${siteStaticAssets.length} static assets)`,
   );
+}
+
+/**
+ * Search is only real if the index is reachable from the pages. Generating the JSON while no
+ * page loads the client is the exact state this site shipped in before, and nothing caught it,
+ * so the wiring is asserted against the written output rather than assumed.
+ */
+async function verifyGeneratedSite(outputDir, site) {
+  const failures = [];
+
+  const searchIndexPath = path.join(outputDir, "search-index.json");
+  let indexEntries = [];
+
+  try {
+    indexEntries = JSON.parse(await readText(searchIndexPath));
+  } catch (error) {
+    failures.push(`search-index.json is missing or not valid JSON: ${error.message}`);
+  }
+
+  if (indexEntries.length < site.rules.length) {
+    failures.push(
+      `search-index.json holds ${indexEntries.length} entries for ${site.rules.length} rules.`,
+    );
+  }
+
+  for (const entry of indexEntries) {
+    const target =
+      entry.path === "/"
+        ? path.join(outputDir, "index.html")
+        : path.join(outputDir, entry.path, "index.html");
+
+    if (!existsSync(target)) {
+      failures.push(`search-index.json points at '${entry.path}', which was not generated.`);
+    }
+  }
+
+  const pages = [
+    "index.html",
+    "404.html",
+    "rules/index.html",
+    ...site.rules.map((rule) => `rules/${rule.slug}/index.html`),
+  ];
+
+  for (const page of pages) {
+    const html = await readText(path.join(outputDir, page));
+
+    if (!html.includes("site.js")) {
+      failures.push(`${page} does not load site.js, so its search box would be inert.`);
+    }
+
+    if (!html.includes("data-search-root=")) {
+      failures.push(`${page} has no search input.`);
+    }
+  }
+
+  if (!existsSync(path.join(outputDir, "site.js"))) {
+    failures.push("site.js was not written.");
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Generated site verification failed (${failures.length} issue(s)):\n  - ${failures.join("\n  - ")}`,
+    );
+  }
 }
 
 /**
