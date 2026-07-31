@@ -212,6 +212,13 @@ public static class DiagnosticIds
     public const string RegistrationAfterProviderBuilt = "DI036";
 
     /// <summary>
+    /// DI037: A task started on a service resolved from a using scope leaves that scope without
+    /// being awaited, so the scope — and every scoped service it owns — is disposed while the
+    /// work is still running.
+    /// </summary>
+    public const string UnawaitedTaskEscapesScope = "DI037";
+
+    /// <summary>
     /// DI030: A collection owned by a singleton service or held in a static member is written with
     /// request-derived keys and never evicted, or an IMemoryCache entry is written with neither an
     /// expiration nor a size limit. The store grows monotonically for the life of the process.

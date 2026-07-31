@@ -364,6 +364,21 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI037: A task started inside a using scope leaves it without being awaited, so the scope is
+    /// disposed while the work is still running.
+    /// </summary>
+    public static readonly DiagnosticDescriptor UnawaitedTaskEscapesScope = new(
+        id: DiagnosticIds.UnawaitedTaskEscapesScope,
+        title: "Un-awaited task escapes the scope that created it",
+        messageFormat: "'{0}' returns a task that leaves scope '{1}' without being awaited, so the scope is disposed while the work is still running",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A using scope is disposed the moment control leaves it, and disposing a scope disposes every scoped service it created. Returning, discarding, or storing a task started on one of those services hands back work that keeps running against services already torn down: an ObjectDisposedException from a DbContext at best, and silent operation on half-disposed state at worst. Await the task inside the scope, or give the work a scope of its own that it disposes when it finishes.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI031: One implementation registered under several service types yields one instance per
     /// registration, not one shared instance.
     /// </summary>

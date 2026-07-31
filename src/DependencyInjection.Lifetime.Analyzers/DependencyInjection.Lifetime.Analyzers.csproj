@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.6.0</Version>
+    <Version>3.7.0</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>

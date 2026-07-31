@@ -938,6 +938,34 @@
         }
       ],
       "approvedSecondaryDiagnostics": []
+    },
+    {
+      "folder": "DI037",
+      "ruleId": "DI037",
+      "claims": [
+        {
+          "filePathContains": "DI037/UnawaitedTaskEscapesScopeExamples.cs",
+          "anchor": "return archiver.ArchiveAsync(orderId);",
+          "ruleId": "DI037",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": [
+        {
+          "filePathContains": "DI037/UnawaitedTaskEscapesScopeExamples.cs",
+          "anchor": "var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 1
+        },
+        {
+          "filePathContains": "DI037/UnawaitedTaskEscapesScopeExamples.cs",
+          "anchor": "var archiver = scope.ServiceProvider.GetRequiredService<IOrderArchiver>();",
+          "ruleId": "DI007",
+          "severity": "note",
+          "occurrence": 2
+        }
+      ]
     }
   ],
   "fileClaims": [],

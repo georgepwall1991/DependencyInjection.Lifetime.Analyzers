@@ -260,6 +260,13 @@ const ruleSampleConfig = {
       { label: "Sample app build-last registration pattern", symbol: "ConfigureGood" },
     ],
   },
+  DI037: {
+    samplePath: "samples/SampleApp/Diagnostics/DI037/UnawaitedTaskEscapesScopeExamples.cs",
+    highlights: [
+      { label: "Sample app un-awaited task note", symbol: "ArchiveBad" },
+      { label: "Sample app await-inside-scope pattern", symbol: "ArchiveGood" },
+    ],
+  },
   DI033: {
     samplePath: "samples/SampleApp/Diagnostics/DI033/ExternallyOwnedInstanceExamples.cs",
     highlights: [

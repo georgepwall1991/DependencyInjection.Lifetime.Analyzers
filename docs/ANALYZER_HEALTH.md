@@ -186,6 +186,14 @@ Six releases in one sweep, each shipped as its own PR, review cycle, and tag:
   followed transitively, `goto` bail-out, `Clear()` exclusion) was mutation-tested: deleting it makes
   its own regression test fail. Fifteen adversarial review rounds ran against the rule; the last
   returned no false positives.
+- **3.7.0 — DI037 un-awaited task escapes the scope that created it.** A task started on a
+  scope-resolved service and then returned, discarded, stored, or collected outside the scope keeps
+  running against services the scope has already disposed.
+  **Boundary vs DI023:** DI023 owns background work started with `Task.Run`/`StartNew` and thrown
+  away; DI037 owns the task the scoped service itself hands back, with no thread-pool call involved.
+  **Boundary vs DI004:** DI004 owns a use written after the scope's disposal point; DI037 owns a use
+  written inside the scope whose effect outlives it.
+  **Boundary vs DI001:** a scope with no `using` has no proven disposal point, so DI001 keeps it.
 
 Every one of these went through repeated adversarial review; the accepted false negatives are
 recorded in CHANGELOG.md next to each rule, and each fixed false positive has a regression test.
