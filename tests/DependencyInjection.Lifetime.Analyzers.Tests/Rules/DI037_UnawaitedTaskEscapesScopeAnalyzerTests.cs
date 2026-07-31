@@ -2452,4 +2452,94 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task LiteralArgumentTakesASynchronousBranch_NoDiagnostic()
+    {
+        // Codex round 22: the flag this call site pins sends the body out before its first await.
+        var source =
+            Usings
+            + """
+                public sealed class ValidatingWorker : IDisposable
+                {
+                    private int _processed;
+
+                    public async Task RunAsync(bool validateOnly)
+                    {
+                        if (validateOnly)
+                        {
+                            return;
+                        }
+
+                        await Task.Delay(100);
+                        _processed++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<ValidatingWorker>();
+                        worker.RunAsync(validateOnly: true);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task LiteralArgumentTakesTheAwaitingBranch_ReportsDiagnostic()
+    {
+        // The other value of the same flag reaches the await, so the escape is still reported.
+        var source =
+            Usings
+            + """
+                public sealed class ValidatingWorker : IDisposable
+                {
+                    private int _processed;
+
+                    public async Task RunAsync(bool validateOnly)
+                    {
+                        if (validateOnly)
+                        {
+                            return;
+                        }
+
+                        await Task.Delay(100);
+                        _processed++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var worker = scope.ServiceProvider.GetRequiredService<ValidatingWorker>();
+                        {|DI037:worker.RunAsync(validateOnly: false)|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

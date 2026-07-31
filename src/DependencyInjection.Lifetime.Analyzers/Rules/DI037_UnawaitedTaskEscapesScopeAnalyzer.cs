@@ -697,6 +697,13 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // A literal argument can settle the question before the body has the chance to suspend:
+        // `RunAsync(validateOnly: true)` leaves on that flag and never reaches its first await.
+        if (LeavesBeforeSuspending(invocation, called, method, body))
+        {
+            return true;
+        }
+
         // An async body with nothing to await runs straight through to its end and hands back a
         // task that is already finished.
         if (method.IsAsync)
@@ -719,6 +726,149 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 statement.Expression is { } value && IsCompletedTaskExpression(value)
             );
     }
+
+    /// <summary>
+    /// Whether the arguments at this call site send the body out of a guard clause before any of
+    /// its awaits can suspend.
+    /// </summary>
+    private static bool LeavesBeforeSuspending(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol called,
+        IMethodSymbol method,
+        SyntaxNode body
+    )
+    {
+        if (body is not BlockSyntax block)
+        {
+            return false;
+        }
+
+        var flags = GetLiteralFlagArguments(invocation, called, method);
+
+        if (flags.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var statement in block.Statements)
+        {
+            if (
+                statement is IfStatementSyntax guard
+                && Evaluate(guard.Condition, flags) == true
+                && LeavesThePath(guard.Statement)
+                && FinishesTheWork(guard.Statement, method)
+            )
+            {
+                return true;
+            }
+
+            if (
+                statement
+                    .DescendantNodesAndSelf()
+                    .Any(node => node is AwaitExpressionSyntax await && Suspends(await))
+            )
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The parameters this call site pins to <c>true</c> or <c>false</c>, by the name the body
+    /// knows them by.
+    /// </summary>
+    private static Dictionary<string, bool> GetLiteralFlagArguments(
+        InvocationExpressionSyntax invocation,
+        IMethodSymbol called,
+        IMethodSymbol method
+    )
+    {
+        var flags = new Dictionary<string, bool>();
+        var arguments = invocation.ArgumentList.Arguments;
+
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+
+            var position = argument.NameColon is { } named
+                ? called.Parameters.IndexOf(
+                    called.Parameters.FirstOrDefault(parameter =>
+                        parameter.Name == named.Name.Identifier.ValueText
+                    )
+                )
+                : index;
+
+            if (position < 0 || position >= method.Parameters.Length)
+            {
+                continue;
+            }
+
+            var value = argument.Expression.Kind() switch
+            {
+                SyntaxKind.TrueLiteralExpression => true,
+                SyntaxKind.FalseLiteralExpression => false,
+                _ => (bool?)null,
+            };
+
+            if (value is { } known)
+            {
+                flags[method.Parameters[position].Name] = known;
+            }
+        }
+
+        return flags;
+    }
+
+    /// <summary>
+    /// What a condition comes to, given the parameters this call site pinned — <c>null</c> when
+    /// the answer depends on anything else.
+    /// </summary>
+    private static bool? Evaluate(ExpressionSyntax condition, Dictionary<string, bool> flags) =>
+        condition switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => Evaluate(
+                parenthesized.Expression,
+                flags
+            ),
+            PrefixUnaryExpressionSyntax negation
+                when negation.IsKind(SyntaxKind.LogicalNotExpression) => Evaluate(
+                negation.Operand,
+                flags
+            ) is { } inner
+                ? !inner
+                : null,
+            LiteralExpressionSyntax literal => literal.Kind() switch
+            {
+                SyntaxKind.TrueLiteralExpression => true,
+                SyntaxKind.FalseLiteralExpression => false,
+                _ => (bool?)null,
+            },
+            IdentifierNameSyntax name => flags.TryGetValue(name.Identifier.ValueText, out var value)
+                ? value
+                : null,
+            _ => null,
+        };
+
+    /// <summary>
+    /// Whether leaving here leaves nothing running: an <c>async</c> body that returns before its
+    /// first suspension is finished by the time the caller sees its task, and a plain one has to
+    /// hand back work that is already over.
+    /// </summary>
+    private static bool FinishesTheWork(StatementSyntax statement, IMethodSymbol method) =>
+        statement switch
+        {
+            BlockSyntax { Statements.Count: 1 } block => FinishesTheWork(
+                block.Statements[0],
+                method
+            ),
+            ThrowStatementSyntax => true,
+            ReturnStatementSyntax { Expression: null } => true,
+            ReturnStatementSyntax { Expression: { } value } => method.IsAsync
+                || IsCompletedTaskExpression(value),
+            _ => false,
+        };
 
     /// <summary>
     /// Whether the service's own state is read or written by work that is still running after the
