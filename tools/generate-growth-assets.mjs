@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 
+const NOT_FOUND_PAGE_PATH = "/404.html";
 const SOCIAL_CARD_PATH = "/social-card.png";
 const SOCIAL_CARD_ALT =
   "DependencyInjection.Lifetime.Analyzers — catch captive dependencies and scope leaks at compile time";
@@ -1758,7 +1759,7 @@ function renderLatestReleasePage(site) {
 
 function renderNotFoundPage(site) {
   return renderPage(site, {
-    pagePath: "/404.html",
+    pagePath: NOT_FOUND_PAGE_PATH,
     title: `Page Not Found | ${site.packageId}`,
     description: "Page not found.",
     content: `
@@ -2273,7 +2274,15 @@ function buildProblemStructuredData(site, page) {
 
 function renderPage(site, { pagePath, title, description, content, structuredData, breadcrumbs }) {
   const canonical = pagePath === "/" ? `${site.baseUrl}/` : `${site.baseUrl}${pagePath}`;
-  const root = pagePath === "/" ? "./" : relativeDepth(pagePath);
+  // 404.html is served for any missing URL while the browser keeps that URL in the address
+  // bar, so a relative root would resolve its assets under the missing path. It alone must
+  // address the site root absolutely.
+  const root =
+    pagePath === NOT_FOUND_PAGE_PATH
+      ? `${site.basePath}/`
+      : pagePath === "/"
+        ? "./"
+        : relativeDepth(pagePath);
   const metaDescription = toMetaDescription(description);
   const navigation = site.navigation
     .map((item) => {
@@ -2312,7 +2321,11 @@ function renderPage(site, { pagePath, title, description, content, structuredDat
     <meta name="theme-color" content="#12161f" media="(prefers-color-scheme: dark)">
     <title>${escapeHtml(title)}</title>
     <meta name="description" content="${escapeHtml(metaDescription)}">
-    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+    <meta name="robots" content="${
+      pagePath === NOT_FOUND_PAGE_PATH
+        ? "noindex, follow"
+        : "index, follow, max-image-preview:large, max-snippet:-1"
+    }">
     <link rel="canonical" href="${escapeHtml(canonical)}">
     <meta property="og:site_name" content="${escapeHtml(site.packageId)}">
     <meta property="og:title" content="${escapeHtml(title)}">
