@@ -351,6 +351,19 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI036: A registration runs after the provider was built, so the container ignores it.
+    /// </summary>
+    public static readonly DiagnosticDescriptor RegistrationAfterProviderBuilt = new(
+        id: DiagnosticIds.RegistrationAfterProviderBuilt,
+        title: "Registration added after the provider was built",
+        messageFormat: "'{0}' runs after the provider was built from this collection, so the container ignores this registration",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "BuildServiceProvider copies the descriptor list into the provider it returns, and a host builder's Build does the same. Mutating the IServiceCollection afterwards changes nothing the running container can see, so the service silently fails to resolve or resolves to the earlier registration. Move the registration above the build, or build the provider only after registration is complete."
+    );
+
+    /// <summary>
     /// DI031: One implementation registered under several service types yields one instance per
     /// registration, not one shared instance.
     /// </summary>

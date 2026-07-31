@@ -253,6 +253,13 @@ const ruleSampleConfig = {
       { label: "Sample app dual-disposable pattern", symbol: "Good_DualDisposableUploadQueue" },
     ],
   },
+  DI036: {
+    samplePath: "samples/SampleApp/Diagnostics/DI036/RegistrationAfterBuildExamples.cs",
+    highlights: [
+      { label: "Sample app registration-after-build note", symbol: "ConfigureBad" },
+      { label: "Sample app build-last registration pattern", symbol: "ConfigureGood" },
+    ],
+  },
   DI033: {
     samplePath: "samples/SampleApp/Diagnostics/DI033/ExternallyOwnedInstanceExamples.cs",
     highlights: [

@@ -46,6 +46,7 @@ For the latest full rule content, see:
 | [DI033](#di033-container-will-not-dispose-a-pre-built-instance) | Container will not dispose a pre-built instance | Info | No |
 | [DI034](#di034-httpcontext-used-in-fire-and-forget-background-work) | HttpContext used in fire-and-forget background work | Warning | No |
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
+| [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 
 ---
 
@@ -1438,3 +1439,44 @@ public class PriceService
 **Guardrails:** reported at **Info**, because a key space that is unbounded in the type system may be bounded in production. The "never evicted" proof is sound rather than heuristic: the field must be `private`, so every reference to it lives inside the declaring type and a complete scan of that type is a complete proof. Anything not recognized as a write or a pure read makes the candidate silent — a `Remove`/`TryRemove`/`Clear`/`Dequeue`/`Pop`, any read of `Count` or `Length` (a size cap), the field passed as an argument, reassigned, iterated with `foreach`, used in LINQ, or captured into a lambda (a background eviction timer). Bounded keys are excluded up front: any compile-time constant, and any `enum`, `bool`, `System.Type`, or `char` key. One-time initialization is excluded too — constructor, static-constructor and initializer writes, assembly and `Enum.GetValues` scans, `Lazy<>` factories, and one-shot flag guards. Interface-typed fields (`IDictionary<,>`) stay silent because the backing type may be frozen or capped, as do `ImmutableDictionary`/`FrozenDictionary`, lock registries (`SemaphoreSlim`, `Lazy<>`, `Task`, `Mutex`-shaped value types), non-private fields, and types registered both singleton and scoped. Shapes owned by other rules are excluded rather than duplicated: a scope-resolved value stored into a collection is **DI002**, a scoped service cached by a singleton is **DI003**, and a static dictionary of providers is **DI006**. For `IMemoryCache`, options built anywhere other than inline at the call site stay silent, and a compilation-wide `MemoryCacheOptions.SizeLimit` disables the tier entirely. Two editorconfig knobs are available: `dotnet_code_quality.DI030.allowed_cache_types` and `dotnet_code_quality.DI030.detect_memory_cache_bounds`. Accepted false negatives: a key reached through a local alias, non-private and static-property caches, multi-level nested dictionaries, and collection types outside the seven recognized generics.
 
 **Code Fix:** No — and none planned. There is no single correct eviction policy: LRU, a TTL, a size cap, or a documented decision that the key space really is bounded are all valid answers, and a fixer that silently picks one would be worse than the diagnostic.
+
+---
+
+## DI036: Registration Added After The Provider Was Built
+
+**What it catches:** a call that mutates an `IServiceCollection` — `AddSingleton`, `TryAddScoped`, `Configure`, `Replace`, `Add(descriptor)`, any `AddXxx`/`TryAddXxx` extension — executed after a provider was already built from that same collection in the same method. The build is either `BuildServiceProvider()` on the collection or `Build()` on a host or web-application builder whose `Services` property *is* that collection, which covers the minimal-API shape `var app = builder.Build(); builder.Services.AddSingleton<...>();`.
+
+**Why it matters:** `BuildServiceProvider` copies the descriptor list into the provider it returns, and a host builder does the same when it builds. Every mutation after that point writes into a collection nothing reads again. There is no error and no warning at run time — the service either fails to resolve with `InvalidOperationException: No service for type 'X' has been registered`, or silently resolves to the registration the build did capture, so a `Replace` or a test-time override appears to be ignored. It is a favourite failure of integration-test fixtures and of `Program.cs` files where a late `builder.Services` line drifts below `builder.Build()`.
+
+> **Explain Like I'm Ten:** The photo was already taken. Waving after the shutter clicks does not put you in the picture.
+
+**Problem:**
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+
+var app = builder.Build();
+
+builder.Services.AddSingleton<IAudit, Audit>();  // DI036: the app never sees this
+```
+
+**Better pattern:** finish registering, then build.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddScoped<IReporting, Reporting>();
+builder.Services.AddSingleton<IAudit, Audit>();
+
+var app = builder.Build();
+```
+
+**Guardrails:** the rule reports only what it can prove, and the proof is execution order inside one code block rather than source order alone. The build must be *unconditional* relative to the registration — a build nested in an `if`, a ternary arm, the right side of `&&`/`||`/`??`, or a switch arm may never have run, so it proves nothing — and it must come first in the shared statement list. A later build on the same collection cancels the finding outright, because that provider does see the registration; that keeps the probe-then-rebuild idiom silent, including when the rebuild is chained onto the registration itself (`services.AddSingleton<T>().BuildServiceProvider()`). A build inside a lambda, a local function, or a query clause cancels too, since a deferred context can run whenever its consumer chooses. A build and a registration that share an enclosing loop are skipped, because the next iteration builds again, and any `goto` in the code block disables the rule there.
+
+The collection has to be one this rule can account for from end to end. It must be rooted in a local of the block — a parameter belongs to the caller, and a field or property is reachable from every other member of the type, so either can be built again elsewhere — and never reassigned, passed by `ref`/`out`, or published to a second storage location as it is declared. It must be a collection the framework itself implements, or a framework host builder's own `Services`: a custom `IServiceCollection` is free to forward a descriptor straight into a container that is already running, in which case nothing is lost. Collections are matched by symbol path (`services`, `builder.Services`), so two different collections never pair, and a collection reached through a method call is not keyed at all — except a framework registration extension, which provably answers with the collection it was given.
+
+Anything that lets the collection out cancels the rule on it, wherever it appears in the block: reading it into a variable, passing it as an argument, returning it, capturing it, storing it in a field, or handing on the host builder that carries it. The same applies to a registration's own result, which is the collection again, unless it flows straight into another framework registration or build. Registration extensions written in the codebase are followed into their bodies — and into the calls they make on the collection in turn — and are trusted only when nothing there builds a provider or lets the collection escape; a method group counts as building, since it defers the call without writing one. Extensions with no source here are trusted by namespace. `Clear()`, `Remove`, and `RemoveAll` are deliberately not reported mutations: clearing after a build is the reuse idiom of test fixtures, not a lost registration.
+
+Accepted false negatives, all of them deliberate: a build and a registration in different methods; `IHostBuilder.ConfigureServices` callbacks, whose registrations run inside `Build`, not after it; collections rooted in a parameter, field, or property; custom `IServiceCollection` implementations; helper extensions that build internally or hand the collection on; and any block where the collection or its builder escapes.
+
+**Code Fix:** No — the repair is a choice between moving the registration above the build and moving the build below it, and only the author knows whether anything between the two depends on the provider already existing.
