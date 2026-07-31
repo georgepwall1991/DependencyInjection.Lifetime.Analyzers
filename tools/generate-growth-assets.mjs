@@ -1903,6 +1903,7 @@ function buildSiteScript() {
     var results = form.querySelector(".site-search-results");
     var root = form.getAttribute("data-search-root") || "./";
     var entries = null;
+    var pending = null;
     var active = -1;
 
     form.addEventListener("submit", function (event) {
@@ -1911,20 +1912,27 @@ function buildSiteScript() {
       if (first) window.location.href = first.href;
     });
 
+    // One request, however fast the typing: without this every keystroke before the first
+    // response starts another fetch, and an earlier one finishing last would render results
+    // for a query the user has already moved past.
     function load() {
       if (entries) return Promise.resolve(entries);
-      return fetch(root + "search-index.json")
+      if (pending) return pending;
+
+      pending = fetch(root + "search-index.json")
         .then(function (response) {
           return response.ok ? response.json() : [];
         })
+        .catch(function () {
+          return [];
+        })
         .then(function (data) {
           entries = Array.isArray(data) ? data : [];
-          return entries;
-        })
-        .catch(function () {
-          entries = [];
+          pending = null;
           return entries;
         });
+
+      return pending;
     }
 
     function score(entry, terms) {
@@ -2005,6 +2013,8 @@ function buildSiteScript() {
       if (!query) return close();
 
       load().then(function () {
+        // The box may have moved on while the index was loading.
+        if (input.value.trim() !== query) return;
         render(query);
       });
     });
