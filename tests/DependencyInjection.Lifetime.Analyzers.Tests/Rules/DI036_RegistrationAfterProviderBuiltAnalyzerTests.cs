@@ -1898,4 +1898,81 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             HostingReferences
         );
     }
+
+    [Fact]
+    public async Task ExtensionBuildingThroughAnotherExtension_NoDiagnostic()
+    {
+        // Codex round 14: the helper never names BuildServiceProvider itself — it calls another
+        // extension on the collection, and that one builds.
+        var source =
+            Usings
+            + """
+                public static class ObservedExtensions
+                {
+                    public static IServiceProvider Seen = null!;
+
+                    public static IServiceProvider Snapshot(this IServiceCollection services) =>
+                        services.BuildServiceProvider();
+
+                    public static IServiceCollection AddObserved(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        Seen = services.Snapshot();
+                        return services;
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddObserved();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ExtensionDelegatingToPlainRegistrationHelper_ReportsDiagnostic()
+    {
+        // The nested call registers and nothing more, so the chain stays trusted and the lost
+        // registration is still reported.
+        var source =
+            Usings
+            + """
+                public static class AuditExtensions
+                {
+                    public static IServiceCollection AddAuditCore(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IAudit, Audit>();
+                        return services;
+                    }
+
+                    public static IServiceCollection AddAuditing(this IServiceCollection services)
+                    {
+                        return services.AddAuditCore();
+                    }
+                }
+
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        {|DI036:services.AddAuditing()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }

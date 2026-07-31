@@ -19,6 +19,8 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
 {
     private const int MaxAliasDepth = 8;
 
+    private const int MaxHelperDepth = 3;
+
     /// <summary>
     /// Mutating <c>IServiceCollection</c> members whose effect is lost once the provider exists.
     /// Removal verbs (<c>Clear</c>, <c>Remove</c>, <c>RemoveAll</c>) are deliberately absent:
@@ -357,7 +359,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return true;
         }
 
-        if (!IsRegistrationMethod(method, definition, knownTypes))
+        if (!IsRegistrationMethod(method, definition, knownTypes, semanticModel.Compilation, 0))
         {
             return false;
         }
@@ -501,7 +503,9 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     private static bool IsRegistrationMethod(
         IMethodSymbol method,
         IMethodSymbol definition,
-        KnownTypes knownTypes
+        KnownTypes knownTypes,
+        Compilation compilation,
+        int depth
     )
     {
         // A call that hands back a provider builds one itself, so its own registrations reach it.
@@ -515,7 +519,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
-        if (!BuildsNoProviderOfItsOwn(definition))
+        if (!BuildsNoProviderOfItsOwn(definition, knownTypes, compilation, depth))
         {
             return false;
         }
@@ -546,7 +550,12 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
     /// when its body is visible here and contains no <c>BuildServiceProvider</c> call, because a
     /// helper that builds and stores its own provider does see what it just registered.
     /// </summary>
-    private static bool BuildsNoProviderOfItsOwn(IMethodSymbol definition)
+    private static bool BuildsNoProviderOfItsOwn(
+        IMethodSymbol definition,
+        KnownTypes knownTypes,
+        Compilation compilation,
+        int depth
+    )
     {
         if (!definition.IsExtensionMethod)
         {
@@ -556,6 +565,13 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         if (definition.DeclaringSyntaxReferences.Length == 0)
         {
             return IsConventionalExtension(definition);
+        }
+
+        // A helper that calls a helper that calls a helper is followed only so far; past that
+        // the chain is not worth the analysis time and the collection is left unproven.
+        if (depth >= MaxHelperDepth)
+        {
+            return false;
         }
 
         var collectionParameterName = definition.Parameters.Length > 0
@@ -578,13 +594,28 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                     return false;
                 }
 
+                if (
+                    collectionParameterName is null
+                    || name.Identifier.ValueText != collectionParameterName
+                )
+                {
+                    continue;
+                }
+
                 // Anywhere the helper hands its collection on — an argument, a constructor, a
                 // field it is stored in — something else can build it. Calling through it and
                 // handing it back to the caller are the two uses that keep it here.
+                if (!IsContainedUseOfCollection(name))
+                {
+                    return false;
+                }
+
+                // A call made on the collection is only safe if it is itself a registration this
+                // rule trusts: `services.Build()` is an extension like any other, and its own
+                // body is where the provider is made.
                 if (
-                    collectionParameterName is not null
-                    && name.Identifier.ValueText == collectionParameterName
-                    && !IsContainedUseOfCollection(name)
+                    name.Parent is MemberAccessExpressionSyntax { Parent: InvocationExpressionSyntax nested }
+                    && !IsTrustedNestedCall(nested, knownTypes, compilation, depth)
                 )
                 {
                     return false;
@@ -593,6 +624,38 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// True when a call a helper makes on its own collection is a registration this rule already
+    /// trusts, followed through that call's own body in turn.
+    /// </summary>
+    private static bool IsTrustedNestedCall(
+        InvocationExpressionSyntax invocation,
+        KnownTypes knownTypes,
+        Compilation compilation,
+        int depth
+    )
+    {
+        if (!compilation.ContainsSyntaxTree(invocation.SyntaxTree))
+        {
+            return false;
+        }
+
+        var nestedModel = compilation.GetSemanticModel(invocation.SyntaxTree);
+
+        if (nestedModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol nestedMethod)
+        {
+            return false;
+        }
+
+        return IsRegistrationMethod(
+            nestedMethod,
+            nestedMethod.ReducedFrom ?? nestedMethod,
+            knownTypes,
+            compilation,
+            depth + 1
+        );
     }
 
     /// <summary>
@@ -630,7 +693,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             !definition.IsExtensionMethod
             || !IsConventionalExtension(definition)
             || !IsServiceCollection(definition.ReturnType, knownTypes)
-            || !IsRegistrationMethod(method, definition, knownTypes)
+            || !IsRegistrationMethod(method, definition, knownTypes, semanticModel.Compilation, 0)
         )
         {
             return null;
