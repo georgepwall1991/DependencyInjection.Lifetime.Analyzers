@@ -180,9 +180,12 @@ Six releases in one sweep, each shipped as its own PR, review cycle, and tag:
   about whether a registration reaches the container at all.
   The `FindServicesProperty` lookup is keying machinery rather than a false-positive guard — removing
   it cannot produce a diagnostic, because a registration receiver must itself be an
-  `IServiceCollection`. Every other negative guard (later rebuild, unconditional dominance, shared
-  loop, function boundary, collection identity, path stability, `goto` bail-out, `Clear()` exclusion)
-  was mutation-tested: deleting it makes its own regression test fail.
+  `IServiceCollection`. Every other negative guard (later rebuild including a chained one, unconditional
+  dominance, shared loop, function and query-clause boundaries, collection identity, path stability,
+  local-only rooting, framework-owned collection, collection and builder escape, helper-body trust
+  followed transitively, `goto` bail-out, `Clear()` exclusion) was mutation-tested: deleting it makes
+  its own regression test fail. Fifteen adversarial review rounds ran against the rule; the last
+  returned no false positives.
 
 Every one of these went through repeated adversarial review; the accepted false negatives are
 recorded in CHANGELOG.md next to each rule, and each fixed false positive has a regression test.
