@@ -505,7 +505,52 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             break;
         }
 
-        return CanHoldAService(semanticModel.GetTypeInfo(reached).Type);
+        if (!CanHoldAService(semanticModel.GetTypeInfo(reached).Type))
+        {
+            return false;
+        }
+
+        // A call that answers with something it just built hands back nothing of the scope:
+        // `exporter.CreateSnapshot()` is a new object, not the exporter.
+        return reached is not InvocationExpressionSyntax made
+            || semanticModel.GetSymbolInfo(made).Symbol is not IMethodSymbol maker
+            || !ReturnsFreshObject(maker);
+    }
+
+    /// <summary>
+    /// Whether every answer a method gives is an object it constructs on the spot. Such a result
+    /// is nobody's but the caller's, whatever it was built from.
+    /// </summary>
+    private static bool ReturnsFreshObject(IMethodSymbol method)
+    {
+        if (
+            method.DeclaringSyntaxReferences.Length != 1
+            || !ExecutableSyntaxHelper.TryGetExecutableBody(
+                method.DeclaringSyntaxReferences[0].GetSyntax(),
+                out var body
+            )
+        )
+        {
+            return false;
+        }
+
+        if (body is ExpressionSyntax expressionBody)
+        {
+            return expressionBody is ObjectCreationExpressionSyntax
+                or ImplicitObjectCreationExpressionSyntax;
+        }
+
+        var returns = ExecutableSyntaxHelper
+            .EnumerateSameBoundaryNodes(body)
+            .OfType<ReturnStatementSyntax>()
+            .ToList();
+
+        return returns.Count > 0
+            && returns.All(statement =>
+                statement.Expression
+                    is ObjectCreationExpressionSyntax
+                        or ImplicitObjectCreationExpressionSyntax
+            );
     }
 
     /// <summary>
@@ -707,11 +752,19 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             }
 
             // Everything up to the first suspension has already run by the time the caller holds
-            // the task — unless a loop brings it back round after one.
+            // the task — including what that first await is handed, since its operands are
+            // evaluated before it gives up control — unless a loop brings it back round.
+            if (IsInLoopContainingSuspension(node, body))
+            {
+                return true;
+            }
+
             if (
                 firstSuspension is null
-                || node.SpanStart >= firstSuspension.SpanStart
-                || IsInLoopContainingSuspension(node, body)
+                || (
+                    node.SpanStart >= firstSuspension.SpanStart
+                    && !firstSuspension.Expression.Span.Contains(node.Span)
+                )
             )
             {
                 return true;

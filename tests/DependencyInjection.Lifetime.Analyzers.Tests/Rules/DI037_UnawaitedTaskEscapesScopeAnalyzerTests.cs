@@ -2015,4 +2015,93 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task InstanceStateHandedToTheFirstAwait_NoDiagnostic()
+    {
+        // Codex round 17: the fields are read to build the call's arguments, which happens before
+        // the await gives up control.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly string _path = "out.txt";
+
+                    private readonly string _payload = "{}";
+
+                    public async Task SaveAsync()
+                    {
+                        await System.IO.File.WriteAllTextAsync(_path, _payload);
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<Exporter>().SaveAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task FreshObjectBuiltByAScopedService_NoDiagnostic()
+    {
+        // Codex round 17: the snapshot is a new object the exporter built, not the exporter, so
+        // the scope has no claim on it.
+        var source =
+            Usings
+            + """
+                public sealed class Snapshot
+                {
+                    private readonly string _json = "{}";
+
+                    public async Task WriteToAsync(string path)
+                    {
+                        await Task.Delay(10);
+                        await System.IO.File.WriteAllTextAsync(path, _json);
+                    }
+                }
+
+                public sealed class ReportExporter : IDisposable
+                {
+                    public Snapshot CreateSnapshot() => new Snapshot();
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var snapshot = scope.ServiceProvider
+                            .GetRequiredService<ReportExporter>()
+                            .CreateSnapshot();
+                        _ = snapshot.WriteToAsync("out.txt");
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
