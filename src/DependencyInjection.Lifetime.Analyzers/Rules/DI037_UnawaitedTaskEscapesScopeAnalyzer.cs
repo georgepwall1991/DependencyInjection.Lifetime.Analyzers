@@ -57,19 +57,6 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         );
 
     /// <summary>
-    /// Calls that wait on the tasks handed to them, so a task passed to one of these inside the
-    /// scope is finished before the scope is.
-    /// </summary>
-    private static readonly ImmutableHashSet<string> WaitingMethodNames = ImmutableHashSet.Create(
-        "Wait",
-        "WaitAll",
-        "WaitAny",
-        "WhenAll",
-        "WhenAny",
-        "GetResult"
-    );
-
-    /// <summary>
     /// Calls that put what they are handed into a store rather than acting on it, so the task is
     /// being kept for after the scope rather than waited on inside it.
     /// </summary>
@@ -81,8 +68,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         "Enqueue",
         "Insert",
         "Push",
-        "TryAdd",
-        "Writer"
+        "TryAdd"
     );
 
     private static readonly ImmutableHashSet<string> TaskForwardingNames = ImmutableHashSet.Create(
@@ -790,10 +776,10 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 MemberAccessExpressionSyntax member
                     when BlockingConsumerNames.Contains(member.Name.Identifier.ValueText) =>
                     member.Expression,
-                // `Task.WaitAll(pending)` waits on what it is handed rather than on a receiver.
-                InvocationExpressionSyntax call
-                    when GetInvokedName(call) is { } name && WaitingMethodNames.Contains(name) =>
-                    call,
+                // Anything the storage is handed to may wait on it — `Task.WaitAll(pending)`
+                // does, and so does a helper of the codebase's own. Passing it on is not proof
+                // that the scope stops caring.
+                ArgumentSyntax argument => argument.Expression,
                 _ => null,
             };
 

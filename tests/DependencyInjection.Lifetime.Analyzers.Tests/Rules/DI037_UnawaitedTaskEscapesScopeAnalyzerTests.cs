@@ -867,4 +867,36 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task StoredTaskDrainedByHelperInsideScope_NoDiagnostic()
+    {
+        // Codex round 5: the stored task is handed to a helper of the codebase's own, which
+        // blocks on it before the scope ends.
+        var source =
+            Usings
+            + """
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    private Task _pending = Task.CompletedTask;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _pending = scope.ServiceProvider.GetRequiredService<IWorker>().RunAsync();
+                        Drain(_pending);
+                    }
+
+                    private static void Drain(Task task) => task.GetAwaiter().GetResult();
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
