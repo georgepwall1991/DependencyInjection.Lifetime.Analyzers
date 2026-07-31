@@ -170,6 +170,21 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             classifiedReceivers
         );
 
+        // A registration answers with its collection. Where that answer goes somewhere this rule
+        // does not follow — a caller, a local, an argument — the collection outlives the block
+        // and can be built again, so nothing registered on it is provably lost.
+        otherReads.AddRange(
+            registrations
+                .Where(registration =>
+                    registration.Invocation.Parent is not ExpressionStatementSyntax
+                    && !classifiedReceivers.Contains(registration.Invocation)
+                )
+                .Select(registration => new CollectionRead(
+                    registration.Key,
+                    registration.Invocation.SpanStart
+                ))
+        );
+
         foreach (var registration in registrations)
         {
             // A later build on the same collection picks the registration up, so nothing is
@@ -179,7 +194,7 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
                 builds.Any(build =>
                     CollectionKey.Equal(build.Key, registration.Key)
                     && (
-                        build.Invocation.SpanStart > registration.Invocation.SpanStart
+                        EvaluatesAfter(build.Invocation, registration.Invocation)
                         || IsInsideNestedFunction(build.Invocation, codeBlock)
                     )
                 )
@@ -216,6 +231,17 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             );
         }
     }
+
+    /// <summary>
+    /// True when the later invocation is evaluated after the earlier one. A statement further
+    /// down runs later, and so does an invocation the earlier one is chained into: a receiver is
+    /// evaluated before the call it carries.
+    /// </summary>
+    private static bool EvaluatesAfter(
+        InvocationExpressionSyntax later,
+        InvocationExpressionSyntax earlier
+    ) =>
+        later.Span.Contains(earlier.Span) || later.SpanStart > earlier.SpanStart;
 
     /// <summary>
     /// True when the node sits inside a lambda or local function declared within the code block,
@@ -484,6 +510,37 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The receiver of an invocation that provably answers with the collection it was given: a
+    /// registration extension declared by the framework itself. Returns <see langword="null"/>
+    /// for every other invocation.
+    /// </summary>
+    private static ExpressionSyntax? IsFrameworkFluentRegistration(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        KnownTypes knownTypes
+    )
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method)
+        {
+            return null;
+        }
+
+        var definition = method.ReducedFrom ?? method;
+
+        if (
+            !definition.IsExtensionMethod
+            || !IsConventionalExtension(definition)
+            || !IsServiceCollection(definition.ReturnType, knownTypes)
+            || !IsRegistrationMethod(method, definition, knownTypes)
+        )
+        {
+            return null;
+        }
+
+        return GetReceiverExpression(invocation, method);
     }
 
     private static bool IsConventionalExtension(IMethodSymbol definition) =>
@@ -1054,6 +1111,22 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
         {
             switch (expression)
             {
+                // A framework registration extension answers with the very collection it was
+                // handed, so `services.AddSingleton<T>()` names the same collection `services`
+                // does. Only the framework's own extensions are folded this way: a third-party
+                // `AddXxx` returning a collection is free to return a different one.
+                case InvocationExpressionSyntax fluent
+                    when IsFrameworkFluentRegistration(fluent, semanticModel, knownTypes)
+                        is { } fluentReceiver:
+                    return TryBuild(
+                        fluentReceiver,
+                        semanticModel,
+                        knownTypes,
+                        reassignedSymbols,
+                        path,
+                        depth
+                    );
+
                 // A user-defined conversion is a method call in disguise and may hand back a
                 // different collection on each evaluation.
                 case CastExpressionSyntax cast

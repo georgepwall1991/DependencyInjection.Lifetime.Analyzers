@@ -1557,4 +1557,105 @@ public class DI036_RegistrationAfterProviderBuiltAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task FluentRebuildAfterRegistration_NoDiagnostic()
+    {
+        // Codex round 9: the registration is chained straight into a second build, so the
+        // provider that is kept holds it.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        var provider = services
+                            .AddSingleton<IAudit, Audit>()
+                            .BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task EarlierRegistrationObservedByFluentRebuild_NoDiagnostic()
+    {
+        // Codex round 9: the fluent rebuild is the last word on the collection, so every earlier
+        // registration reaches it too.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        services.AddScoped<IReporting, Reporting>();
+                        var provider = services
+                            .AddSingleton<IAudit, Audit>()
+                            .BuildServiceProvider();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationResultCarriedAway_NoDiagnostic()
+    {
+        // Codex round 9: the registration hands its collection to a caller, which is free to
+        // build it again.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public IServiceCollection Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var probe = services.BuildServiceProvider();
+                        return services.AddSingleton<IAudit, Audit>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ChainedRegistrationsAfterBuild_ReportsEach()
+    {
+        // A chain that is discarded loses every link in it, and the framework extensions in the
+        // chain provably hand back the same collection.
+        var source =
+            Usings
+            + """
+                public class Composition
+                {
+                    public void Configure()
+                    {
+                        var services = new ServiceCollection();
+                        var provider = services.BuildServiceProvider();
+                        {|DI036:{|DI036:services.AddScoped<IReporting, Reporting>()|}.AddSingleton<IAudit, Audit>()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI036_RegistrationAfterProviderBuiltAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
 }
