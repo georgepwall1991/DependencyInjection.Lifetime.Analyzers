@@ -163,7 +163,8 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             {
                 var lifetimes = new ServiceLifetimeLookup(
                     registrationCollector,
-                    new KnownServiceLifetimeClassifier(wellKnownTypes)
+                    new KnownServiceLifetimeClassifier(wellKnownTypes),
+                    endContext.Compilation
                 );
 
                 foreach (var executableRoot in executableRoots)
@@ -649,6 +650,8 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         ServiceLifetimeLookup lifetimes
     )
     {
+        var compilation = semanticModel.Compilation;
+
         if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol called)
         {
             return false;
@@ -681,7 +684,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         // Work that never touches the service cannot be hurt by the service being disposed:
         // `PauseAsync() => Task.Delay(10)` hands back a timer, not a piece of this instance.
-        if (!TouchesInstanceStateWhileRunning(method, body))
+        if (!TouchesInstanceStateWhileRunning(method, body, compilation))
         {
             return true;
         }
@@ -689,7 +692,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         // A method that keeps the handle it hands back has a join of its own in mind, so the
         // caller discarding the task is not the end of the story. The keeping may happen a
         // helper or two down, so its own calls on this instance are followed too.
-        if (RetainsTheTask(method, 0))
+        if (RetainsTheTask(method, compilation, 0))
         {
             return true;
         }
@@ -724,7 +727,11 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// only a delegate it leaves behind can touch the instance later. An <c>async</c> body, by
     /// contrast, resumes inside the instance, so every mention of it counts.
     /// </summary>
-    private static bool TouchesInstanceStateWhileRunning(IMethodSymbol method, SyntaxNode body)
+    private static bool TouchesInstanceStateWhileRunning(
+        IMethodSymbol method,
+        SyntaxNode body,
+        Compilation compilation
+    )
     {
         var firstSuspension = ExecutableSyntaxHelper
             .EnumerateSameBoundaryNodes(body)
@@ -735,7 +742,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         foreach (var node in body.DescendantNodesAndSelf())
         {
-            if (!IsInstanceStateReference(node, method.ContainingType))
+            if (!IsInstanceStateReference(node, method.ContainingType, compilation))
             {
                 continue;
             }
@@ -970,7 +977,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// Whether the method, or a helper of its own type that it calls, stores a task in instance
     /// state. A service that keeps what it started intends to join it.
     /// </summary>
-    private static bool RetainsTheTask(IMethodSymbol method, int depth)
+    private static bool RetainsTheTask(IMethodSymbol method, Compilation compilation, int depth)
     {
         if (
             depth > MaxHelperDepth
@@ -990,7 +997,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         {
             if (
                 node is AssignmentExpressionSyntax assignment
-                && IsInstanceStateReference(assignment.Left, declaringType)
+                && IsInstanceStateReference(assignment.Left, declaringType, compilation)
             )
             {
                 return true;
@@ -999,7 +1006,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             if (
                 node is InvocationExpressionSyntax call
                 && GetOwnInstanceMethod(call, declaringType) is { } helper
-                && RetainsTheTask(helper, depth + 1)
+                && RetainsTheTask(helper, compilation, depth + 1)
             )
             {
                 return true;
@@ -1045,7 +1052,11 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// Whether a node names instance state of the declaring type: <c>this</c>, <c>base</c>, or a
     /// member of it reached without a receiver of its own.
     /// </summary>
-    private static bool IsInstanceStateReference(SyntaxNode node, INamedTypeSymbol? declaringType)
+    private static bool IsInstanceStateReference(
+        SyntaxNode node,
+        INamedTypeSymbol? declaringType,
+        Compilation compilation
+    )
     {
         if (node is ThisExpressionSyntax or BaseExpressionSyntax)
         {
@@ -1068,9 +1079,22 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        return declaringType
-            .GetMembers(name.Identifier.ValueText)
-            .Any(member => !member.IsStatic);
+        // The symbol decides, not the spelling: a parameter is free to shadow a field.
+        if (!compilation.ContainsSyntaxTree(name.SyntaxTree))
+        {
+            return false;
+        }
+
+        return compilation.GetSemanticModel(name.SyntaxTree).GetSymbolInfo(name).Symbol is
+            {
+                IsStatic: false
+            } symbol
+            && symbol.Kind
+                is SymbolKind.Field
+                    or SymbolKind.Property
+                    or SymbolKind.Method
+                    or SymbolKind.Event
+            && SymbolEqualityComparer.Default.Equals(symbol.ContainingType, declaringType);
     }
 
     private static bool IsCompletedTaskExpression(ExpressionSyntax expression) =>
@@ -1440,14 +1464,17 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     {
         private readonly RegistrationCollector _registrations;
         private readonly KnownServiceLifetimeClassifier _knownLifetimes;
+        private readonly Compilation _compilation;
 
         public ServiceLifetimeLookup(
             RegistrationCollector registrations,
-            KnownServiceLifetimeClassifier knownLifetimes
+            KnownServiceLifetimeClassifier knownLifetimes,
+            Compilation compilation
         )
         {
             _registrations = registrations;
             _knownLifetimes = knownLifetimes;
+            _compilation = compilation;
         }
 
         /// <summary>
@@ -1467,6 +1494,16 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             )
             {
                 return implementation;
+            }
+
+            // A factory that does nothing but construct names its implementation as plainly as a
+            // type argument would.
+            if (
+                found?.FactoryExpression is { } factory
+                && GetConstructedType(factory) is { } constructed
+            )
+            {
+                return constructed;
             }
 
             // A concrete type registered as itself is its own implementation.
@@ -1533,6 +1570,42 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                         or "System.IAsyncDisposable"
             )
             || type.ToDisplayString() is "System.IDisposable" or "System.IAsyncDisposable";
+
+        /// <summary>
+        /// The type a registration factory constructs, when its body is one construction and
+        /// nothing else.
+        /// </summary>
+        private INamedTypeSymbol? GetConstructedType(ExpressionSyntax factory)
+        {
+            var body = factory switch
+            {
+                SimpleLambdaExpressionSyntax lambda => lambda.Body,
+                ParenthesizedLambdaExpressionSyntax lambda => lambda.Body,
+                AnonymousMethodExpressionSyntax anonymous => anonymous.Body,
+                _ => null,
+            };
+
+            if (body is BlockSyntax block)
+            {
+                var returns = ExecutableSyntaxHelper
+                    .EnumerateSameBoundaryNodes(block)
+                    .OfType<ReturnStatementSyntax>()
+                    .ToList();
+
+                body = returns.Count == 1 ? returns[0].Expression : null;
+            }
+
+            if (
+                body is not ObjectCreationExpressionSyntax creation
+                || !_compilation.ContainsSyntaxTree(creation.SyntaxTree)
+            )
+            {
+                return null;
+            }
+
+            return _compilation.GetSemanticModel(creation.SyntaxTree).GetTypeInfo(creation).Type
+                as INamedTypeSymbol;
+        }
 
         public bool IsSingleton(ITypeSymbol? serviceType)
         {

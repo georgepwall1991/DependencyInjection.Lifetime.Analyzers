@@ -2104,4 +2104,95 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task FactoryRegistrationNamesTheImplementation_NoDiagnostic()
+    {
+        // Codex round 18: a factory that does nothing but construct names its implementation as
+        // plainly as a type argument would, and this one has nothing to dispose.
+        var source =
+            Usings
+            + """
+                public interface IReportQueue
+                {
+                    Task FlushAsync();
+                }
+
+                public sealed class ReportQueue : IReportQueue
+                {
+                    private int _count;
+
+                    public async Task FlushAsync()
+                    {
+                        await Task.Delay(10);
+                        _count++;
+                    }
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddScoped<IReportQueue>(provider => new ReportQueue());
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<IReportQueue>().FlushAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ParameterShadowingAField_NoDiagnostic()
+    {
+        // Codex round 18: the symbol decides, not the spelling — the name read after the await is
+        // the parameter, not the field the service disposes.
+        var source =
+            Usings
+            + """
+                public sealed class ShadowWorker : IDisposable
+                {
+                    private readonly System.IO.Stream output = System.IO.Stream.Null;
+
+                    public async Task RunAsync(string output)
+                    {
+                        await Task.Delay(10);
+                        Console.WriteLine(output);
+                    }
+
+                    public void Dispose() => output.Dispose();
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<ShadowWorker>().RunAsync("done");
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
