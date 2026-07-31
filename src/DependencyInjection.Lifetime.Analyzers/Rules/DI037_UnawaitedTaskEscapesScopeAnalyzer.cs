@@ -786,7 +786,119 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// runs straight on.
     /// </summary>
     private static bool Suspends(AwaitExpressionSyntax await) =>
-        !IsAlreadyFinished(await.Expression);
+        !IsAlreadyFinished(await.Expression) && !IsProvenFinishedByACheck(await);
+
+    /// <summary>
+    /// Whether a check earlier on this path has already established that the awaited work is
+    /// finished — a guard clause that leaves when it is not, or an <c>if</c> that is only entered
+    /// when it is.
+    /// </summary>
+    private static bool IsProvenFinishedByACheck(AwaitExpressionSyntax await)
+    {
+        var awaited = GetUnderlyingTask(await.Expression).ToString();
+
+        for (SyntaxNode? node = await; node is not null; node = node.Parent)
+        {
+            if (node != await && ExecutableSyntaxHelper.IsExecutableBoundary(node))
+            {
+                break;
+            }
+
+            // `if (task.IsCompleted) { await task; }`
+            if (
+                node.Parent is IfStatementSyntax entered
+                && entered.Statement == node
+                && ChecksCompletion(entered.Condition, awaited, finishedWhenTrue: true)
+            )
+            {
+                return true;
+            }
+
+            // `if (!task.IsCompleted) return;` earlier in the same block.
+            if (node is StatementSyntax statement && node.Parent is BlockSyntax block)
+            {
+                foreach (var earlier in block.Statements)
+                {
+                    if (earlier == statement)
+                    {
+                        break;
+                    }
+
+                    if (
+                        earlier is IfStatementSyntax guard
+                        && guard.Else is null
+                        && ChecksCompletion(guard.Condition, awaited, finishedWhenTrue: false)
+                        && LeavesThePath(guard.Statement)
+                    )
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a condition decides whether the named work is finished, in the direction asked
+    /// for.
+    /// </summary>
+    private static bool ChecksCompletion(
+        ExpressionSyntax condition,
+        string awaited,
+        bool finishedWhenTrue
+    ) =>
+        condition switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => ChecksCompletion(
+                parenthesized.Expression,
+                awaited,
+                finishedWhenTrue
+            ),
+            PrefixUnaryExpressionSyntax negation
+                when negation.IsKind(SyntaxKind.LogicalNotExpression) => ChecksCompletion(
+                negation.Operand,
+                awaited,
+                !finishedWhenTrue
+            ),
+            MemberAccessExpressionSyntax member
+                when member.Name.Identifier.ValueText
+                    is "IsCompleted"
+                        or "IsCompletedSuccessfully" => finishedWhenTrue
+                && GetUnderlyingTask(member.Expression).ToString() == awaited,
+            _ => false,
+        };
+
+    /// <summary>
+    /// Whether a guard body leaves before anything after it runs.
+    /// </summary>
+    private static bool LeavesThePath(StatementSyntax statement) =>
+        statement switch
+        {
+            BlockSyntax { Statements.Count: 1 } block => LeavesThePath(block.Statements[0]),
+            ReturnStatementSyntax
+            or ThrowStatementSyntax
+            or ContinueStatementSyntax
+            or BreakStatementSyntax => true,
+            _ => false,
+        };
+
+    /// <summary>
+    /// The work an expression names, seen through the parentheses and wrappers that hand the same
+    /// pending work back.
+    /// </summary>
+    private static ExpressionSyntax GetUnderlyingTask(ExpressionSyntax expression) =>
+        expression switch
+        {
+            ParenthesizedExpressionSyntax parenthesized => GetUnderlyingTask(
+                parenthesized.Expression
+            ),
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax forwarding }
+                when TaskForwardingNames.Contains(forwarding.Name.Identifier.ValueText) =>
+                GetUnderlyingTask(forwarding.Expression),
+            _ => expression,
+        };
 
     /// <summary>
     /// Whether an awaited expression is work that has already finished, seen through the wrappers
@@ -1161,8 +1273,7 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     is "FromResult"
                         or "FromCanceled"
                         or "FromException"
-                // A zero-length delay is finished before it is handed back, as is
-                // `Task.WhenAll()` over nothing — or over work that has already finished.
+                // A zero-length delay is finished before it is handed back.
                 || (
                     GetInvokedName(call) is "Delay"
                     && call.ArgumentList.Arguments.Count > 0
@@ -1172,8 +1283,16 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                 // `Task.WhenAll()` over nothing — or over work that has already finished — is
                 // finished before it is handed back.
                 || (
-                    GetInvokedName(call) is "WhenAll" or "WhenAny"
+                    GetInvokedName(call) is "WhenAll"
                     && call.ArgumentList.Arguments.All(argument =>
+                        IsAlreadyFinished(argument.Expression)
+                    )
+                )
+                // `WhenAny` waits for the first one, so one finished task finishes it.
+                || (
+                    GetInvokedName(call) is "WhenAny"
+                    && call.ArgumentList.Arguments.Count > 0
+                    && call.ArgumentList.Arguments.Any(argument =>
                         IsAlreadyFinished(argument.Expression)
                     )
                 ),

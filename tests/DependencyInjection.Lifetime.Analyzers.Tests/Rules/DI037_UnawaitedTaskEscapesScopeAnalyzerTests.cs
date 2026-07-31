@@ -2272,4 +2272,91 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AwaitOfWhenAnyOverAFinishedTask_NoDiagnostic()
+    {
+        // Codex round 20: `WhenAny` waits for the first one, so one finished task finishes it —
+        // the unrelated timer never gets a say.
+        var source =
+            Usings
+            + """
+                public sealed class RaceWorker : IDisposable
+                {
+                    private int _processed;
+
+                    public async Task RunAsync()
+                    {
+                        await Task.WhenAny(Task.CompletedTask, Task.Delay(1000));
+                        _processed++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<RaceWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AwaitGuardedByACompletionCheck_NoDiagnostic()
+    {
+        // Codex round 20: the guard clause leaves unless the work is already finished, so every
+        // path that reaches the await runs straight on.
+        var source =
+            Usings
+            + """
+                public sealed class ReadyPublisher : IDisposable
+                {
+                    private readonly Task _flushTask = Task.CompletedTask;
+                    private int _published;
+
+                    public async Task PublishIfReadyAsync()
+                    {
+                        if (!_flushTask.IsCompleted)
+                        {
+                            return;
+                        }
+
+                        await _flushTask;
+                        _published++;
+                    }
+
+                    public void Dispose() { }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        scope.ServiceProvider.GetRequiredService<ReadyPublisher>()
+                            .PublishIfReadyAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
