@@ -789,4 +789,82 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task WorkerBuiltFromScopedValue_NoDiagnostic()
+    {
+        // Codex round 4: an id copied out of a scoped service is a string, and the worker built
+        // from that string belongs to nobody but itself.
+        var source =
+            Usings
+            + """
+                public sealed class RequestContext
+                {
+                    public string Id => "request";
+                }
+
+                public sealed class DetachedWorker
+                {
+                    public DetachedWorker(string id) { }
+
+                    public async Task RunAsync() => await Task.Delay(10);
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        var id = scope.ServiceProvider.GetRequiredService<RequestContext>().Id;
+                        var detached = new DetachedWorker(id);
+                        detached.RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task TaskHandedToArbitraryMethod_NoDiagnostic()
+    {
+        // Codex round 4: handing a task to a method proves nothing — that method may well wait
+        // on it, as this one does.
+        var source =
+            Usings
+            + """
+                public sealed class Joiner
+                {
+                    public void Join(Task task) => task.GetAwaiter().GetResult();
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        var joiner = new Joiner();
+
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            joiner.Join(worker.RunAsync());
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }

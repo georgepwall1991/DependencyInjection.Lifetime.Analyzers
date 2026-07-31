@@ -69,6 +69,22 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         "GetResult"
     );
 
+    /// <summary>
+    /// Calls that put what they are handed into a store rather than acting on it, so the task is
+    /// being kept for after the scope rather than waited on inside it.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> CollectionAddNames = ImmutableHashSet.Create(
+        "Add",
+        "AddLast",
+        "AddRange",
+        "Append",
+        "Enqueue",
+        "Insert",
+        "Push",
+        "TryAdd",
+        "Writer"
+    );
+
     private static readonly ImmutableHashSet<string> TaskForwardingNames = ImmutableHashSet.Create(
         "AsTask",
         "ConfigureAwait",
@@ -358,6 +374,8 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
                     || semanticModel.GetDeclaredSymbol(declarator) is not ILocalSymbol local
                     || derived.Contains(local)
                     || reassignedLocals.Contains(local)
+                    || !CanHoldAService(local.Type)
+                    || !CanHoldAService(semanticModel.GetTypeInfo(initializer).Type)
                 )
                 {
                     continue;
@@ -373,6 +391,34 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         return derived;
     }
+
+    /// <summary>
+    /// Whether a value could be, or could hold, something the scope owns. An id copied out of a
+    /// scoped service is a string, and a worker built from that string is nobody's but its own.
+    /// </summary>
+    private static bool CanHoldAService(ITypeSymbol? type) =>
+        type is not null
+        && type.SpecialType
+            is not (
+                SpecialType.System_String
+                or SpecialType.System_Boolean
+                or SpecialType.System_Char
+                or SpecialType.System_Byte
+                or SpecialType.System_SByte
+                or SpecialType.System_Int16
+                or SpecialType.System_UInt16
+                or SpecialType.System_Int32
+                or SpecialType.System_UInt32
+                or SpecialType.System_Int64
+                or SpecialType.System_UInt64
+                or SpecialType.System_Single
+                or SpecialType.System_Double
+                or SpecialType.System_Decimal
+                or SpecialType.System_DateTime
+                or SpecialType.System_IntPtr
+                or SpecialType.System_UIntPtr
+            )
+        && type.TypeKind is not TypeKind.Enum;
 
     private static bool ReferencesScopeDerived(
         SyntaxNode node,
@@ -709,6 +755,9 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         if (
             argument.Parent?.Parent is not InvocationExpressionSyntax call
             || call.Expression is not MemberAccessExpressionSyntax member
+            // Handing a task to an arbitrary method proves nothing — it may well wait on it.
+            // Only a call that puts the task somewhere names it as kept for later.
+            || !CollectionAddNames.Contains(member.Name.Identifier.ValueText)
         )
         {
             return false;
