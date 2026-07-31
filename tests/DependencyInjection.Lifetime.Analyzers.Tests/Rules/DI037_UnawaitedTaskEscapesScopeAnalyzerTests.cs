@@ -580,15 +580,17 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
         var source =
             Usings
             + """
-                public class Worker : IWorker
+                public class Worker : IWorker, IDisposable
                 {
-                    public Task RunAsync() => Task.CompletedTask;
+                    public async Task RunAsync() => await Task.Delay(10);
 
                     public Task<int> CountAsync() => Task.FromResult(0);
 
                     public ValueTask SaveAsync() => default;
 
                     public void Fire() { }
+
+                    public void Dispose() { }
                 }
 
                 public class Registrations
@@ -691,12 +693,14 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
         var source =
             Usings
             + """
-                public sealed class RealWorker
+                public sealed class RealWorker : IDisposable
                 {
                     public async Task RunAsync()
                     {
                         await Task.Delay(10);
                     }
+
+                    public void Dispose() { }
                 }
 
                 public class Dispatcher
@@ -892,6 +896,148 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
                     }
 
                     private static void Drain(Task task) => task.GetAwaiter().GetResult();
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ServiceWithNothingToDispose_NoDiagnostic()
+    {
+        // Codex round 6: neither the service nor anything it is built from is disposable, so the
+        // scope's disposal tears nothing down that the work could still be using.
+        var source =
+            Usings
+            + """
+                public sealed class PlainWorker
+                {
+                    public Task RunAsync() => Task.Delay(10);
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddScoped<PlainWorker>();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using (var scope = _factory.CreateScope())
+                        {
+                            scope.ServiceProvider.GetRequiredService<PlainWorker>().RunAsync();
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ServiceWithDisposableDependency_ReportsDiagnostic()
+    {
+        // The service itself is not disposable, but what it was built from is, and that is what
+        // the scope disposes underneath the running work.
+        var source =
+            Usings
+            + """
+                public sealed class Connection : IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public sealed class PlainWorker
+                {
+                    public PlainWorker(Connection connection) { }
+
+                    public Task RunAsync() => Task.Delay(10);
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddScoped<Connection>();
+                        services.AddScoped<PlainWorker>();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using (var scope = _factory.CreateScope())
+                        {
+                            {|DI037:scope.ServiceProvider.GetRequiredService<PlainWorker>().RunAsync()|};
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task InterfaceImplementationReturnsCompletedTask_NoDiagnostic()
+    {
+        // Codex round 6: the interface says nothing about what runs; the registered
+        // implementation hands back a task that has already finished.
+        var source =
+            Usings
+            + """
+                public sealed class InstantWorker : IWorker, IDisposable
+                {
+                    public Task RunAsync() => Task.CompletedTask;
+
+                    public Task<int> CountAsync() => Task.FromResult(0);
+
+                    public ValueTask SaveAsync() => default;
+
+                    public void Fire() { }
+
+                    public void Dispose() { }
+                }
+
+                public class Registrations
+                {
+                    public static void Register(IServiceCollection services)
+                    {
+                        services.AddScoped<IWorker, InstantWorker>();
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using (var scope = _factory.CreateScope())
+                        {
+                            scope.ServiceProvider.GetRequiredService<IWorker>().RunAsync();
+                        }
+                    }
                 }
                 """;
 

@@ -46,6 +46,12 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     private const int MaxResolutionDepth = 8;
 
     /// <summary>
+    /// How far the constructor graph of a resolved service is followed while asking whether the
+    /// scope has anything to dispose.
+    /// </summary>
+    private const int MaxDependencyDepth = 6;
+
+    /// <summary>
     /// Generic resolution methods whose type argument names the service that was resolved.
     /// </summary>
     private static readonly ImmutableHashSet<string> ResolutionMethodNames =
@@ -229,12 +235,27 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
             if (
                 !IsAwaitableInvocation(invocation, semanticModel)
-                || ReturnsCompletedTask(invocation, semanticModel)
                 || !IsStartedOnScopedService(
                     invocation,
                     semanticModel,
                     scope,
                     scopeDerived,
+                    lifetimes
+                )
+            )
+            {
+                continue;
+            }
+
+            if (
+                ReturnsCompletedTask(
+                    invocation,
+                    semanticModel,
+                    GetResolvedServiceType(
+                        ((MemberAccessExpressionSyntax)invocation.Expression).Expression,
+                        semanticModel,
+                        0
+                    ),
                     lifetimes
                 )
             )
@@ -492,9 +513,12 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        var serviceType = GetResolvedServiceType(receiver, semanticModel, 0);
+
         // A singleton resolved through a child scope belongs to the root provider, which no
-        // `using` here disposes, so the work has nothing torn down underneath it.
-        return !lifetimes.IsSingleton(GetResolvedServiceType(receiver, semanticModel, 0));
+        // `using` here disposes, so the work has nothing torn down underneath it. Neither does a
+        // service the scope's disposal provably leaves alone.
+        return !lifetimes.IsSingleton(serviceType) && !lifetimes.NothingToDispose(serviceType);
     }
 
     /// <summary>
@@ -504,15 +528,25 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// </summary>
     private static bool ReturnsCompletedTask(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel
+        SemanticModel semanticModel,
+        ITypeSymbol? serviceType,
+        ServiceLifetimeLookup lifetimes
     )
     {
-        if (
-            semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol
-            {
-                DeclaringSyntaxReferences.Length: 1
-            } method
-        )
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol called)
+        {
+            return false;
+        }
+
+        // The interface says nothing about what runs; the registered implementation does.
+        var method =
+            called.ContainingType?.TypeKind == TypeKind.Interface
+            && lifetimes.GetImplementationType(serviceType) is { } implementation
+            && implementation.FindImplementationForInterfaceMember(called) is IMethodSymbol resolved
+                ? resolved
+                : called;
+
+        if (method.DeclaringSyntaxReferences.Length != 1)
         {
             return false;
         }
@@ -876,6 +910,90 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
             _registrations = registrations;
             _knownLifetimes = knownLifetimes;
         }
+
+        /// <summary>
+        /// The implementation the container would build for a service type, when the
+        /// registrations name one. A factory or an instance registration names none.
+        /// </summary>
+        public INamedTypeSymbol? GetImplementationType(ITypeSymbol? serviceType)
+        {
+            if (serviceType is not INamedTypeSymbol named)
+            {
+                return null;
+            }
+
+            if (
+                _registrations.TryGetRegistration(named, key: null, isKeyed: false, out var found)
+                && found?.ImplementationType is { } implementation
+            )
+            {
+                return implementation;
+            }
+
+            // A concrete type registered as itself is its own implementation.
+            return named.TypeKind == TypeKind.Class ? named : null;
+        }
+
+        /// <summary>
+        /// Whether disposing the scope provably tears nothing down that the work could still be
+        /// using: neither the service itself nor anything it is built from is disposable. A type
+        /// this compilation cannot see, or a service the container builds through a factory,
+        /// leaves the question open and so is not proven.
+        /// </summary>
+        public bool NothingToDispose(ITypeSymbol? serviceType)
+        {
+            var visited = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default);
+            return NothingToDispose(serviceType, visited, 0);
+        }
+
+        private bool NothingToDispose(ITypeSymbol? serviceType, HashSet<ITypeSymbol> visited, int depth)
+        {
+            if (depth > MaxDependencyDepth || serviceType is null)
+            {
+                return false;
+            }
+
+            if (!visited.Add(serviceType))
+            {
+                // A cycle is DI017's finding; for this question it adds nothing new.
+                return true;
+            }
+
+            if (GetImplementationType(serviceType) is not { } implementation)
+            {
+                return false;
+            }
+
+            // Only source this compilation can read proves anything about disposal.
+            if (
+                implementation.DeclaringSyntaxReferences.Length == 0
+                || IsDisposable(implementation)
+                || IsDisposable(serviceType)
+            )
+            {
+                return false;
+            }
+
+            var constructor = implementation
+                .InstanceConstructors.Where(candidate =>
+                    candidate.DeclaredAccessibility == Accessibility.Public
+                )
+                .OrderByDescending(candidate => candidate.Parameters.Length)
+                .FirstOrDefault();
+
+            return constructor is null
+                || constructor.Parameters.All(parameter =>
+                    NothingToDispose(parameter.Type, visited, depth + 1)
+                );
+        }
+
+        private static bool IsDisposable(ITypeSymbol type) =>
+            type.AllInterfaces.Any(@interface =>
+                @interface.ToDisplayString()
+                    is "System.IDisposable"
+                        or "System.IAsyncDisposable"
+            )
+            || type.ToDisplayString() is "System.IDisposable" or "System.IAsyncDisposable";
 
         public bool IsSingleton(ITypeSymbol? serviceType)
         {
