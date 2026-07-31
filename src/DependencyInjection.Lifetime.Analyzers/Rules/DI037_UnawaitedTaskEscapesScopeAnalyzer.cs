@@ -23,7 +23,17 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
     /// Either way the work is over before the scope is.
     /// </summary>
     private static readonly ImmutableHashSet<string> BlockingConsumerNames =
-        ImmutableHashSet.Create("Wait", "GetAwaiter", "Result", "WaitAsync");
+        ImmutableHashSet.Create(
+            "Wait",
+            "GetAwaiter",
+            "Result",
+            "WaitAsync",
+            // Reading completion is how hand-rolled synchronisation waits: a caller polling
+            // `IsCompleted` before leaving the scope is waiting for the work, not forgetting it.
+            "IsCompleted",
+            "IsCompletedSuccessfully",
+            "Status"
+        );
 
     /// <summary>
     /// Members that hand back the same pending work in another wrapper, so what happens to the
@@ -468,7 +478,6 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
         if (
             semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol
             {
-                IsAsync: false,
                 DeclaringSyntaxReferences.Length: 1
             } method
         )
@@ -478,22 +487,29 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
         var declaration = method.DeclaringSyntaxReferences[0].GetSyntax();
 
-        if (declaration is not BaseMethodDeclarationSyntax and not AccessorDeclarationSyntax)
+        if (
+            declaration is not BaseMethodDeclarationSyntax and not AccessorDeclarationSyntax
+            || !ExecutableSyntaxHelper.TryGetExecutableBody(declaration, out var body)
+        )
         {
             return false;
         }
 
-        if (
-            declaration is MethodDeclarationSyntax { ExpressionBody.Expression: { } expressionBody }
-        )
+        var bodyNodes = ExecutableSyntaxHelper.EnumerateSameBoundaryNodes(body).ToList();
+
+        // An async body with nothing to await runs straight through to its end and hands back a
+        // task that is already finished.
+        if (method.IsAsync)
+        {
+            return !bodyNodes.Any(node => node is AwaitExpressionSyntax or YieldStatementSyntax);
+        }
+
+        if (body is ExpressionSyntax expressionBody)
         {
             return IsCompletedTaskExpression(expressionBody);
         }
 
-        var returns = declaration
-            .DescendantNodes(node => !ExecutableSyntaxHelper.IsExecutableBoundary(node))
-            .OfType<ReturnStatementSyntax>()
-            .ToList();
+        var returns = bodyNodes.OfType<ReturnStatementSyntax>().ToList();
 
         return returns.Count > 0
             && returns.All(statement =>

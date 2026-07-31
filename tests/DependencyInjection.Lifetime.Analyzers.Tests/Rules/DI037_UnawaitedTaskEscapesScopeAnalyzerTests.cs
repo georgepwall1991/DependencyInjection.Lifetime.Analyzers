@@ -718,4 +718,75 @@ public class DI037_UnawaitedTaskEscapesScopeAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task AsyncMethodWithNothingToAwait_NoDiagnostic()
+    {
+        // Codex round 3: an async body with no await runs straight through and hands back a task
+        // that has already finished.
+        var source =
+            Usings
+            + """
+                public sealed class EmptyWorker
+                {
+                    public async Task RunAsync()
+                    {
+                    }
+                }
+
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        using var scope = _factory.CreateScope();
+                        _ = scope.ServiceProvider.GetRequiredService<EmptyWorker>().RunAsync();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task CompletionPolledBeforeScopeEnds_NoDiagnostic()
+    {
+        // Codex round 3: polling `IsCompleted` before leaving the scope is waiting for the work,
+        // not forgetting it.
+        var source =
+            Usings
+            + """
+                public class Dispatcher
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Dispatcher(IServiceScopeFactory factory) => _factory = factory;
+
+                    public void Dispatch()
+                    {
+                        Task pending;
+
+                        using (var scope = _factory.CreateScope())
+                        {
+                            var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                            pending = worker.RunAsync();
+
+                            while (!pending.IsCompleted)
+                            {
+                                Thread.Yield();
+                            }
+                        }
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI037_UnawaitedTaskEscapesScopeAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
 }
