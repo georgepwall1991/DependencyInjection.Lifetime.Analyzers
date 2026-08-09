@@ -1463,6 +1463,28 @@ public class DI011_ServiceProviderInjectionAnalyzerTests
     #endregion
 
     #region Should Not Report Diagnostic (Allowed Cases)
+    [Fact]
+    public async Task AbstractImplementation_WithIServiceProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public abstract class AbstractService
+            {
+                public AbstractService(IServiceProvider provider) { }
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<AbstractService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI011_ServiceProviderInjectionAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
 
     [Fact]
     public async Task RegisteredService_RemovedByRemoveAll_NoDiagnostic()

@@ -716,7 +716,7 @@ public sealed class MyService
 
 **Code Fix:** No. Replacing provider plumbing with explicit dependencies is a design decision.
 
-**Known exceptions in this rule:** factory-style types with value-returning factory members, singleton services that use `IServiceScopeFactory` to create scopes deliberately, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, hosted services, endpoint filter factories, and provider parameters on non-public constructors the container cannot activate.
+**Known exceptions in this rule:** factory-style types with value-returning factory members, singleton services that use `IServiceScopeFactory` to create scopes deliberately, ASP.NET Core middleware `Invoke`/`InvokeAsync` methods whose first parameter is `HttpContext`, hosted services, endpoint filter factories, abstract/non-instantiable implementations (DI018 owns that invalid registration), and provider parameters on non-public constructors the container cannot activate. The conservative boundary and opposition review are recorded in [`docs/adversarial/DI011.md`](docs/adversarial/DI011.md).
 
 Registrations that are definitely removed by a later unconditional `RemoveAll` or `Replace` call
 in the same straight-line service-collection flow are also ignored. Conditional or otherwise

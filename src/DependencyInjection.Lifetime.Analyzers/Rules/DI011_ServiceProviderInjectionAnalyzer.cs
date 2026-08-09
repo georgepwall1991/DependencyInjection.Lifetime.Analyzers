@@ -82,8 +82,11 @@ public sealed class DI011_ServiceProviderInjectionAnalyzer : DiagnosticAnalyzer
             }
 
             var implementationType = registration.ImplementationType;
-            if (implementationType is null)
+            if (implementationType is null ||
+                implementationType.IsAbstract)
             {
+                // Abstract/non-instantiable registrations cannot be activated by MEDI; DI018
+                // owns that invalid registration rather than emitting a secondary DI011 signal.
                 continue;
             }
 
