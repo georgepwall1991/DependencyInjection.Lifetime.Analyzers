@@ -1259,6 +1259,171 @@ public class DI020_MiddlewareScopedServiceAnalyzerTests
     }
 
     [Fact]
+    public async Task Middleware_VariableObjectArrayArgumentExpandsParamsAndReportsScopedDependency()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                private readonly RequestDelegate _next;
+
+                public MyMiddleware(RequestDelegate next, string name, IScopedService [|scoped|])
+                {
+                    _next = next;
+                }
+
+                public Task InvokeAsync(HttpContext context) => _next(context);
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    object[] args = new object[] { "name" };
+                    app.UseMiddleware<MyMiddleware>(args);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_ReassignedObjectArrayArgumentStaysUnproven_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                public MyMiddleware(RequestDelegate next, string name, IScopedService scoped) { }
+                public Task InvokeAsync(HttpContext context) => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    object[] args = new object[] { "name" };
+                    args = GetArguments();
+                    app.UseMiddleware<MyMiddleware>(args);
+                }
+
+                private static object[] GetArguments() => new object[] { "name" };
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_VariableStringArrayArgumentExpandsParamsAndReportsScopedDependency()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                public MyMiddleware(RequestDelegate next, string name, IScopedService [|scoped|]) { }
+                public Task InvokeAsync(HttpContext context) => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    string[] args = new[] { "name" };
+                    app.UseMiddleware<MyMiddleware>(args);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_UninitializedObjectArrayArgumentStaysUnproven_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                public MyMiddleware(RequestDelegate next, string name, IScopedService scoped) { }
+                public Task InvokeAsync(HttpContext context) => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    object[] args = new object[1];
+                    app.UseMiddleware<MyMiddleware>(args);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task Middleware_RefResizedObjectArrayArgumentStaysUnproven_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public class ScopedService : IScopedService { }
+
+            public class MyMiddleware
+            {
+                public MyMiddleware(RequestDelegate next, string name, IScopedService scoped) { }
+                public Task InvokeAsync(HttpContext context) => Task.CompletedTask;
+            }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                }
+
+                public void Configure(IApplicationBuilder app)
+                {
+                    object[] args = new object[] { "name" };
+                    System.Array.Resize(ref args, 2);
+                    app.UseMiddleware<MyMiddleware>(args);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI020_MiddlewareScopedServiceAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task Middleware_MetadataConstructorReportsAtUseMiddlewareCall()
     {
         var externalSource = """

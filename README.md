@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.2" />
 ```
 
 Then reference it from the project file:
@@ -1054,7 +1054,7 @@ That is strictly more actionable than the container's own `ValidateOnBuild` exce
 
 ## DI020: Middleware Captures Scoped Service In Constructor
 
-**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service). Middleware registrations are recognized in reduced extension form (`app.UseMiddleware<T>()`) and in direct framework static form (`UseMiddlewareExtensions.UseMiddleware<T>(app)` / `UseMiddlewareExtensions.UseMiddleware(app, typeof(T))`), with explicit activation arguments matched to constructor parameters.
+**What it catches:** Scoped services captured by the constructor of a conventional middleware class — both directly (a scoped parameter) and transitively (a parameter whose activation graph reaches a scoped service). Middleware registrations are recognized in reduced extension form (`app.UseMiddleware<T>()`) and in direct framework static form (`UseMiddlewareExtensions.UseMiddleware<T>(app)` / `UseMiddlewareExtensions.UseMiddleware(app, typeof(T))`), with explicit activation arguments matched to constructor parameters. A stable local reference-type array (such as `object[]` or `string[]`) initialized by a fixed array creation is expanded positionally just like the framework's `params object[]` call; reassigned, external, uninitialized, and otherwise dynamic arrays remain unproven and silent. The adversarial boundary is recorded in [`docs/adversarial/DI020.md`](docs/adversarial/DI020.md).
 
 **Why it matters:** Conventional middleware (used via `app.UseMiddleware<T>()`) is instantiated once per application lifetime. Injecting a scoped service into the constructor will cause that specific scoped instance to be captured for the entire application lifetime, which often leads to "captive dependency" bugs or runtime errors (e.g., if the service is a DbContext).
 

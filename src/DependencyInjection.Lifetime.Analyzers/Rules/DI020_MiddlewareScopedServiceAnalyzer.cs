@@ -259,11 +259,21 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         SemanticModel semanticModel,
         ImmutableArray<ITypeSymbol?>.Builder argumentTypes)
     {
-        if (expression is not ArrayCreationExpressionSyntax { Initializer: { } initializer } ||
-            semanticModel.GetTypeInfo(expression).Type is not IArrayTypeSymbol
-            {
-                ElementType.SpecialType: SpecialType.System_Object
-            })
+        expression = UnwrapParentheses(expression);
+
+        InitializerExpressionSyntax? initializer = null;
+        if (TryGetParamsArrayInitializer(expression, semanticModel, out var directInitializer))
+        {
+            initializer = directInitializer;
+        }
+        else if (expression is IdentifierNameSyntax identifier &&
+                 semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local &&
+                 TryGetStableObjectArrayInitializer(local, semanticModel, out var localInitializer))
+        {
+            initializer = localInitializer;
+        }
+
+        if (initializer is null)
         {
             return false;
         }
@@ -274,6 +284,89 @@ public sealed class DI020_MiddlewareScopedServiceAnalyzer : DiagnosticAnalyzer
         }
 
         return true;
+    }
+
+    private static bool TryGetParamsArrayInitializer(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        out InitializerExpressionSyntax? initializer)
+    {
+        initializer = expression switch
+        {
+            ArrayCreationExpressionSyntax { Initializer: { } arrayInitializer } => arrayInitializer,
+            ImplicitArrayCreationExpressionSyntax { Initializer: { } arrayInitializer } => arrayInitializer,
+            _ => null
+        };
+
+        // The params parameter is object[]. Any reference-type array is implicitly covariant to
+        // object[] and is therefore forwarded as the actual params array by the C# call.
+        return initializer is not null &&
+               semanticModel.GetTypeInfo(expression).Type is IArrayTypeSymbol
+               {
+                   ElementType.IsReferenceType: true
+               };
+    }
+
+    private static bool TryGetStableObjectArrayInitializer(
+        ILocalSymbol local,
+        SemanticModel semanticModel,
+        out InitializerExpressionSyntax? initializer)
+    {
+        initializer = null;
+        if (local.DeclaringSyntaxReferences[0].GetSyntax() is not VariableDeclaratorSyntax declarator ||
+            declarator.Initializer?.Value is not { } value ||
+            !TryGetParamsArrayInitializer(value, semanticModel, out var directInitializer))
+        {
+            return false;
+        }
+
+        var root = declarator.SyntaxTree.GetRoot();
+        foreach (var identifier in root.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (identifier.Span == declarator.Identifier.Span ||
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    local))
+            {
+                continue;
+            }
+
+            if (IsLocalWrite(identifier))
+            {
+                return false;
+            }
+        }
+
+        initializer = directInitializer;
+        return true;
+    }
+
+    private static bool IsLocalWrite(IdentifierNameSyntax identifier)
+    {
+        if (identifier.Parent is AssignmentExpressionSyntax assignment &&
+            assignment.Left.Span.Contains(identifier.Span))
+        {
+            return true;
+        }
+
+        if (identifier.Parent is ArgumentSyntax argument &&
+            (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) ||
+             argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ExpressionSyntax UnwrapParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
     }
 
     private static void AnalyzeMiddlewareLifetime(
