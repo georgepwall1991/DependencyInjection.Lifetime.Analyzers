@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.7] - 2026-08-09
+
+### Fixed
+
+- DI032 now limits later registration-mutation replay to the same service-collection flow, so an unrelated collection cannot hide a live async-only disposable registration.
+
 ## [3.7.6] - 2026-08-09
 
 ### Fixed

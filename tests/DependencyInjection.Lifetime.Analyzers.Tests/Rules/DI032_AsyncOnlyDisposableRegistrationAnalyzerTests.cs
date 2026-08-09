@@ -265,6 +265,425 @@ public class DI032_AsyncOnlyDisposableRegistrationAnalyzerTests
     }
 
     [Fact]
+    public async Task KeyedReplacementWithDifferentKey_DoesNotRemoveRegistration_ReportsDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        {|DI032:services.AddKeyedSingleton<IWorker, AsyncWorker>("first")|};
+                        services.Replace(
+                            ServiceDescriptor.KeyedSingleton<IWorker, SyncWorker>("second")
+                        );
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.ReferenceAssembliesWithLatestKeyedDi
+        );
+    }
+
+    [Fact]
+    public async Task ReplacementForDifferentService_DoesNotRemoveRegistration_ReportsDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public interface IOther { }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IOther, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        {|DI032:services.AddSingleton<IWorker, AsyncWorker>()|};
+                        services.Replace(ServiceDescriptor.Singleton<IOther, SyncWorker>());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ReplacementBeforeRegistration_DoesNotRemoveRegistration_ReportsDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                        {|DI032:services.AddSingleton<IWorker, AsyncWorker>()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task ReplaceOnDifferentServiceCollection_DoesNotSuppressAsyncOnlyRegistration_ReportsDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var first = new ServiceCollection();
+                        var second = new ServiceCollection();
+                        {|DI032:first.AddSingleton<IWorker, AsyncWorker>()|};
+                        second.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RootRegistrationAndWrapperReplacement_RecognizeTheSameFlow_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public static class RegistrationExtensions
+                {
+                    public static IServiceCollection ReplaceAsyncWorker(this IServiceCollection services)
+                    {
+                        services.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                        return services;
+                    }
+                }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var services = new ServiceCollection();
+                        services.AddSingleton<IWorker, AsyncWorker>();
+                        services.ReplaceAsyncWorker();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RegistrationAndReplacementInsideWrapper_RecognizeTheSameFlow_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public static class RegistrationExtensions
+                {
+                    public static IServiceCollection AddAndReplace(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IWorker, AsyncWorker>();
+                        services.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                        return services;
+                    }
+                }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var services = new ServiceCollection();
+                        services.AddAndReplace();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task WrapperWithMultipleCollections_RemainsConservative_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public static class RegistrationExtensions
+                {
+                    public static IServiceCollection AddFirstReplaceSecond(
+                        this IServiceCollection first,
+                        IServiceCollection second
+                    )
+                    {
+                        first.AddSingleton<IWorker, AsyncWorker>();
+                        second.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                        return first;
+                    }
+                }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var first = new ServiceCollection();
+                        var second = new ServiceCollection();
+                        first.AddFirstReplaceSecond(second);
+                    }
+                }
+                """;
+
+        // Wrapper parameter flows are not proven across the callsite, so DI032 remains
+        // conservative rather than guessing which collection owns the mutation.
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task WrapperCalledOnMultipleFlows_RemainsConservative_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public static class RegistrationExtensions
+                {
+                    public static IServiceCollection AddAsyncWorker(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IWorker, AsyncWorker>();
+                        return services;
+                    }
+                }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var first = new ServiceCollection();
+                        var second = new ServiceCollection();
+                        first.AddAsyncWorker();
+                        second.AddAsyncWorker();
+                        first.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                    }
+                }
+                """;
+
+        // Per-call wrapper flow replay is intentionally unproven, so this source-defined
+        // wrapper remains conservatively silent.
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task OpaqueCollectionCall_DoesNotBreakSameFlowReplacement_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var services = new ServiceCollection();
+                        services.GetHashCode();
+                        services.AddSingleton<IWorker, AsyncWorker>();
+                        services.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task WrapperRegistrationAndRootReplacement_RecognizeTheSameFlow_NoDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public static class RegistrationExtensions
+                {
+                    public static IServiceCollection AddAsyncWorker(this IServiceCollection services)
+                    {
+                        services.AddSingleton<IWorker, AsyncWorker>();
+                        return services;
+                    }
+                }
+
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices()
+                    {
+                        var services = new ServiceCollection();
+                        services.AddAsyncWorker();
+                        services.Replace(ServiceDescriptor.Singleton<IWorker, SyncWorker>());
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
     public async Task KeyedReplacement_DoesNotRemoveUnkeyedAsyncOnlyDisposable_ReportsDiagnostic()
     {
         var source =
