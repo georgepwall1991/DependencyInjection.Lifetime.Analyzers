@@ -1567,6 +1567,81 @@ public class DI009_OpenGenericLifetimeMismatchAnalyzerTests
     #region Should Not Report Diagnostic
 
     [Fact]
+    public async Task OpenGenericSingleton_WithIncompatibleDirectConstraints_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IDependency<T> { }
+
+            public sealed class ClassOnlyScopedDependency<T> : IDependency<T>
+                where T : class
+            {
+            }
+
+            public sealed class StructRepository<T> : IRepository<T>
+                where T : struct
+            {
+                public StructRepository(IDependency<T> dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddScoped(
+                        typeof(IDependency<>),
+                        typeof(ClassOnlyScopedDependency<>));
+                    services.AddSingleton(
+                        typeof(IRepository<>),
+                        typeof(StructRepository<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+            .VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task UnknownKeyExpression_DoesNotMatchKnownNullKey_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IRepository<T> { }
+            public interface IDependency { }
+            public sealed class ScopedDependency : IDependency { }
+
+            public sealed class Repository<T> : IRepository<T>
+            {
+                public Repository([FromKeyedServices(null)] IDependency dependency) { }
+            }
+
+            public sealed class Startup
+            {
+                private static object CreateKey() => new object();
+
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddKeyedScoped<IDependency, ScopedDependency>(null);
+                    services.AddKeyedSingleton(
+                        typeof(IRepository<>),
+                        CreateKey(),
+                        typeof(Repository<>));
+                }
+            }
+            """;
+
+        var test = new Microsoft.CodeAnalysis.CSharp.Testing.CSharpAnalyzerTest<DI009_OpenGenericLifetimeMismatchAnalyzer, Microsoft.CodeAnalysis.Testing.DefaultVerifier>
+        {
+            TestCode = source,
+            ReferenceAssemblies =
+                AnalyzerVerifier<DI009_OpenGenericLifetimeMismatchAnalyzer>
+                    .ReferenceAssembliesWithLatestDi,
+        };
+
+        await test.RunAsync();
+    }
+
+    [Fact]
     public async Task OpenGenericSingleton_CapturesSingletonDependency_NoDiagnostic()
     {
         var source = Usings + """

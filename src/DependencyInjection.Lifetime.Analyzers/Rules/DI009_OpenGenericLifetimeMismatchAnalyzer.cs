@@ -20,6 +20,11 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
     internal const string DependencyLifetimePropertyName = "DependencyLifetime";
     private static readonly object UnknownConcreteKey = new();
 
+    private static bool IsUnknownKey(ServiceRegistration registration) =>
+        registration.IsKeyed &&
+        !SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key) &&
+        registration.KeyLiteral is null;
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiagnosticDescriptors.OpenGenericLifetimeMismatch);
@@ -87,7 +92,10 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 continue;
             }
 
-            if (registration.ImplementationType is null)
+            // An unknown keyed registration does not prove which constructor key will be
+            // requested at runtime, so it cannot establish a captive dependency.
+            if (registration.ImplementationType is null ||
+                IsUnknownKey(registration))
             {
                 continue;
             }
@@ -188,7 +196,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         if (!registration.IsKeyed ||
             !SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key))
         {
-            yield return registration.Key;
+            yield return IsUnknownKey(registration)
+                ? UnknownConcreteKey
+                : registration.Key;
             yield break;
         }
 
@@ -211,7 +221,8 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         foreach (var concreteKey in registrations
                      .Where(static candidate =>
                          candidate.IsKeyed &&
-                         !SyntaxValueHelpers.IsKeyedServiceAnyKey(candidate.Key))
+                         !SyntaxValueHelpers.IsKeyedServiceAnyKey(candidate.Key) &&
+                         !IsUnknownKey(candidate))
                      .Select(static candidate => candidate.Key)
                      .Distinct())
         {
@@ -312,7 +323,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 effectiveRegistrations,
                 closedNamedType,
                 serviceKey.key,
-                serviceKey.isKeyed);
+                serviceKey.isKeyed,
+                compilation,
+                parameterType as INamedTypeSymbol);
             if (closedLifetime is not null)
             {
                 dependencyLifetime = closedLifetime;
@@ -324,7 +337,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             effectiveRegistrations,
             nonGenericType,
             serviceKey.key,
-            serviceKey.isKeyed);
+            serviceKey.isKeyed,
+            compilation,
+            parameterType as INamedTypeSymbol);
         if (dependencyLifetime is null &&
             knownLifetimeClassifier.TryGetLifetime(parameterType, serviceKey.isKeyed, out var knownLifetime))
         {
@@ -337,7 +352,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         IReadOnlyList<ServiceRegistration> registrations,
         ITypeSymbol serviceType,
         object? key,
-        bool isKeyed)
+        bool isKeyed,
+        Compilation compilation,
+        INamedTypeSymbol? constructedServiceType)
     {
         if (isKeyed &&
             SyntaxValueHelpers.IsKeyedServiceAnyKey(key))
@@ -345,7 +362,8 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             var possibleLifetime = registrations
                 .Where(static registration =>
                     registration.IsKeyed &&
-                    !SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key))
+                    !SyntaxValueHelpers.IsKeyedServiceAnyKey(registration.Key) &&
+                    !IsUnknownKey(registration))
                 .Select(static registration => registration.Key)
                 .Distinct()
                 .Select(candidateKey =>
@@ -353,7 +371,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                         registrations,
                         serviceType,
                         candidateKey,
-                        allowAnyKeyFallback: true))
+                        allowAnyKeyFallback: true,
+                        compilation,
+                        constructedServiceType))
                 .Aggregate(
                     (ServiceLifetime?)null,
                     WorstLifetime);
@@ -361,7 +381,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 registrations,
                 serviceType,
                 KeyedServiceAnyKey.Instance,
-                allowAnyKeyFallback: false);
+                allowAnyKeyFallback: false,
+                compilation,
+                constructedServiceType);
             return WorstLifetime(
                 possibleLifetime,
                 anyKeyFallbackLifetime);
@@ -371,21 +393,29 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             registrations,
             serviceType,
             key,
-            allowAnyKeyFallback: isKeyed);
+            allowAnyKeyFallback: isKeyed,
+            compilation,
+            constructedServiceType);
     }
 
     private static ServiceLifetime? GetEffectiveLifetimeForConcreteKey(
         IReadOnlyList<ServiceRegistration> registrations,
         ITypeSymbol serviceType,
         object? key,
-        bool allowAnyKeyFallback)
+        bool allowAnyKeyFallback,
+        Compilation compilation,
+        INamedTypeSymbol? constructedServiceType)
     {
-        var selectedLifetime = GetEffectiveLifetimeForServiceAndKey(
-            registrations,
-            serviceType,
-            key,
-            isKeyed: allowAnyKeyFallback ||
-                SyntaxValueHelpers.IsKeyedServiceAnyKey(key));
+        var selectedLifetime = ReferenceEquals(key, UnknownConcreteKey)
+            ? null
+            : GetEffectiveLifetimeForServiceAndKey(
+                registrations,
+                serviceType,
+                key,
+                isKeyed: allowAnyKeyFallback ||
+                    SyntaxValueHelpers.IsKeyedServiceAnyKey(key),
+                compilation,
+                closedServiceType: constructedServiceType);
         if (selectedLifetime is not null)
         {
             return selectedLifetime;
@@ -397,7 +427,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
                 registrations,
                 serviceType,
                 KeyedServiceAnyKey.Instance,
-                isKeyed: true);
+                isKeyed: true,
+                compilation,
+                closedServiceType: constructedServiceType);
             if (selectedLifetime is not null)
             {
                 return selectedLifetime;
@@ -417,7 +449,9 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             openGenericType,
             key,
             isKeyed: allowAnyKeyFallback ||
-                SyntaxValueHelpers.IsKeyedServiceAnyKey(key));
+                SyntaxValueHelpers.IsKeyedServiceAnyKey(key),
+            compilation,
+            closedServiceType: constructedServiceType ?? closedGenericType);
         if (selectedLifetime is not null || !allowAnyKeyFallback)
         {
             return selectedLifetime;
@@ -427,20 +461,29 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
             registrations,
             openGenericType,
             KeyedServiceAnyKey.Instance,
-            isKeyed: true);
+            isKeyed: true,
+            compilation,
+            closedServiceType: constructedServiceType ?? closedGenericType);
     }
 
     private static ServiceLifetime? GetEffectiveLifetimeForServiceAndKey(
         IReadOnlyList<ServiceRegistration> registrations,
         ITypeSymbol serviceType,
         object? key,
-        bool isKeyed)
+        bool isKeyed,
+        Compilation compilation,
+        INamedTypeSymbol? closedServiceType)
     {
         var matchingRegistrations = GetMatchingRegistrations(
                 registrations,
                 serviceType,
                 key,
                 isKeyed)
+            .Where(registration =>
+                // A matching open registration is usable only when its implementation
+                // constraints can overlap the requested constructed service type.
+                closedServiceType is null ||
+                IsApplicableOpenGenericRegistration(registration, closedServiceType, compilation))
             .ToList();
         return DependencyResolutionEngine.SelectEffectiveSingleServiceRegistration(
                 matchingRegistrations)
@@ -1209,6 +1252,7 @@ public sealed class DI009_OpenGenericLifetimeMismatchAnalyzer : DiagnosticAnalyz
         object? key,
         bool isKeyed) =>
         registrations.Where(registration =>
+            !IsUnknownKey(registration) &&
             SymbolEqualityComparer.Default.Equals(
                 registration.ServiceType,
                 serviceType) &&
