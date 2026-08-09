@@ -445,4 +445,106 @@ public class DI031_SharedImplementationSeparateInstancesAnalyzerTests
             source
         );
     }
+
+    [Fact]
+    public async Task RemoveInDifferentBody_DoesNotSuppressSameBodyPair()
+    {
+        // A later RemoveAll in another method cannot remove the registrations made here.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection.Extensions
+                {
+                    public static class ServiceCollectionDescriptorExtensions
+                    {
+                        public static IServiceCollection RemoveAll<T>(this IServiceCollection services) => services;
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddSingleton<IReader, Store>();
+                        {|DI031:services.AddSingleton<IWriter, Store>()|};
+                    }
+
+                    public void AddReading(IServiceCollection services)
+                    {
+                        Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IReader>(services);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+
+    [Fact]
+    public async Task RemoveOnDifferentServiceCollectionFlow_DoesNotSuppressPair()
+    {
+        // A mutation on another IServiceCollection variable has a different flow key even in the
+        // same method and cannot affect registrations made on `services`.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection.Extensions
+                {
+                    public static class ServiceCollectionDescriptorExtensions
+                    {
+                        public static IServiceCollection RemoveAll<T>(this IServiceCollection services) => services;
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services, IServiceCollection other)
+                    {
+                        services.AddSingleton<IReader, Store>();
+                        {|DI031:services.AddSingleton<IWriter, Store>()|};
+                        Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IReader>(other);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task RemoveDifferentServiceType_DoesNotSuppressPair()
+    {
+        // A mutation for another service type does not withdraw either member of this pair.
+        var source =
+            Usings
+            + """
+                namespace Microsoft.Extensions.DependencyInjection.Extensions
+                {
+                    public static class ServiceCollectionDescriptorExtensions
+                    {
+                        public static IServiceCollection RemoveAll<T>(this IServiceCollection services) => services;
+                    }
+                }
+
+                public interface IOther { }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddSingleton<IReader, Store>();
+                        {|DI031:services.AddSingleton<IWriter, Store>()|};
+                        Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.RemoveAll<IOther>(services);
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI031_SharedImplementationSeparateInstancesAnalyzer>.VerifyDiagnosticsAsync(
+            source
+        );
+    }
+
 }
