@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.5] - 2026-08-09
+
+### Fixed
+
+- DI025 now detects leaks when one implementation has a transient effective service slot alongside a singleton slot, while preserving same-slot override and code-fix safety behavior.
+
 ## [3.7.4] - 2026-08-09
 
 ### Fixed
