@@ -266,7 +266,11 @@ public void Process()
 
 ## DI002: Scoped Service Escapes Scope
 
-**What it catches:** a service resolved from a scope that is returned or stored somewhere longer-lived, including services resolved through provider aliases, delegates that capture scoped services and then escape, scopes declared before a later `using (scope)` disposal block, and the same patterns inside constructors, accessors, local functions, lambdas, and anonymous methods. Collection escapes through field/property-held containers (`_cache.Add(service)`, `_byTenant[key] = service`, `_cache.GetOrAdd(key, service)` and its value-factory spelling `_cache.GetOrAdd(key, _ => resolution)`, `_cache.AddOrUpdate(...)`) and caller-owned collection parameters (`destination.Add(service)`), including caller-visible `ref`/`out` replacements, event subscriptions that bind the scoped service to an owner that outlives the scope (`_publisher.Changed += service.Handle`, captured-delegate handlers), and composite-construction returns (`return (service, count);`, `return new { Service = service };`) are detected too. Wrapped returned resolutions and later-returned locals such as casts, `as` casts, null-forgiving, ternary/coalesce expressions, and non-generic `GetService(typeof(T))` are covered; local containers, by-value parameters definitely replaced with fresh collections that remain local, scope-local publishers, proven non-escaping scope-local holders including simple direct local holder aliases, pre-resolution locals, and composites consumed inside the scope stay quiet. A fresh parameter replacement that is stored into longer-lived state, returned after mutation, or exposed through a direct local alias or `ref`/`out` still reports. Holders that later escape through a return, conditional-access slot return, long-lived assignment including null-conditional assignment to a field/property-held receiver, nested receiver path under a fresh wrapper, escaping delegate, returned/stored local container, already-escaped local collection, returned collection alias, or `??=` receiver that may still point at a long-lived holder still report; slot reads before the scoped write stay quiet.
+**What it catches:** a service resolved from a **tracked** `IServiceScope` with a known scoped registration that is returned or stored beyond that scope. The tracked scope shapes are direct `CreateScope()`/`CreateAsyncScope()` calls and existing scope locals later disposed in the same executable boundary. The rule follows the direct provider aliases it can prove and works inside constructors, accessors, local functions, lambdas, and anonymous methods.
+
+A report is emitted when the resolved instance reaches a proven outliving sink: a field/property, caller-owned `ref`/`out` destination, field/property-held or caller-owned collection mutation (`Add`, `Insert`, `Enqueue`, `Push`, `TryAdd`, `ConcurrentDictionary.GetOrAdd`/`AddOrUpdate` value or supported value-factory forms), a longer-lived event subscription, or a returned tuple/anonymous/conditional/coalesce composite. Constant-key keyed resolutions, non-generic `GetService(typeof(T))`, conditional access, and identity/reference-preserving casts retain this contract. A fresh parameter collection is quiet only while it remains local; once it is returned, stored, or passed by `ref`/`out`, it is an escape.
+
+**Guardrails:** the analyzer stays quiet when the service is used only inside the scope, when lifetime is singleton/transient/unknown/unregistered, or when the receiver is a fresh/local holder, local collection, local publisher, or non-collection method. It does not guess through wrapped or pre-declared scope creation, casted/provider aliases, arbitrary helper/property flows, top-level/deferred executable boundaries, runtime `Type` values, dynamic/non-constant keys, plural service resolution, arrays/lists/constructor/`Task`/`yield` wrappers, receiver aliases/casts/indexers, or opaque factories. Method spelling alone is not enough: user-defined resolution extensions are not treated as Microsoft DI resolution. User-defined conversions are not treated as identity-preserving; direct identity/reference casts remain supported. These deliberate silent cases are the conservative boundary recorded in [`docs/adversarial/DI002.md`](docs/adversarial/DI002.md).
 
 **Why it matters:** once the scope is disposed, that service may point to disposed state.
 
@@ -293,7 +297,14 @@ public void UseServiceNow()
 }
 ```
 
-**Code Fix:** Yes (suppression option for intentionally accepted cases where direct refactoring is not practical).
+**Code Fix:** Yes. The fixer offers only a pragma suppression for an intentionally accepted escape; it does not rewrite ownership or move the service. It refuses diagnostics that are not contained by a statement. Use the standard severity setting, for example:
+
+```ini
+[*.cs]
+dotnet_diagnostic.DI002.severity = warning
+```
+
+There are no DI002-specific `.editorconfig` guardrail options.
 
 ---
 

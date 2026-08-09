@@ -682,5 +682,108 @@ public class DI002_ScopeEscapeCodeFixTests
             .VerifyCodeFixAsync(source, expected, fixedSource, "DI002_Suppress");
     }
 
+    [Fact]
+    public async Task CodeFix_PreservesCarriageReturnLineEndings()
+    {
+        var source = (
+            Usings
+            + """
+                public interface IMyService { }
+
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public IMyService GetService()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        return {|#0:scope.ServiceProvider.GetRequiredService<IMyService>()|};
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddScoped<IMyService, ScopedMyService>();
+                    }
+                }
+
+                public class ScopedMyService : IMyService { }
+                """
+        ).Replace("\n", "\r\n");
+
+        var fixedSource = (
+            Usings
+            + """
+                public interface IMyService { }
+
+                public class MyClass
+                {
+                    private readonly IServiceScopeFactory _scopeFactory;
+
+                    public MyClass(IServiceScopeFactory scopeFactory)
+                    {
+                        _scopeFactory = scopeFactory;
+                    }
+
+                    public IMyService GetService()
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                #pragma warning disable DI002
+                        return scope.ServiceProvider.GetRequiredService<IMyService>();
+                #pragma warning restore DI002
+                    }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        services.AddScoped<IMyService, ScopedMyService>();
+                    }
+                }
+
+                public class ScopedMyService : IMyService { }
+                """
+        ).Replace("\n", "\r\n");
+
+        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(0)
+            .WithArguments("return");
+
+        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .VerifyCodeFixAsync(source, expected, fixedSource, "DI002_Suppress");
+    }
+
+    [Fact]
+    public async Task CodeFix_HandlesMissingAndLeadingLineEndings()
+    {
+        const string sourceWithoutLineEnding =
+            "using System; using Microsoft.Extensions.DependencyInjection; public interface IMyService { } public class MyClass { private readonly IServiceScopeFactory _scopeFactory; public MyClass(IServiceScopeFactory scopeFactory) { _scopeFactory = scopeFactory; } public IMyService GetService() { using var scope = _scopeFactory.CreateScope(); return {|#0:scope.ServiceProvider.GetRequiredService<IMyService>()|}; } } public class Startup { public void ConfigureServices(IServiceCollection services) { services.AddScoped<IMyService, ScopedMyService>(); } } public class ScopedMyService : IMyService { }";
+        const string fixedWithoutLineEnding =
+            "using System; using Microsoft.Extensions.DependencyInjection; public interface IMyService { } public class MyClass { private readonly IServiceScopeFactory _scopeFactory; public MyClass(IServiceScopeFactory scopeFactory) { _scopeFactory = scopeFactory; } public IMyService GetService() { using var scope = _scopeFactory.CreateScope(); \n#pragma warning disable DI002\nreturn scope.ServiceProvider.GetRequiredService<IMyService>();\n#pragma warning restore DI002\n } } public class Startup { public void ConfigureServices(IServiceCollection services) { services.AddScoped<IMyService, ScopedMyService>(); } } public class ScopedMyService : IMyService { }";
+        var expected = CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .Diagnostic(DiagnosticDescriptors.ScopedServiceEscapes)
+            .WithLocation(0)
+            .WithArguments("return");
+
+        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .VerifyCodeFixAsync(sourceWithoutLineEnding, expected, fixedWithoutLineEnding, "DI002_Suppress");
+
+        await CodeFixVerifier<DI002_ScopeEscapeAnalyzer, DI002_ScopeEscapeCodeFixProvider>
+            .VerifyCodeFixAsync(
+                "\n" + sourceWithoutLineEnding,
+                expected,
+                "\n" + fixedWithoutLineEnding,
+                "DI002_Suppress");
+    }
+
     #endregion
 }

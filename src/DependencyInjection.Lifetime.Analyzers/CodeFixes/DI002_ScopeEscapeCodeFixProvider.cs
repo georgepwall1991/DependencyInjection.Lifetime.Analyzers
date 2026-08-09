@@ -8,7 +8,6 @@ using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Text;
 
 namespace DependencyInjection.Lifetime.Analyzers.CodeFixes;
@@ -85,49 +84,74 @@ public sealed class DI002_ScopeEscapeCodeFixProvider : CodeFixProvider
         var leadingTrivia = containingStatement.GetLeadingTrivia();
         var indentation = leadingTrivia.LastOrDefault(t => t.IsKind(SyntaxKind.WhitespaceTrivia));
 
-        // Create pragma disable directive
-        var pragmaDisable = SyntaxFactory.Trivia(
-            SyntaxFactory.PragmaWarningDirectiveTrivia(
-                SyntaxFactory.Token(SyntaxKind.DisableKeyword),
-                SyntaxFactory.SingletonSeparatedList<ExpressionSyntax>(
-                    SyntaxFactory.IdentifierName(DiagnosticIds.ScopedServiceEscapes)),
-                isActive: true));
-
         var newLine = GetPreferredEndOfLine(sourceText);
 
-        // Build trivia before the statement
-        var triviaBeforeStatement = SyntaxFactory.TriviaList(
-            leadingTrivia.Concat(new[]
-            {
-                pragmaDisable,
-                newLine,
-                indentation
-            }));
+        // Parse the directive text instead of relying on elastic token trivia. That keeps the
+        // required spaces stable when the replacement document is not run through a formatter.
+        var pragmaDisable = SyntaxFactory.ParseLeadingTrivia(
+                $"#pragma warning disable {DiagnosticIds.ScopedServiceEscapes}")
+            .Single();
 
-        // Create pragma restore directive for after the statement
-        var pragmaRestore = SyntaxFactory.Trivia(
-            SyntaxFactory.PragmaWarningDirectiveTrivia(
-                SyntaxFactory.Token(SyntaxKind.RestoreKeyword),
-                SyntaxFactory.SingletonSeparatedList<ExpressionSyntax>(
-                    SyntaxFactory.IdentifierName(DiagnosticIds.ScopedServiceEscapes)),
-                isActive: true));
+        // Keep the directive at column zero, matching the existing suppression output, while
+        // restoring the statement's indentation after the directive.
+        var leadingTriviaWithoutIndentation = leadingTrivia;
+        if (indentation.RawKind != 0 &&
+            leadingTriviaWithoutIndentation.LastOrDefault() == indentation)
+        {
+            leadingTriviaWithoutIndentation = leadingTriviaWithoutIndentation.RemoveAt(
+                leadingTriviaWithoutIndentation.Count - 1);
+        }
+
+        var indentationAfterDirective = indentation.RawKind == 0
+            ? Enumerable.Empty<SyntaxTrivia>()
+            : new[] { indentation };
+
+        var statementLine = sourceText.Lines.GetLineFromPosition(containingStatement.SpanStart);
+        var textBeforeStatementOnLine = sourceText.ToString(TextSpan.FromBounds(
+            statementLine.Start,
+            containingStatement.SpanStart));
+        var statementStartsLine = string.IsNullOrWhiteSpace(textBeforeStatementOnLine);
+        var directivePrefix = statementStartsLine
+            ? Enumerable.Empty<SyntaxTrivia>()
+            : new[] { newLine };
+
+        var triviaBeforeStatement = SyntaxFactory.TriviaList(
+            leadingTriviaWithoutIndentation
+                .Concat(directivePrefix)
+                .Concat(new[] { pragmaDisable, newLine })
+                .Concat(indentationAfterDirective));
+
+        // Parse the restore directive with explicit token spacing for the same reason as disable.
+        var pragmaRestore = SyntaxFactory.ParseLeadingTrivia(
+                $"#pragma warning restore {DiagnosticIds.ScopedServiceEscapes}")
+            .Single();
 
         // Get trailing trivia
         var trailingTrivia = containingStatement.GetTrailingTrivia();
+
+        // A directive must end before any same-line tokens that follow the statement.
+        var statementEndLine = sourceText.Lines.GetLineFromPosition(containingStatement.Span.End);
+        var textAfterStatementOnLine = sourceText.ToString(TextSpan.FromBounds(
+            containingStatement.Span.End,
+            statementEndLine.End));
+        var restoreEndsLine = string.IsNullOrWhiteSpace(textAfterStatementOnLine);
+        var restoreSuffix = restoreEndsLine
+            ? Enumerable.Empty<SyntaxTrivia>()
+            : new[] { newLine };
 
         // Build trivia after the statement
         var triviaAfterStatement = SyntaxFactory.TriviaList(
             new[]
             {
                 newLine,
-                indentation,
                 pragmaRestore
-            }.Concat(trailingTrivia));
+            }
+            .Concat(restoreSuffix)
+            .Concat(trailingTrivia));
 
         var newStatement = containingStatement
             .WithLeadingTrivia(triviaBeforeStatement)
-            .WithTrailingTrivia(triviaAfterStatement)
-            .WithAdditionalAnnotations(Formatter.Annotation);
+            .WithTrailingTrivia(triviaAfterStatement);
 
         return document.WithSyntaxRoot(root.ReplaceNode(containingStatement, newStatement));
     }
