@@ -429,6 +429,28 @@ public class DI019_RootScopedResolutionAnalyzerTests
     }
 
     [Fact]
+    public async Task ExplicitSingletonOptionsSnapshotOverride_NoDiagnostic()
+    {
+        var source = Usings + OptionsStubs + """
+            public sealed class MyOptions { }
+            public sealed class SingletonSnapshot : Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions> { }
+
+            public class Startup
+            {
+                public void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>, SingletonSnapshot>();
+                    var provider = services.BuildServiceProvider();
+                    provider.GetRequiredService<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>();
+                    provider.GetServices<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task ScopedProviderResolvingOptionsSnapshot_NoDiagnostic()
     {
         var source = Usings + OptionsStubs + """

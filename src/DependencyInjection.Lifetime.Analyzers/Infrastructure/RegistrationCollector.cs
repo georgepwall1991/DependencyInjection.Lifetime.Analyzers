@@ -1555,9 +1555,10 @@ public sealed class RegistrationCollector
                     }
                     else
                     {
-                        // Check if it's a key (constant) or instance
-                        var val = ExtractConstantValue(expr, semanticModel);
-                        if (val != null)
+                        // Check if it's a known key (constant) or instance. Unknown key
+                        // expressions are handled by keyed overloads with explicit key positions;
+                        // this ambiguous descriptor position must not turn a Type/instance into a key.
+                        if (SyntaxValueHelpers.TryExtractServiceKeyValue(expr, semanticModel, out var val, out _))
                         {
                             key = val;
                             isKeyed = true;
@@ -1905,7 +1906,11 @@ public sealed class RegistrationCollector
     }
 
     private static object? ExtractConstantValue(ExpressionSyntax expr, SemanticModel semanticModel) =>
-        SyntaxValueHelpers.TryExtractServiceKeyValue(expr, semanticModel, out var value, out _) ? value : null;
+        // Keep each unknown key distinct. Treating all non-constant expressions as null makes
+        // unrelated keyed registrations appear to share a runtime key.
+        SyntaxValueHelpers.TryExtractServiceKeyValue(expr, semanticModel, out var value, out _)
+            ? value
+            : new object();
 
     private static (INamedTypeSymbol? serviceType, INamedTypeSymbol? implementationType, ExpressionSyntax? factoryExpression, bool hasImplementationInstance, object? key, bool implementationInstanceTypeIsExact) ExtractTypes(
         IMethodSymbol method,

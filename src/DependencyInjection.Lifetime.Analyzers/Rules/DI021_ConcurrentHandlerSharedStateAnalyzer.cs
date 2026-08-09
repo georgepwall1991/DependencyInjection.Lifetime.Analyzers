@@ -2683,13 +2683,19 @@ public sealed class DI021_ConcurrentHandlerSharedStateAnalyzer : DiagnosticAnaly
         IInvocationOperation invocation,
         out ITypeSymbol resolvedType)
     {
+        var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
         if (invocation.TargetMethod.TypeArguments.Length == 1)
         {
+            if (!IsFrameworkServiceResolutionExtension(sourceMethod))
+            {
+                resolvedType = null!;
+                return false;
+            }
+
             resolvedType = invocation.TargetMethod.TypeArguments[0];
             return true;
         }
 
-        var sourceMethod = invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod;
         if (sourceMethod.Name is not ("GetService" or "GetRequiredService") ||
             !IsSupportedNonGenericServiceResolution(sourceMethod, compilation))
         {

@@ -888,6 +888,41 @@ public class DI021_ConcurrentHandlerSharedStateAnalyzerTests
     }
 
     [Fact]
+    public async Task CapturedScopeGenericResolution_UserDefinedGenericHelper_NoDiagnostic()
+    {
+        var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """
+            public static class CustomProviderExtensions
+            {
+                public static object GetRequiredService<T>(IServiceProvider provider) => new object();
+            }
+
+            public class Worker
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+                private IServiceScope _scope;
+
+                public Worker(IServiceScopeFactory scopeFactory)
+                {
+                    _scopeFactory = scopeFactory;
+                }
+
+                public void Start(ServiceBusSessionProcessor processor)
+                {
+                    _scope = _scopeFactory.CreateScope();
+                    processor.ProcessMessageAsync += async args =>
+                    {
+                        var service = CustomProviderExtensions.GetRequiredService<AppDbContext>(
+                            _scope.ServiceProvider);
+                        await Task.CompletedTask;
+                    };
+                }
+            }
+            """;
+
+        await VerifyNoneAsync(source);
+    }
+
+    [Fact]
     public async Task CapturedScopeGenericResolution_UserDefinedStaticHelperWithReorderedArguments_NoDiagnostic()
     {
         var source = ServiceBusUsing + BaseUsings + ServiceBusStubs + EfCoreStubs + """

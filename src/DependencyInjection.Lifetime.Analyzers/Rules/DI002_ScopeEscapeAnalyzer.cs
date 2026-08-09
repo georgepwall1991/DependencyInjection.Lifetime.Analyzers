@@ -134,6 +134,14 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             // ConditionalAccessExpressionSyntax rather than the invocation itself.
             var consumption = GetConsumptionExpression(invocation);
 
+            // A user-defined conversion can project the resolved service into an unrelated value
+            // (for example, a scoped service converted to a string). The conversion result is not
+            // the service instance that this rule proves to escape, so do not track or report it.
+            if (!ResolutionConsumptionIsValuePreserving(consumption, invocation, semanticModel))
+            {
+                continue;
+            }
+
             if (consumption.Parent is EqualsValueClauseSyntax equalsValue &&
                 equalsValue.Parent is VariableDeclaratorSyntax declarator &&
                 semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
@@ -1742,6 +1750,14 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         foreach (var invocation in expression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
         {
+            if (!ResolutionConsumptionIsValuePreserving(
+                    GetConsumptionExpression(invocation),
+                    invocation,
+                    semanticModel))
+            {
+                continue;
+            }
+
             if (TryGetResolutionLifetime(
                     invocation,
                     semanticModel,
@@ -1774,6 +1790,14 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
 
         if (target is IdentifierNameSyntax identifier)
         {
+            if (IsPropertyAssignmentToFreshLocalObjectInitializer(
+                    identifier,
+                    semanticModel,
+                    executableBody))
+            {
+                return false;
+            }
+
             return semanticModel.GetSymbolInfo(identifier).Symbol is IFieldSymbol or IPropertySymbol;
         }
 
@@ -1794,6 +1818,42 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsPropertyAssignmentToFreshLocalObjectInitializer(
+        IdentifierNameSyntax target,
+        SemanticModel semanticModel,
+        SyntaxNode executableBody)
+    {
+        if (semanticModel.GetSymbolInfo(target).Symbol is not IPropertySymbol ||
+            target.Ancestors().FirstOrDefault(node =>
+                node is InitializerExpressionSyntax initializer &&
+                initializer.IsKind(SyntaxKind.ObjectInitializerExpression)) is not InitializerExpressionSyntax objectInitializer ||
+            objectInitializer.Parent is not ObjectCreationExpressionSyntax objectCreation)
+        {
+            return false;
+        }
+
+        // A property initializer on a fresh local holder is not itself an outliving receiver. The
+        // later composite/field/return passes still handle proven outer sinks; an otherwise local
+        // holder remains deliberately unproven instead of producing a property-name diagnostic.
+        switch (objectCreation.Parent)
+        {
+            case EqualsValueClauseSyntax equalsValue
+                when equalsValue.Parent is VariableDeclaratorSyntax variable:
+                return semanticModel.GetDeclaredSymbol(variable) is ILocalSymbol;
+
+            case AssignmentExpressionSyntax outerAssignment
+                when outerAssignment.Right == objectCreation:
+                return !AssignmentTargetOutlivesScope(
+                    outerAssignment.Left,
+                    semanticModel,
+                    executableBody,
+                    outerAssignment);
+
+            default:
+                return false;
+        }
     }
 
     private static bool TryGetAssignmentTargetSymbol(
@@ -3032,6 +3092,62 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
     /// Returns the expression whose parent decides how the resolved service is consumed: the
     /// invocation itself, or the outermost enclosing wrapper whose result escapes.
     /// </summary>
+    private static bool ResolutionConsumptionIsValuePreserving(
+        SyntaxNode consumption,
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        SyntaxNode current = invocation;
+        while (current != consumption)
+        {
+            switch (current.Parent)
+            {
+                case ParenthesizedExpressionSyntax parenthesized when parenthesized.Expression == current:
+                    current = parenthesized;
+                    continue;
+
+                case CastExpressionSyntax cast when cast.Expression == current:
+                    if (semanticModel.GetTypeInfo(cast.Type).Type is { } castType &&
+                        semanticModel.ClassifyConversion(cast.Expression, castType).IsUserDefined)
+                    {
+                        return false;
+                    }
+
+                    current = cast;
+                    continue;
+
+                case PostfixUnaryExpressionSyntax postfix
+                    when postfix.IsKind(SyntaxKind.SuppressNullableWarningExpression) && postfix.Operand == current:
+                    current = postfix;
+                    continue;
+
+                case ConditionalAccessExpressionSyntax conditionalAccess
+                    when conditionalAccess.WhenNotNull == current:
+                    current = conditionalAccess;
+                    continue;
+
+                case ConditionalExpressionSyntax conditional
+                    when conditional.WhenTrue == current || conditional.WhenFalse == current:
+                    current = conditional;
+                    continue;
+
+                case BinaryExpressionSyntax binary
+                    when (binary.IsKind(SyntaxKind.CoalesceExpression) || binary.IsKind(SyntaxKind.AsExpression)) &&
+                         (binary.Left == current || binary.Right == current):
+                    current = binary;
+                    continue;
+
+                default:
+                    // The consumption walker only returns an ancestor reached through one of the
+                    // cases above. If a future syntax shape is added, fail closed rather than
+                    // treating an unknown conversion as an identity-preserving service flow.
+                    return current == consumption;
+            }
+        }
+
+        return true;
+    }
+
     private static SyntaxNode GetConsumptionExpression(InvocationExpressionSyntax invocation)
     {
         SyntaxNode current = invocation;
@@ -3850,14 +3966,13 @@ public sealed class DI002_ScopeEscapeAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
-        if (sourceMethod.IsExtensionMethod && sourceMethod.Parameters.Length > 0)
+        // Only the framework extension container is a proven DI resolution surface. A user
+        // extension can reuse a familiar method name while returning a projection or unrelated
+        // value, so method-name/receiver heuristics must not create DI002 diagnostics.
+        if (sourceMethod.IsExtensionMethod)
         {
-            var receiverType = sourceMethod.Parameters[0].Type;
-            if (IsSystemIServiceProvider(receiverType) ||
-                wellKnownTypes.IsKeyedServiceProvider(receiverType))
-            {
-                return true;
-            }
+            return containingType.Name == "ServiceProviderServiceExtensions" &&
+                   containingType.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
         }
 
         return IsSystemIServiceProvider(containingType) ||

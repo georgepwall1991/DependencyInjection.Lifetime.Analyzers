@@ -1468,7 +1468,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
             // while (await timer.WaitForNextTickAsync(token))
             case AwaitExpressionSyntax awaitExpression
                 when UnwrapInvocation(awaitExpression.Expression) is { } invocation &&
-                     GetInvokedName(invocation) == "WaitForNextTickAsync":
+                     IsPeriodicTimerWaitForNextTick(invocation, semanticModel):
                 return true;
 
             // while (await reader.WaitToReadAsync(token)) — channel consumer loop.
@@ -1539,15 +1539,26 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
         return false;
     }
 
-    private static string? GetInvokedName(InvocationExpressionSyntax invocation)
+    private static bool IsPeriodicTimerWaitForNextTick(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
     {
-        return invocation.Expression switch
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol ||
+            methodSymbol.Name != "WaitForNextTickAsync")
         {
-            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.Text,
-            MemberBindingExpressionSyntax memberBinding => memberBinding.Name.Identifier.Text,
-            IdentifierNameSyntax identifier => identifier.Identifier.Text,
-            _ => null
-        };
+            return false;
+        }
+
+        for (var type = methodSymbol.ContainingType; type is not null; type = type.BaseType)
+        {
+            if (type.Name == "PeriodicTimer" &&
+                type.ContainingNamespace?.ToDisplayString() == "System.Threading")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsCancellationRequestedAccess(ExpressionSyntax expression, SemanticModel semanticModel)

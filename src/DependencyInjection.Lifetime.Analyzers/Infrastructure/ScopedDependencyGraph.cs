@@ -145,13 +145,15 @@ internal sealed class ScopedDependencyGraph
         HashSet<ServiceLookupKey> visited,
         out ScopedDependencyMatch match)
     {
-        if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
+        var registrations = GetAllMatchingRegistrations(requestedType, key, isKeyed).ToArray();
+        if (registrations.Length == 0 &&
+            TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
         {
             match = match.PrependToPath(requestedType);
             return true;
         }
 
-        foreach (var registration in GetAllMatchingRegistrations(requestedType, key, isKeyed))
+        foreach (var registration in registrations)
         {
             if (TryFindScopedDependencyInRegistration(
                     requestedType,
@@ -175,7 +177,9 @@ internal sealed class ScopedDependencyGraph
         HashSet<ServiceLookupKey> visited,
         out ScopedDependencyMatch match)
     {
-        if (TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
+        var registrations = GetEffectiveMatchingRegistrations(requestedType, key, isKeyed).ToArray();
+        if (registrations.Length == 0 &&
+            TryCreateKnownScopedMatch(requestedType, key, isKeyed, out match))
         {
             match = match.PrependToPath(requestedType);
             return true;
@@ -196,7 +200,7 @@ internal sealed class ScopedDependencyGraph
             return false;
         }
 
-        foreach (var registration in GetEffectiveMatchingRegistrations(requestedType, key, isKeyed))
+        foreach (var registration in registrations)
         {
             if (TryFindScopedDependencyInRegistration(
                     requestedType,
