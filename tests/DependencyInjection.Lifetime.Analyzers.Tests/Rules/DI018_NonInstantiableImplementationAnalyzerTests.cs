@@ -41,6 +41,28 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
     }
 
     [Fact]
+    public async Task AbstractRegistration_RemovedByRemoveAll_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, AbstractService>();
+                    services.RemoveAll<IMyService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
     public async Task Interface_RegisteredAsImplementation_Reports()
     {
         var source = Usings + """
@@ -1132,6 +1154,109 @@ public class DI018_NonInstantiableImplementationAnalyzerTests
             """;
 
         await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+    [Fact]
+    public async Task AbstractRegistration_RemovedByClear_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, AbstractService>();
+                    services.Clear();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AbstractRegistration_ReplacedByConcreteRegistration_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public sealed class ConcreteService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, AbstractService>();
+                    services.Replace(ServiceDescriptor.Singleton<IMyService, ConcreteService>());
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyNoDiagnosticsAsync(
+            source
+        );
+    }
+
+    [Fact]
+    public async Task AbstractRegistration_AfterRemoveAll_IsReactivatedAndReports()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+            public sealed class ConcreteService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services)
+                {
+                    services.AddSingleton<IMyService, ConcreteService>();
+                    services.RemoveAll<IMyService>();
+                    services.AddSingleton<IMyService, AbstractService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(14, 9)
+                .WithArguments("AbstractService", "IMyService", "type is abstract")
+        );
+    }
+
+    [Fact]
+    public async Task AbstractRegistration_ConditionallyRemoved_RemainsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IMyService { }
+            public abstract class AbstractService : IMyService { }
+
+            public class Startup
+            {
+                public void ConfigureServices(IServiceCollection services, bool remove)
+                {
+                    services.AddSingleton<IMyService, AbstractService>();
+                    if (remove)
+                    {
+                        services.RemoveAll<IMyService>();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI018_NonInstantiableImplementationAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.NonInstantiableImplementation)
+                .WithLocation(11, 9)
+                .WithArguments("AbstractService", "IMyService", "type is abstract")
+        );
     }
 
     #endregion
