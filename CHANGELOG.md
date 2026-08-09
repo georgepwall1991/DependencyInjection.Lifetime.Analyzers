@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.3] - 2026-08-09
+
+### Fixed
+
+- DI031 now scopes `RemoveAll` and `Replace` replay to the same service slot, service-collection flow, and execution body, preventing unrelated mutations from hiding shared-implementation diagnostics.
+
 ## [3.7.2] - 2026-08-09
 
 ### Fixed
