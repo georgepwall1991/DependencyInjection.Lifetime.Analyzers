@@ -1008,6 +1008,8 @@ One pass, four collector gaps — the 2.10.6 Replace-bug class; unblinds DI012/D
 - **INFRA-5b phase 1 (FP, S): Fixed.** The shared effective-registration replay now recognizes the exact BCL `ICollection<ServiceDescriptor>.Clear()` contract only when its receiver is proven to implement `IServiceCollection`. A later unconditional clear in the same straight-line execution scope removes every registration on that collection flow for DI009 and DI011. Conditional clears remain possible removals rather than definite ones, preserving later `TryAdd` reachability and existing diagnostics; a separate descriptor list with the same method stays outside the mutation stream.
 
 ### Backlog (verified-low or unverified — pull in only if a pass comes up dry at red phase)
+
+- **Intermittent “no appsettings” tooling failure:** reproduce the random missing-`appsettings` error and classify the project before changing discovery; non-API projects should likely ignore `appsettings` inputs. Keep this as a stack item until a reproducible host/project boundary is available.
 DI009-3/5 · DI010-4/5 · DI011-3/4 · DI015-5 opaque-gate ordering · DI019-5 · DI026 scope-longevity Info→Warning upgrade — deferred; needs DI024's loop/scope classification + resolution-site tracking to prove a scope is long-lived (SignalR connection, Blazor circuit, hosted-service loop scope). Warning FPs on ordinary per-request scopes are worse than the current soft Info, so the tier stays Info until longevity is provable · INFRA-5b remaining `IList<ServiceDescriptor>` mutations (nonzero/dynamic `Insert`, `Remove`, indexer replacement), plus `Clear` propagation beyond DI009/DI011 — require position/identity-aware flow proofs before widening.
 
 ## Watchlist
