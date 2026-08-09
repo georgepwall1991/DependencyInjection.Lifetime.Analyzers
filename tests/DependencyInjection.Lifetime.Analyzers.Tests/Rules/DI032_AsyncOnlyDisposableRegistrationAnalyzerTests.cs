@@ -265,6 +265,44 @@ public class DI032_AsyncOnlyDisposableRegistrationAnalyzerTests
     }
 
     [Fact]
+    public async Task KeyedReplacement_DoesNotRemoveUnkeyedAsyncOnlyDisposable_ReportsDiagnostic()
+    {
+        var source =
+            """
+                using Microsoft.Extensions.DependencyInjection.Extensions;
+
+                """
+            + Usings
+            + """
+                public class AsyncWorker : IWorker, IAsyncDisposable
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public class SyncWorker : IWorker, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public class Startup
+                {
+                    public void ConfigureServices(IServiceCollection services)
+                    {
+                        {|DI032:services.AddSingleton<IWorker, AsyncWorker>()|};
+                        services.Replace(
+                            ServiceDescriptor.KeyedSingleton<IWorker, SyncWorker>("key")
+                        );
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI032_AsyncOnlyDisposableRegistrationAnalyzer>.ReferenceAssembliesWithLatestKeyedDi
+        );
+    }
+
+    [Fact]
     public async Task TargetTypedAndParenthesizedFactory_ReportsDiagnostic()
     {
         // `new()` and a parenthesised creation are still single object creations.

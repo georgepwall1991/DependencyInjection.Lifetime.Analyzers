@@ -89,6 +89,8 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                                 mutation.ServiceType,
                                 registration.ServiceType
                             )
+                            && mutation.IsKeyed == registration.IsKeyed
+                            && object.Equals(mutation.Key, registration.Key)
                             && IsAfter(mutation.Location, registration.Location)
                         )
                     )
