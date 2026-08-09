@@ -102,19 +102,28 @@ public sealed class DI031_SharedImplementationSeparateInstancesAnalyzer : Diagno
                 continue;
             }
 
-            // A RemoveAll or Replace can only withdraw the claim if it runs after the descriptor
-            // it removes was added. A removal that precedes every registration here took away
-            // something else.
+            // A RemoveAll or Replace can only withdraw the claim if it targets the same service
+            // slot, collection flow, and execution body, and runs after the descriptor it removes
+            // was added. A removal that precedes every registration here took away something else.
             if (
                 distinctByServiceType.Any(registration =>
-                    mutations.Any(mutation =>
+                {
+                    var registrationContainer = ExecutionContainerOf(registration.Location);
+                    return mutations.Any(mutation =>
                         SymbolEqualityComparer.Default.Equals(
                             mutation.ServiceType,
                             registration.ServiceType
                         )
+                        && Equals(mutation.Key, registration.Key)
+                        && mutation.IsKeyed == registration.IsKeyed
+                        && mutation.FlowKey == registration.FlowKey
+                        && Equals(
+                            ExecutionContainerOf(mutation.Location),
+                            registrationContainer
+                        )
                         && ComparePositions(mutation.Location, registration.Location) > 0
-                    )
-                )
+                    );
+                })
             )
             {
                 continue;
