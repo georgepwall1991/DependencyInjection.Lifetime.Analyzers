@@ -49,7 +49,19 @@ public sealed class DI018_NonInstantiableImplementationAnalyzer : DiagnosticAnal
         CompilationAnalysisContext context,
         RegistrationCollector registrationCollector)
     {
-        foreach (var registration in registrationCollector.AllRegistrations)
+        var registrations = registrationCollector.AllRegistrations.ToList();
+        var registrationCandidates = registrationCollector.RegistrationCandidates.ToList();
+        var definitelyRemovedRegistrations = DefinitelyRemovedRegistrationSet.Create(
+            context.Compilation,
+            registrations,
+            registrationCandidates,
+            registrationCollector.OrderedMutations);
+        var effectiveRegistrations =
+            definitelyRemovedRegistrations.GetEffectiveRegistrations(
+                registrations,
+                registrationCandidates);
+
+        foreach (var registration in effectiveRegistrations)
         {
             // Skip factory registrations — the factory is responsible for construction
             if (registration.FactoryExpression is not null || registration.HasImplementationInstance)
