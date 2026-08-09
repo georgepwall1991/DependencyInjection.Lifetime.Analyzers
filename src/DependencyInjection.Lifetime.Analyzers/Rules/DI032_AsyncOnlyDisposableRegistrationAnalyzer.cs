@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
@@ -42,20 +45,38 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                 return;
             }
 
+            var invocationObservations = new ConcurrentQueue<ServiceCollectionReachabilityAnalyzer.InvocationObservation>();
+
             compilationContext.RegisterSyntaxNodeAction(
                 syntaxContext =>
+                {
+                    var invocation = (InvocationExpressionSyntax)syntaxContext.Node;
                     registrationCollector.AnalyzeInvocation(
-                        (InvocationExpressionSyntax)syntaxContext.Node,
+                        invocation,
                         syntaxContext.SemanticModel
-                    ),
+                    );
+
+                    if (ServiceCollectionReachabilityAnalyzer.IsPotentialServiceCollectionWrapperInvocation(
+                            invocation,
+                            syntaxContext.SemanticModel))
+                    {
+                        invocationObservations.Enqueue(
+                            new ServiceCollectionReachabilityAnalyzer.InvocationObservation(
+                                invocation,
+                                syntaxContext.SemanticModel));
+                    }
+                },
                 SyntaxKind.InvocationExpression
             );
 
             compilationContext.RegisterCompilationEndAction(endContext =>
             {
-                var mutations = registrationCollector.OrderedMutations.ToList();
+                var mutations = registrationCollector.OrderedMutations.ToImmutableArray();
+                var registrations = registrationCollector.AllRegistrations.ToImmutableArray();
+                var unalignableWrapperLocations = BuildUnalignableWrapperLocations(
+                    invocationObservations.ToImmutableArray());
 
-                foreach (var registration in registrationCollector.AllRegistrations)
+                foreach (var registration in registrations)
                 {
                     // Only instances the container creates are tracked for disposal; a pre-built
                     // instance is the caller's to dispose (DI033).
@@ -83,17 +104,10 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
 
                     // A descriptor removed or replaced after it was added never reaches the
                     // provider, so it cannot make disposal throw.
-                    if (
-                        mutations.Any(mutation =>
-                            SymbolEqualityComparer.Default.Equals(
-                                mutation.ServiceType,
-                                registration.ServiceType
-                            )
-                            && mutation.IsKeyed == registration.IsKeyed
-                            && object.Equals(mutation.Key, registration.Key)
-                            && IsAfter(mutation.Location, registration.Location)
-                        )
-                    )
+                    if (IsRegistrationDefinitelyRemoved(
+                            registration,
+                            mutations,
+                            unalignableWrapperLocations))
                     {
                         continue;
                     }
@@ -116,6 +130,61 @@ public sealed class DI032_AsyncOnlyDisposableRegistrationAnalyzer : DiagnosticAn
                 }
             });
         });
+    }
+
+    private static HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey> BuildUnalignableWrapperLocations(
+        ImmutableArray<ServiceCollectionReachabilityAnalyzer.InvocationObservation> observations)
+    {
+        var locations = new HashSet<ServiceCollectionReachabilityAnalyzer.LocationKey>();
+        foreach (var observation in observations)
+        {
+            var containingMethod = ServiceCollectionReachabilityAnalyzer.NormalizeContainingMethod(
+                observation.SemanticModel.GetEnclosingSymbol(observation.Invocation.SpanStart) as IMethodSymbol);
+            if (containingMethod is null ||
+                !ServiceCollectionReachabilityAnalyzer.IsSourceDefinedCustomServiceCollectionWrapper(containingMethod))
+            {
+                continue;
+            }
+
+            var location = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(
+                observation.Invocation.GetLocation());
+            if (location.HasValue)
+            {
+                locations.Add(location.Value);
+            }
+        }
+
+        return locations;
+    }
+
+    private static bool IsRegistrationDefinitelyRemoved(
+        ServiceRegistration registration,
+        ImmutableArray<OrderedRegistrationMutation> mutations,
+        ISet<ServiceCollectionReachabilityAnalyzer.LocationKey> unalignableWrapperLocations)
+    {
+        if (IsUnalignableWrapperLocation(registration.Location, unalignableWrapperLocations))
+        {
+            return true;
+        }
+
+        return mutations.Any(mutation =>
+            SymbolEqualityComparer.Default.Equals(mutation.ServiceType, registration.ServiceType)
+            && mutation.IsKeyed == registration.IsKeyed
+            && object.Equals(mutation.Key, registration.Key)
+            && (IsUnalignableWrapperLocation(mutation.Location, unalignableWrapperLocations)
+                || (string.Equals(
+                        mutation.FlowKey,
+                        registration.FlowKey,
+                        StringComparison.Ordinal)
+                    && IsAfter(mutation.Location, registration.Location))));
+    }
+
+    private static bool IsUnalignableWrapperLocation(
+        Location location,
+        ISet<ServiceCollectionReachabilityAnalyzer.LocationKey> unalignableWrapperLocations)
+    {
+        var locationKey = ServiceCollectionReachabilityAnalyzer.LocationKey.Create(location);
+        return locationKey.HasValue && unalignableWrapperLocations.Contains(locationKey.Value);
     }
 
     /// <summary>Source order, treating locations in different files as incomparable.</summary>
