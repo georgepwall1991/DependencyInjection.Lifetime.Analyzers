@@ -442,6 +442,7 @@ public class DI019_RootScopedResolutionAnalyzerTests
                     services.AddSingleton<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>, SingletonSnapshot>();
                     var provider = services.BuildServiceProvider();
                     provider.GetRequiredService<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>();
+                    provider.GetServices<Microsoft.Extensions.Options.IOptionsSnapshot<MyOptions>>();
                 }
             }
             """;
