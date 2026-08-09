@@ -811,6 +811,38 @@ public class DI025_EventSubscriptionLeakAnalyzerTests
         await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
+
+
+    [Fact]
+    public async Task SubscriberRegisteredUnderTransientInterfaceAndSingletonSelf_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IHandler { }
+
+            public static class Registrations
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IBus, Bus>();
+                    services.AddTransient<IHandler, OrderHandler>();
+                    services.AddSingleton<OrderHandler>();
+                }
+            }
+
+            public class OrderHandler : IHandler
+            {
+                public OrderHandler(IBus bus)
+                {
+                    [|bus.MessageReceived += OnMessage|];
+                }
+
+                private void OnMessage(object sender, EventArgs e) { }
+            }
+            """;
+
+        await AnalyzerVerifier<DI025_EventSubscriptionLeakAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     [Fact]
     public async Task SubscriberRegisteredTransientAndSingleton_MaxRankWins_NoDiagnostic()
     {

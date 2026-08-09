@@ -327,8 +327,16 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        // Resolve the final descriptor for each subscriber service slot before ranking
+        // implementations. A later registration overrides an earlier descriptor for the same
+        // slot, while distinct service types can still expose one implementation at different
+        // lifetimes. Publisher analysis still receives every descriptor so its conservative
+        // multi-registration rank remains unchanged.
         var registrations = registrationCollector.AllRegistrations.ToList();
-        var subscriberRanks = BuildSubscriberRankMap(registrations);
+        var effectiveRegistrations = registrationCollector.Registrations.ToList();
+        var subscriberRanks = BuildSubscriberRankMap(effectiveRegistrations);
+        // Keep every transient descriptor for the code-fix safety gate: even an overridden
+        // transient registration means adding IDisposable could create a DI008 capture shape.
         var transientSubscribers = BuildSubscribersWithTransientRegistration(registrations);
         var removalList = removals.ToList();
         var semanticModelsByTree = new ConcurrentDictionary<SyntaxTree, SemanticModel>();
@@ -626,7 +634,7 @@ public sealed class DI025_EventSubscriptionLeakAnalyzer : DiagnosticAnalyzer
                  current is not null && current.SpecialType != SpecialType.System_Object;
                  current = current.BaseType)
             {
-                if (!ranks.TryGetValue(current, out var existing) || rank > existing)
+                if (!ranks.TryGetValue(current, out var existing) || rank < existing)
                 {
                     ranks[current] = rank;
                 }
