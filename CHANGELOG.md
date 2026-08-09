@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-08-09
+
+### Fixed
+
+- Hardened DI002 scope-escape analysis and its code fix around proven ownership and replacement-value boundaries.
+- Hardened DI009 open-generic matching against impossible constraints and unknown keyed expressions.
+- Suppressed DI011 provider-injection diagnostics for abstract registrations, which DI018 reports instead.
+- Honored effective explicit lifetimes in DI019, including singleton overrides of ambient scoped framework services.
+- Restricted DI021 generic provider resolutions to the exact framework extension binding.
+- Restricted DI024 periodic-loop detection to `System.Threading.PeriodicTimer` rather than same-named custom methods.
+
 ## [3.7.0] - 2026-07-31
 
 ### Added
