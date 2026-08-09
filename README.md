@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.5
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.6
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.5">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.6">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.5" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.6" />
 ```
 
 Then reference it from the project file:
@@ -1582,7 +1582,7 @@ public sealed class UploadQueue : IUploadQueue, IDisposable, IAsyncDisposable
 
 The alternative is to guarantee every disposal is asynchronous — `await provider.DisposeAsync()`, `CreateAsyncScope`, `await using` — which the generic host does for you but a hand-built provider does not.
 
-**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033). Factory registrations do count — the container creates and tracks a factory's result — when the lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A descriptor removed or replaced after it was added never reaches the provider. The diagnostic is conditional on the service being resolved at least once, since that is what puts it in the container's disposal list.
+**Guardrails:** the rule covers singleton and scoped registrations — a transient disposable is DI008's finding, and a second diagnostic on the same registration would be noise. Pre-built instances are exempt because the container never disposes them at all (that is DI033). Factory registrations do count — the container creates and tracks a factory's result — when the lambda body is a single object creation; an opaque factory proves nothing and stays quiet. A descriptor removed or replaced after it was added never reaches the provider, but keyed and unkeyed descriptors are distinct slots, so a mutation only suppresses a matching key. The diagnostic is conditional on the service being resolved at least once, since that is what puts it in the container's disposal list.
 
 **Code Fix:** No — adding a synchronous `Dispose` means deciding what synchronous teardown of an inherently asynchronous resource should do, which the analyzer cannot answer.
 

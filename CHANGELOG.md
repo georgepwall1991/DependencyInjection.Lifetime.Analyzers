@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.6] - 2026-08-09
+
+### Fixed
+
+- DI032 now keeps keyed and unkeyed service slots distinct when replaying later `Replace` mutations, so a keyed replacement cannot hide a live unkeyed async-only disposable registration.
+
 ## [3.7.5] - 2026-08-09
 
 ### Fixed
