@@ -53,6 +53,37 @@ public class DI024_HostedServiceScopePerIterationAnalyzerTests
         """;
 
     [Fact]
+    public async Task FakeTimerWaitForNextTickAsync_DoesNotMakeLoopLongRunning_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class FakeTimer
+            {
+                public ValueTask<bool> WaitForNextTickAsync(CancellationToken token) => new(true);
+            }
+
+            public class PollingService : BackgroundService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public PollingService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var timer = new FakeTimer();
+                    while (await timer.WaitForNextTickAsync(stoppingToken))
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IWorker>();
+                        await worker.DoWorkAsync(stoppingToken);
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI024_HostedServiceScopePerIterationAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task HoistedScope_UsedInsideStoppingTokenLoop_ReportsDiagnostic()
     {
         var source = Usings + """
