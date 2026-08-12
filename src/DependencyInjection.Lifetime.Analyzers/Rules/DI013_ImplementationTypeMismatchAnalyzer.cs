@@ -91,12 +91,7 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
             return false;
         }
 
-        if (service.IsGenericType && implementation.IsGenericType)
-        {
-            return IsClosedTypeCompatible(compilation, service, implementation);
-        }
-
-        return IsClosedTypeCompatible(compilation, service, implementation);
+        return ImplementationAssignability.IsClosedTypeCompatible(compilation, service, implementation);
     }
 
     private static bool IsOpenGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)
@@ -168,11 +163,4 @@ public sealed class DI013_ImplementationTypeMismatchAnalyzer : DiagnosticAnalyze
 
         return true;
     }
-
-    private static bool IsClosedTypeCompatible(
-        Compilation compilation,
-        INamedTypeSymbol service,
-        INamedTypeSymbol implementation) =>
-        compilation is CSharpCompilation csharpCompilation &&
-        csharpCompilation.ClassifyConversion(implementation, service).IsImplicit;
 }

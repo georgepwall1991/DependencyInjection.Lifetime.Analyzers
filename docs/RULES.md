@@ -596,7 +596,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations.
+**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations. Closed-type compatibility follows CLR assignability — identity, reference, boxing, and `T` → `Nullable<T>` — so implicit numeric conversions and user-defined operators are not treated as a valid implementation binding.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 

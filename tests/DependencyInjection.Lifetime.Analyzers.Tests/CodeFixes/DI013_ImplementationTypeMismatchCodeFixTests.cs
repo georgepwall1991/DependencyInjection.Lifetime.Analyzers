@@ -531,6 +531,38 @@ public class DI013_ImplementationTypeMismatchCodeFixTests
     }
 
     [Fact]
+    public async Task ReplaceImplementation_OnlyUserDefinedConversionCandidate_OffersNoFix()
+    {
+        var source = Usings + """
+            public abstract class Target {}
+            public sealed class Convertible
+            {
+                public static implicit operator Target(Convertible value) => null!;
+            }
+            public sealed class WrongService {}
+
+            public class Startup
+            {
+                public IServiceCollection ConfigureServices(IServiceCollection services)
+                {
+                    return {|#0:services.AddSingleton(typeof(Target), typeof(WrongService))|};
+                }
+            }
+            """;
+
+        // A user-defined implicit conversion is not MEDI assignability. Offering
+        // Convertible here would retarget the registration to another type the
+        // container still cannot bind to Target.
+        await CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+            .VerifyNoCodeFixOfferedAsync(
+                source,
+                CodeFixVerifier<DI013_ImplementationTypeMismatchAnalyzer, DI013_ImplementationTypeMismatchCodeFixProvider>
+                    .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                    .WithLocation(0)
+                    .WithArguments("WrongService", "Target"));
+    }
+
+    [Fact]
     public async Task ReplaceImplementation_OnlyStructCandidate_OffersNoFix()
     {
         var source = Usings + """
