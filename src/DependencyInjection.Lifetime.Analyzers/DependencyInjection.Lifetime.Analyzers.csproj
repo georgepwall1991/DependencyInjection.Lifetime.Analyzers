@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.7.7</Version>
+    <Version>3.7.8</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI032 now replays later Replace mutations only within the same service-collection flow and matching keyed slot, so unrelated mutations cannot hide live async-only disposable registrations.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">DI013 now treats closed implementation compatibility as CLR assignability (identity, reference, boxing, and T to Nullable&lt;T&gt;), so implicit numeric conversions and user-defined operators no longer hide invalid registrations.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

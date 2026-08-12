@@ -5,6 +5,7 @@ using System.Composition;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using DependencyInjection.Lifetime.Analyzers.Rules;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
@@ -606,8 +607,7 @@ public sealed class DI013_ImplementationTypeMismatchCodeFixProvider : CodeFixPro
             return false;
         }
 
-        return compilation is CSharpCompilation csharpCompilation &&
-            csharpCompilation.ClassifyConversion(implementation, service).IsImplicit;
+        return ImplementationAssignability.IsClosedTypeCompatible(compilation, service, implementation);
     }
 
     private static bool IsOpenGenericCompatible(INamedTypeSymbol service, INamedTypeSymbol implementation)

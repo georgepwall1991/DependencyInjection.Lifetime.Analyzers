@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.8] - 2026-08-12
+
+### Fixed
+
+- DI013 now treats closed implementation compatibility as CLR assignability (identity, reference, boxing, and the `T` → `Nullable<T>` special case), so implicit numeric conversions and user-defined operators no longer hide registrations Microsoft.Extensions.DependencyInjection cannot bind.
+
 ## [3.7.7] - 2026-08-09
 
 ### Fixed

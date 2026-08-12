@@ -1339,6 +1339,114 @@ public class Startup
     // ─── Edge case: abstract implementation (DI018 territory, but DI013 should stay silent) ──
 
     [Fact]
+    public async Task ImplicitNumericConversion_IsNotAssignable_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(long), typeof(int));
+    }
+}";
+
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(10, 9)
+                .WithArguments("Int32", "Int64")
+        );
+    }
+
+    [Fact]
+    public async Task NullableOfSameUnderlyingType_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(int?), typeof(int));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NullableOfDifferentUnderlyingType_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(long?), typeof(int));
+    }
+}";
+
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(10, 9)
+                .WithArguments("Int32", "Nullable")
+        );
+    }
+
+    [Fact]
+    public async Task UserDefinedImplicitConversionToExactClass_ReportsDiagnostic()
+    {
+        var source = Usings + @"
+public sealed class Adapter {}
+public sealed class Convertible
+{
+    public static implicit operator Adapter(Convertible value) => new Adapter();
+}
+
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        {|#0:services.AddSingleton(typeof(Adapter), typeof(Convertible))|};
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
+            AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
+                .WithLocation(0)
+                .WithArguments("Convertible", "Adapter"));
+    }
+
+    [Fact]
+    public async Task BoxingToObject_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(object), typeof(int));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task BoxingToInterface_NoDiagnostic()
+    {
+        var source = Usings + @"
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(typeof(IComparable), typeof(int));
+    }
+}";
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task AbstractImplementation_NoDiagnostic_DI013()
     {
         var source = Usings + @"

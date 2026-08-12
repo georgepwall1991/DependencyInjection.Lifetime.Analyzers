@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.7
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.8
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.7">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.7" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8" />
 ```
 
 Then reference it from the project file:
@@ -775,7 +775,7 @@ services.AddSingleton<IMyService, ServiceB>(); // overrides A
 
 ## DI013: Implementation Type Mismatch
 
-**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations.
+**What it catches:** invalid service/implementation pairs that compile but fail at runtime, including generic, `typeof(...)`, keyed, named-argument, and `ServiceDescriptor` registrations. Closed-type compatibility follows CLR assignability — identity, reference, boxing, and `T` → `Nullable<T>` — so implicit numeric conversions and user-defined operators are not treated as a valid implementation binding.
 
 **Why it matters:** service activation throws at runtime (`ArgumentException`/`InvalidOperationException` depending on path).
 
