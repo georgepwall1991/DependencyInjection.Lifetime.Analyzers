@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-08-13
+
+### Added
+
+- **DI038: Framework-activated type depends on an unregistered service** (new rule, Warning) — ASP.NET Core activates controllers, Razor `PageModel`s, and `[FromServices]` / `[FromKeyedServices]` parameters from the DI container even when those types are not registered. A missing constructor or attributed parameter therefore throws `InvalidOperationException` on the first request to that endpoint, which `ValidateOnBuild` also misses.
+  - v1 is high-confidence only: public constructors of concrete, publicly accessible types assignable to `ControllerBase` or `PageModel`, and `[FromServices]` / `[FromKeyedServices]` parameters on public instance actions of those types, including inherited actions. Name-suffix `*Controller` types, abstract, internal, `[NonController]`, `[NonAction]`, shadowed base methods, `System.Object` overrides, and inferred Minimal API parameters stay silent.
+  - The compilation must contain an `IServiceCollection` invocation and an MVC/Razor activation call (`AddControllers`, `AddMvc`, `AddRazorPages`, or a matching endpoint map). A class library or worker that only declares controllers stays quiet.
+  - Uninvoked source helpers do not count as registrations. A metadata-only third-party `AddXxx` wrapper silences the compilation; Microsoft.Extensions / Microsoft.AspNetCore assemblies stay transparent even when the helper lives in a Microsoft namespace.
+  - A controller or page that is itself registered in `IServiceCollection` stays quiet so DI015 keeps that constructor.
+  - Unmodeled `Microsoft.Extensions` / `Microsoft.AspNetCore` services stay silent except `IMemoryCache`, `IHttpClientFactory`, and `IHttpContextAccessor`, so helpers such as `AddHealthChecks()` do not produce false positives.
+  - Alternate containers (`UseServiceProviderFactory`, `ConfigureContainer`) silence the rule. An unkeyed custom `IControllerActivator`, `IControllerFactory`, `IPageModelActivatorProvider`, or `IPageModelFactoryProvider` suppresses constructor findings only.
+  - Accepted false negatives: factory/instance-registered controllers still constructed by MVC's default activator; `[ServiceKey]` on unkeyed activation; keyed requests for framework or container primitives.
+  - Opaque third-party `IServiceCollection` helpers, including `RegisterXxx`, Scrutor `Scan`, and generated `AddXxx` wrappers, silence the compilation.
+  - Accepted false negatives: inferred `MapGet` parameters, Blazor `[Inject]`, `GetRequiredService` call sites, and third-party metadata-only registration helpers. See `docs/adversarial/DI038.md`.
+
 ## [3.7.8] - 2026-08-12
 
 ### Fixed

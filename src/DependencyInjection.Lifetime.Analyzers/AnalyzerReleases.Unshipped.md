@@ -5,4 +5,4 @@
 
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI037 | DependencyInjection | Warning | Task started on a scope-resolved service leaves the using scope without being awaited
+DI038 | DependencyInjection | Warning | Framework-activated controller, Razor Page, or [FromServices] parameter depends on an unregistered service

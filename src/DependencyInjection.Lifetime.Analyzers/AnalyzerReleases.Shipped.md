@@ -159,3 +159,10 @@ DI035 | DependencyInjection | Warning | One non-thread-safe service shared by ev
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
 DI036 | DependencyInjection | Warning | Registration runs after a provider was already built from the same IServiceCollection
+
+## Release 3.7.0
+
+### New Rules
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+DI037 | DependencyInjection | Warning | Task started on a scope-resolved service leaves the using scope without being awaited

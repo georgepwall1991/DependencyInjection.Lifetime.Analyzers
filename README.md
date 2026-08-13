@@ -29,7 +29,7 @@ DependencyInjection.Lifetime.Analyzers reports high-confidence DI lifetime and a
 - **Captive dependencies** — singleton (or other long-lived) services capturing scoped or transient dependencies (`DI003`, `DI009`)
 - **Scope leaks and disposal** — undisposed `IServiceScope` / root providers, use-after-dispose, async scope misuse (`DI001`, `DI004`, `DI005`, `DI014`)
 - **Scope escape and root resolution** — scoped services leaving their scope or resolved from the root provider (`DI002`, `DI019`)
-- **Registration and activation failures** — unresolvable dependencies, implementation mismatches, non-instantiable types, circular graphs (`DI013`, `DI015`, `DI017`, `DI018`)
+- **Registration and activation failures** — unresolvable dependencies, implementation mismatches, non-instantiable types, circular graphs, and framework-activated controllers or `[FromServices]` parameters (`DI013`, `DI015`, `DI017`, `DI018`, `DI038`)
 - **`BuildServiceProvider()` misuse** during service composition (`DI016`)
 - **Service locator drift** — static provider caches and overuse of `IServiceProvider` (`DI006`, `DI007`, `DI011`)
 - **ASP.NET Core / host hazards** — middleware scoped capture, hosted-service scope-per-iteration, `HttpClient` lifetime, fire-and-forget scope/`HttpContext` capture (`DI020`, `DI023`, `DI024`, `DI029`, `DI034`)
@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.8
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.8.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.8.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.8.0" />
 ```
 
 Then reference it from the project file:
@@ -182,6 +182,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [DI035: Non-Thread-Safe Service Shared Across a Fan-Out](#di035-non-thread-safe-service-shared-across-a-fan-out)
 - [DI036: Registration Added After The Provider Was Built](#di036-registration-added-after-the-provider-was-built)
 - [DI037: Un-awaited Task Escapes The Scope That Created It](#di037-un-awaited-task-escapes-the-scope-that-created-it)
+- [DI038: Framework-Activated Type Depends On An Unregistered Service](#di038-framework-activated-type-depends-on-an-unregistered-service)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -227,6 +228,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 | [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 | [DI037](#di037-un-awaited-task-escapes-the-scope-that-created-it) | Un-awaited task escapes the scope that created it | Warning | No |
+| [DI038](#di038-framework-activated-type-depends-on-an-unregistered-service) | Framework-activated type depends on an unregistered service | Warning | No |
 
 ---
 
@@ -1755,9 +1757,45 @@ public async Task Dispatch(int orderId)
 
 ---
 
+## DI038: Framework-Activated Type Depends On An Unregistered Service
+
+**What it catches:** a concrete ASP.NET Core controller (`ControllerBase`) or Razor `PageModel` whose public constructor requests a service that is not registered, and a `[FromServices]` / `[FromKeyedServices]` parameter that the container cannot satisfy. These types are activated by the framework and usually do not appear in `IServiceCollection`, so DI015 never sees them.
+
+**Why it matters:** the first request to that endpoint throws `Unable to resolve service for type 'X' while attempting to activate 'OrdersController'`. Microsoft's runtime `ValidateOnBuild` misses the same surface.
+
+> **Explain Like I'm Ten:** The kitchen is ready, but the waiter was never told what soup is, so the first customer who orders it gets an empty bowl.
+
+**Problem:**
+
+```csharp
+builder.Services.AddControllers();
+// IOrderService is never registered
+
+public sealed class OrdersController : ControllerBase
+{
+    public OrdersController(IOrderService orders) { }
+}
+
+public IActionResult Get([FromServices] ISearchService search) => Ok();
+```
+
+**Better pattern:**
+
+```csharp
+builder.Services.AddControllers();
+builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<ISearchService, SearchService>();
+```
+
+**Guardrails:** the compilation must contain an `IServiceCollection` invocation and an MVC/Razor activation call (`AddControllers`, `AddMvc`, `AddRazorPages`, or a matching endpoint map). A class library or worker that only declares controllers stays quiet. A metadata-only third-party `AddXxx` / `RegisterXxx` wrapper, or a generated registration helper, silences the rule because that helper may have registered the missing service; Microsoft.Extensions / Microsoft.AspNetCore assemblies stay transparent. Uninvoked source helpers do not count as registrations. A controller or page that is itself registered stays quiet so DI015 owns that constructor. Name-suffix `*Controller` types, abstract, internal, nested, open-generic, `[NonController]` (including inherited), `[NonAction]`, `[NonHandler]`, generic or abstract methods, non-handler `PageModel` methods, optional `[FromServices]` parameters, overrides of `System.Object` members, shadowed base methods, inferred Minimal API parameters, Blazor `[Inject]`, and `GetRequiredService` call sites stay silent. Unmodeled `Microsoft.Extensions` / `Microsoft.AspNetCore` services stay silent except `IMemoryCache`, `IHttpClientFactory`, and `IHttpContextAccessor`. `UseServiceProviderFactory` / `ConfigureContainer` silence the compilation; a registered `IControllerActivator` suppresses constructor findings only. The adversarial boundary is recorded in [`docs/adversarial/DI038.md`](docs/adversarial/DI038.md).
+
+**Code Fix:** No — inserting a registration requires a composition-root `IServiceCollection` that is not local to the controller, and choosing the lifetime is a product decision.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI037`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI038`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration
