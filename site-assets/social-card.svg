@@ -35,7 +35,7 @@
 
     <text x="80" y="540" fill="#8ea0bd" font-size="26" font-family="'SF Mono', Consolas, monospace">dotnet add package DependencyInjection.Lifetime.Analyzers</text>
 
-    <text x="80" y="586" fill="#6c7d99" font-size="23">37 rules · ASP.NET Core, workers, generic host · no runtime dependency</text>
+    <text x="80" y="586" fill="#6c7d99" font-size="23">38 rules · ASP.NET Core, workers, generic host · no runtime dependency</text>
   </g>
 
   <g opacity="0.9" transform="translate(905 150)">

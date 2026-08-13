@@ -1,17 +1,14 @@
 # Analyzer Health Report
 
-**Current release candidate:** 3.5.20 — DI009 and DI011 now ignore registrations provably removed
-by a later unconditional `IServiceCollection.Clear()` in the same straight-line flow. Conditional
-clears remain conservative, and unrelated descriptor collections do not enter the mutation stream.
+**Current release candidate:** 3.8.0 — DI038 warns when ASP.NET Core activates a controller, Razor
+`PageModel`, or `[FromServices]` / `[FromKeyedServices]` parameter that the container cannot resolve.
+These types are usually absent from `IServiceCollection`, so `ValidateOnBuild` and DI015 miss them.
 
-**Last refreshed:** 2026-07-27
-**Package version:** 3.5.20
-**Base audited commit:** `5796552` (`origin/main`; release `v3.5.19`)
-**Test result:** 2026-07-27 local Release build passed with 0 errors and 76 existing intentional
-sample warnings. The Release suite passed 2,738 tests with 0 failed and 0 skipped. Focused DI011
-`Clear` coverage passed 5 tests after red-phase interface, concrete-receiver, and multi-registration
-false positives, including conditional-clear and unrelated-descriptor-list guardrails; a focused
-DI009 regression also passed.
+**Last refreshed:** 2026-08-13
+**Package version:** 3.8.0
+**Base audited commit:** `5318b3c` (`origin/main`; release `v3.7.8`)
+**Test result:** 2026-08-13 local Debug suite passed 2,986 tests before the 3.8.0 publication bump.
+Release verification is part of the 3.8.0 PR gate.
 
 ## Historical Release Snapshots
 
@@ -186,6 +183,14 @@ Six releases in one sweep, each shipped as its own PR, review cycle, and tag:
   followed transitively, `goto` bail-out, `Clear()` exclusion) was mutation-tested: deleting it makes
   its own regression test fail. Fifteen adversarial review rounds ran against the rule; the last
   returned no false positives.
+- **3.8.0 — DI038 framework-activated unresolvable dependency.** Controllers, Razor `PageModel`s,
+  and `[FromServices]` / `[FromKeyedServices]` parameters are activated by ASP.NET Core without
+  being `IServiceCollection` registrations, so DI015 never saw them. **Boundary vs DI015:** DI015
+  owns constructors of *registered* implementations; DI038 owns framework-activated types that are
+  not registered. A controller that is itself `AddScoped<OrdersController>()` stays on DI015.
+  Inferred Minimal API parameters, Blazor `[Inject]`, and `GetRequiredService` call sites stay
+  unclaimed.
+
 - **3.7.0 — DI037 un-awaited task escapes the scope that created it.** A task started on a
   scope-resolved service and then returned, discarded, stored, or collected outside the scope keeps
   running against services the scope has already disposed.

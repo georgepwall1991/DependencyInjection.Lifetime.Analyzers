@@ -278,6 +278,13 @@ const ruleSampleConfig = {
       { label: "Sample app build-last registration pattern", symbol: "ConfigureGood" },
     ],
   },
+  DI038: {
+    samplePath: "samples/SampleApp/Diagnostics/DI038/FrameworkActivatedDependencyExamples.cs",
+    highlights: [
+      { label: "Sample app missing controller dependency note", symbol: "OrdersController" },
+      { label: "Sample app registered controller dependency pattern", symbol: "InvoicesController" },
+    ],
+  },
   DI037: {
     samplePath: "samples/SampleApp/Diagnostics/DI037/UnawaitedTaskEscapesScopeExamples.cs",
     highlights: [

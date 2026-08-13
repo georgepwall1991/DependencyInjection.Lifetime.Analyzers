@@ -379,6 +379,20 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI038: ASP.NET Core will activate this type and cannot resolve one of its dependencies.
+    /// </summary>
+    public static readonly DiagnosticDescriptor FrameworkActivatedDependency = new(
+        id: DiagnosticIds.FrameworkActivatedDependency,
+        title: "Framework-activated type depends on an unregistered service",
+        messageFormat: "'{0}' is activated by ASP.NET Core and depends on unregistered service '{1}'",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "ASP.NET Core activates controllers, Razor Pages, and [FromServices] parameters from the DI container even when those types are not registered in IServiceCollection. A missing constructor or [FromServices] dependency therefore throws InvalidOperationException on the first request to that endpoint, which ValidateOnBuild also misses. Register the missing service, or stop requesting it.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI031: One implementation registered under several service types yields one instance per
     /// registration, not one shared instance.
     /// </summary>

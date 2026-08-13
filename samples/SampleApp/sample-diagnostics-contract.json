@@ -966,6 +966,25 @@
           "occurrence": 2
         }
       ]
+    },
+    {
+      "folder": "DI038",
+      "ruleId": "DI038",
+      "claims": [
+        {
+          "filePathContains": "DI038/FrameworkActivatedDependencyExamples.cs",
+          "anchor": "public OrdersController(IMissingCatalog catalog) { }",
+          "ruleId": "DI038",
+          "severity": "warning"
+        },
+        {
+          "filePathContains": "DI038/FrameworkActivatedDependencyExamples.cs",
+          "anchor": "public object Get([FromServices] ISearchService search) => search;",
+          "ruleId": "DI038",
+          "severity": "warning"
+        }
+      ],
+      "approvedSecondaryDiagnostics": []
     }
   ],
   "fileClaims": [],

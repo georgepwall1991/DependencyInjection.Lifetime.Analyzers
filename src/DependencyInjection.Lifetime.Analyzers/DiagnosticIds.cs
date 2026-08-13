@@ -219,6 +219,13 @@ public static class DiagnosticIds
     public const string UnawaitedTaskEscapesScope = "DI037";
 
     /// <summary>
+    /// DI038: A type ASP.NET Core activates — a controller, Razor PageModel, or a
+    /// [FromServices]/[FromKeyedServices] parameter — depends on a service that is not
+    /// registered. The container throws on the first request to that endpoint.
+    /// </summary>
+    public const string FrameworkActivatedDependency = "DI038";
+
+    /// <summary>
     /// DI030: A collection owned by a singleton service or held in a static member is written with
     /// request-derived keys and never evicted, or an IMemoryCache entry is written with neither an
     /// expiration nor a size limit. The store grows monotonically for the life of the process.

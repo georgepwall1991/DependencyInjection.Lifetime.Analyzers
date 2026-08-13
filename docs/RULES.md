@@ -48,6 +48,7 @@ For the latest full rule content, see:
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 | [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 | [DI037](#di037-un-awaited-task-escapes-the-scope-that-created-it) | Un-awaited task escapes the scope that created it | Warning | No |
+| [DI038](#di038-framework-activated-type-depends-on-an-unregistered-service) | Framework-activated type depends on an unregistered service | Warning | No |
 
 ---
 
@@ -1569,5 +1570,41 @@ public async Task Dispatch(int orderId)
 **Guardrails:** the scope must be disposed by the body that starts the work — a `using` declaration or a `using` statement — because that is what fixes the moment of teardown; a scope without one has no proven disposal point here and is DI001's finding instead. The receiver must be scope-derived: the scope's `ServiceProvider`, a service resolved through it, or a local that holds either, grown transitively and dropped entirely if any of those locals is reassigned or passed by `ref`/`out`. The call must hand back a `Task` or `ValueTask`; a synchronous call finishes inside the scope by definition. A task consumed where it stands is not reported — `await`, `await ... .ConfigureAwait(false)`, `.GetAwaiter().GetResult()`, `.Wait()`, an `await` of the `Task.WhenAll` it was passed to, or a wait on anything reached from the service, such as a completion property it exposes — and neither is one whose fate this rule cannot name, such as a local declared inside the scope. Work that finishes before it is handed back is not reported either: a body with no `await` on the path taken, or whose awaits are all of work already over — `Task.CompletedTask`, `Task.FromResult`, `Task.Delay(0)`, `Task.WhenAll` of finished tasks, `Task.WhenAny` where one is finished, a local or readonly field holding any of those, or an await a preceding `IsCompleted` check has already settled — because such a call is done before the scope closes. A `true` or `false` argument counts here too: a guard clause the call site's own literal sends the body out of is a path with no await on it. Work started inside a lambda, a local function, or a query clause is skipped: a delegate runs when its consumer chooses, and background work started with `Task.Run` is DI023's finding rather than this rule's. Accepted false negatives: a task whose escape route runs through a helper method, a service resolved from a scope created in another method, and a scope-resolved singleton, which the scope does not own and therefore does not dispose. Accepted false positives: a token cancelled before the call, which leaves the work faulted at its first check but reads here as ordinary escaping work; and a join signalled through something this rule cannot connect back to the task, such as a `ManualResetEventSlim` the service sets when its work ends, still reads as an escape — waiting on an unrelated handle is far commoner than hand-rolled completion signalling, and treating every later wait as the join would silence real findings.
 
 **Code Fix:** No — the repair is a choice between awaiting inside the scope, making the caller own the scope, and giving the background work a scope of its own, and only the author knows which of the three the surrounding code can support.
+
+---
+
+## DI038: Framework-Activated Type Depends On An Unregistered Service
+
+**What it catches:** a concrete ASP.NET Core controller (`ControllerBase`) or Razor `PageModel` whose public constructor requests a service that is not registered, and a `[FromServices]` / `[FromKeyedServices]` parameter that the container cannot satisfy. These types are activated by the framework and usually do not appear in `IServiceCollection`, so DI015 never sees them.
+
+**Why it matters:** the first request to that endpoint throws `Unable to resolve service for type 'X' while attempting to activate 'OrdersController'`. Microsoft's runtime `ValidateOnBuild` misses the same surface.
+
+> **Explain Like I'm Ten:** The kitchen is ready, but the waiter was never told what soup is, so the first customer who orders it gets an empty bowl.
+
+**Problem:**
+
+```csharp
+builder.Services.AddControllers();
+// IOrderService is never registered
+
+public sealed class OrdersController : ControllerBase
+{
+    public OrdersController(IOrderService orders) { }
+}
+
+public IActionResult Get([FromServices] ISearchService search) => Ok();
+```
+
+**Better pattern:**
+
+```csharp
+builder.Services.AddControllers();
+builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<ISearchService, SearchService>();
+```
+
+**Guardrails:** the compilation must contain an `IServiceCollection` invocation and an MVC/Razor activation call (`AddControllers`, `AddMvc`, `AddRazorPages`, or a matching endpoint map). A class library or worker that only declares controllers stays quiet. A metadata-only third-party `AddXxx` / `RegisterXxx` wrapper, or a generated registration helper, silences the rule because that helper may have registered the missing service; Microsoft.Extensions / Microsoft.AspNetCore assemblies stay transparent. Uninvoked source helpers do not count as registrations. A controller or page that is itself registered stays quiet so DI015 owns that constructor. Name-suffix `*Controller` types, abstract, internal, nested, open-generic, `[NonController]` (including inherited), `[NonAction]`, `[NonHandler]`, generic or abstract methods, non-handler `PageModel` methods, optional `[FromServices]` parameters, overrides of `System.Object` members, shadowed base methods, inferred Minimal API parameters, Blazor `[Inject]`, and `GetRequiredService` call sites stay silent. Unmodeled `Microsoft.Extensions` / `Microsoft.AspNetCore` services stay silent except `IMemoryCache`, `IHttpClientFactory`, and `IHttpContextAccessor`. `UseServiceProviderFactory` / `ConfigureContainer` silence the compilation; a registered `IControllerActivator` suppresses constructor findings only. The adversarial boundary is recorded in [`docs/adversarial/DI038.md`](docs/adversarial/DI038.md).
+
+**Code Fix:** No — inserting a registration requires a composition-root `IServiceCollection` that is not local to the controller, and choosing the lifetime is a product decision.
 
 ---

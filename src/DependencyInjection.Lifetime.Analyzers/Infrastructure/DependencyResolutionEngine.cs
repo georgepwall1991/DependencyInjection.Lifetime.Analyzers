@@ -28,9 +28,9 @@ internal sealed class DependencyResolutionEngine
 
         public bool Equals(ServiceLookupKey other)
         {
-            return SymbolEqualityComparer.Default.Equals(Type, other.Type) &&
-                   Equals(Key, other.Key) &&
-                   IsKeyed == other.IsKeyed;
+            return SymbolEqualityComparer.Default.Equals(Type, other.Type)
+                && Equals(Key, other.Key)
+                && IsKeyed == other.IsKeyed;
         }
 
         public override bool Equals(object? obj)
@@ -58,24 +58,30 @@ internal sealed class DependencyResolutionEngine
         RegistrationCollector registrationCollector,
         WellKnownTypes? wellKnownTypes,
         Func<ServiceRegistration, bool>? isRegistrationAvailable = null,
-        IEnumerable<ServiceRegistration>? availableRegistrations = null)
+        IEnumerable<ServiceRegistration>? availableRegistrations = null
+    )
     {
         _wellKnownTypes = wellKnownTypes;
         _knownLifetimeClassifier = new KnownServiceLifetimeClassifier(wellKnownTypes);
         var registrationFilter = isRegistrationAvailable ?? (_ => true);
-        _availableRegistrations = (availableRegistrations ??
-                                   registrationCollector.AllRegistrations)
+        _availableRegistrations = (availableRegistrations ?? registrationCollector.AllRegistrations)
             .Where(registrationFilter)
             .ToImmutableArray();
     }
 
     public ResolutionResult ResolveRegistration(
         ServiceRegistration registration,
-        bool assumeFrameworkServicesRegistered)
+        bool assumeFrameworkServicesRegistered
+    )
     {
-        if (registration.HasImplementationInstance ||
-            registration.ImplementationType is null ||
-            !IsServiceImplementationCompatible(registration.ServiceType, registration.ImplementationType))
+        if (
+            registration.HasImplementationInstance
+            || registration.ImplementationType is null
+            || !IsServiceImplementationCompatible(
+                registration.ServiceType,
+                registration.ImplementationType
+            )
+        )
         {
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
         }
@@ -83,7 +89,7 @@ internal sealed class DependencyResolutionEngine
         var resolutionCache = new Dictionary<ServiceLookupKey, ResolutionResult>();
         var resolutionPath = new HashSet<ServiceLookupKey>
         {
-            new(registration.ServiceType, registration.Key, registration.IsKeyed)
+            new(registration.ServiceType, registration.Key, registration.IsKeyed),
         };
 
         return ResolveImplementationType(
@@ -94,22 +100,25 @@ internal sealed class DependencyResolutionEngine
             registration.FactoryProvidedParameterTypes,
             assumeFrameworkServicesRegistered,
             resolutionCache,
-            resolutionPath);
+            resolutionPath
+        );
     }
 
     public ResolutionResult ResolveFactoryRequest(
         ServiceRegistration registration,
         DependencyRequest request,
-        bool assumeFrameworkServicesRegistered)
+        bool assumeFrameworkServicesRegistered
+    )
     {
         var resolutionCache = new Dictionary<ServiceLookupKey, ResolutionResult>();
         var resolutionPath = new HashSet<ServiceLookupKey>
         {
-            new(registration.ServiceType, registration.Key, registration.IsKeyed)
+            new(registration.ServiceType, registration.Key, registration.IsKeyed),
         };
 
-        return request.SourceKind == DependencySourceKind.ActivatorUtilitiesConstruction &&
-               request.Type is INamedTypeSymbol implementationType
+        return
+            request.SourceKind == DependencySourceKind.ActivatorUtilitiesConstruction
+            && request.Type is INamedTypeSymbol implementationType
             ? ResolveImplementationType(
                 implementationType,
                 registration.IsKeyed ? registration.Key : null,
@@ -118,19 +127,41 @@ internal sealed class DependencyResolutionEngine
                 factoryProvidedParameterTypes: ImmutableArray<ITypeSymbol>.Empty,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
-                resolutionPath)
+                resolutionPath
+            )
             : ResolveDependency(
                 request,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
-                resolutionPath);
+                resolutionPath
+            );
+    }
+
+    public ResolutionResult ResolveActivatedImplementation(
+        INamedTypeSymbol implementationType,
+        bool assumeFrameworkServicesRegistered
+    )
+    {
+        var resolutionCache = new Dictionary<ServiceLookupKey, ResolutionResult>();
+        var resolutionPath = new HashSet<ServiceLookupKey>();
+        return ResolveImplementationType(
+            implementationType,
+            inheritedKey: null,
+            hasInheritedKey: false,
+            inheritedKeyLiteral: null,
+            factoryProvidedParameterTypes: ImmutableArray<ITypeSymbol>.Empty,
+            assumeFrameworkServicesRegistered,
+            resolutionCache,
+            resolutionPath
+        );
     }
 
     public ResolutionResult ResolveServiceRequest(
         ITypeSymbol dependencyType,
         object? key,
         bool isKeyed,
-        bool assumeFrameworkServicesRegistered)
+        bool assumeFrameworkServicesRegistered
+    )
     {
         var resolutionCache = new Dictionary<ServiceLookupKey, ResolutionResult>();
         var resolutionPath = new HashSet<ServiceLookupKey>();
@@ -141,16 +172,22 @@ internal sealed class DependencyResolutionEngine
             SyntaxValueHelpers.TryFormatCSharpLiteral(key, out var keyLiteral) ? keyLiteral : null,
             DependencySourceKind.ConstructorParameter,
             Location.None,
-            FormatDependencyName(dependencyType, key, isKeyed));
+            FormatDependencyName(dependencyType, key, isKeyed)
+        );
 
         return ResolveDependency(
             request,
             assumeFrameworkServicesRegistered,
             resolutionCache,
-            resolutionPath);
+            resolutionPath
+        );
     }
 
-    internal static string FormatDependencyName(ITypeSymbol dependencyType, object? key, bool isKeyed)
+    internal static string FormatDependencyName(
+        ITypeSymbol dependencyType,
+        object? key,
+        bool isKeyed
+    )
     {
         var typeName = dependencyType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
         if (!isKeyed)
@@ -173,11 +210,16 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        if (namedType.TypeKind is TypeKind.Interface or TypeKind.TypeParameter ||
-            namedType.TypeKind == TypeKind.Delegate ||
-            namedType.IsAbstract ||
-            namedType.IsUnboundGenericType ||
-            namedType.IsGenericType && namedType.TypeArguments.Any(argument => argument.TypeKind == TypeKind.TypeParameter))
+        if (
+            namedType.TypeKind is TypeKind.Interface or TypeKind.TypeParameter
+            || namedType.TypeKind == TypeKind.Delegate
+            || namedType.IsAbstract
+            || namedType.IsUnboundGenericType
+            || namedType.IsGenericType
+                && namedType.TypeArguments.Any(argument =>
+                    argument.TypeKind == TypeKind.TypeParameter
+                )
+        )
         {
             return false;
         }
@@ -187,7 +229,9 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        return namedType.InstanceConstructors.Any(constructor => constructor.DeclaredAccessibility == Accessibility.Public);
+        return namedType.InstanceConstructors.Any(constructor =>
+            constructor.DeclaredAccessibility == Accessibility.Public
+        );
     }
 
     private ResolutionResult ResolveImplementationType(
@@ -198,15 +242,19 @@ internal sealed class DependencyResolutionEngine
         ImmutableArray<ITypeSymbol> factoryProvidedParameterTypes,
         bool assumeFrameworkServicesRegistered,
         Dictionary<ServiceLookupKey, ResolutionResult> resolutionCache,
-        HashSet<ServiceLookupKey> resolutionPath)
+        HashSet<ServiceLookupKey> resolutionPath
+    )
     {
-        var constructors = ConstructorSelection.GetConstructorsToAnalyze(implementationType).ToArray();
+        var constructors = ConstructorSelection
+            .GetConstructorsToAnalyze(implementationType)
+            .ToArray();
         if (constructors.Length == 0)
         {
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
         }
 
-        ImmutableArray<MissingDependency> bestMissingDependencies = ImmutableArray<MissingDependency>.Empty;
+        ImmutableArray<MissingDependency> bestMissingDependencies =
+            ImmutableArray<MissingDependency>.Empty;
         var bestMissingCount = int.MaxValue;
         var bestParameterCount = -1;
 
@@ -220,9 +268,12 @@ internal sealed class DependencyResolutionEngine
                 var providedParameterIndex = -1;
                 for (var index = 0; index < remainingFactoryProvidedParameterTypes.Count; index++)
                 {
-                    if (SymbolEqualityComparer.Default.Equals(
+                    if (
+                        SymbolEqualityComparer.Default.Equals(
                             remainingFactoryProvidedParameterTypes[index],
-                            parameter.Type))
+                            parameter.Type
+                        )
+                    )
                     {
                         providedParameterIndex = index;
                         break;
@@ -235,12 +286,20 @@ internal sealed class DependencyResolutionEngine
                     continue;
                 }
 
-                var serviceKey = GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
-                if (ShouldSkipDependencyCheck(
+                var serviceKey = GetServiceKey(
+                    parameter,
+                    inheritedKey,
+                    hasInheritedKey,
+                    inheritedKeyLiteral
+                );
+                if (
+                    ShouldSkipDependencyCheck(
                         parameter.Type,
                         parameter,
                         serviceKey.IsKeyed,
-                        assumeFrameworkServicesRegistered))
+                        assumeFrameworkServicesRegistered
+                    )
+                )
                 {
                     continue;
                 }
@@ -257,13 +316,15 @@ internal sealed class DependencyResolutionEngine
                     serviceKey.KeyLiteral,
                     DependencySourceKind.ConstructorParameter,
                     parameter.Locations.FirstOrDefault() ?? Location.None,
-                    FormatDependencyName(parameter.Type, serviceKey.Key, serviceKey.IsKeyed));
+                    FormatDependencyName(parameter.Type, serviceKey.Key, serviceKey.IsKeyed)
+                );
 
                 var result = ResolveDependency(
                     request,
                     assumeFrameworkServicesRegistered,
                     resolutionCache,
-                    resolutionPath);
+                    resolutionPath
+                );
                 if (result.IsResolvable)
                 {
                     continue;
@@ -285,9 +346,13 @@ internal sealed class DependencyResolutionEngine
                 return ResolutionResult.Resolvable(ResolutionConfidence.High);
             }
 
-            if (missingDependencies.Count < bestMissingCount ||
-                (missingDependencies.Count == bestMissingCount &&
-                 constructor.Parameters.Length > bestParameterCount))
+            if (
+                missingDependencies.Count < bestMissingCount
+                || (
+                    missingDependencies.Count == bestMissingCount
+                    && constructor.Parameters.Length > bestParameterCount
+                )
+            )
             {
                 bestMissingDependencies = missingDependencies.ToImmutable();
                 bestMissingCount = missingDependencies.Count;
@@ -302,13 +367,17 @@ internal sealed class DependencyResolutionEngine
         DependencyRequest request,
         bool assumeFrameworkServicesRegistered,
         Dictionary<ServiceLookupKey, ResolutionResult> resolutionCache,
-        HashSet<ServiceLookupKey> resolutionPath)
+        HashSet<ServiceLookupKey> resolutionPath
+    )
     {
-        if (ShouldSkipDependencyCheck(
+        if (
+            ShouldSkipDependencyCheck(
                 request.Type,
                 parameter: null,
                 request.IsKeyed,
-                assumeFrameworkServicesRegistered))
+                assumeFrameworkServicesRegistered
+            )
+        )
         {
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
         }
@@ -326,8 +395,10 @@ internal sealed class DependencyResolutionEngine
             return cycleResult;
         }
 
-        var candidates = GetCandidateRegistrations(request.Type, request.Key, request.IsKeyed).ToArray();
-        ImmutableArray<MissingDependency> bestMissingDependencies = ImmutableArray<MissingDependency>.Empty;
+        var candidates = GetCandidateRegistrations(request.Type, request.Key, request.IsKeyed)
+            .ToArray();
+        ImmutableArray<MissingDependency> bestMissingDependencies =
+            ImmutableArray<MissingDependency>.Empty;
         var bestMissingCount = int.MaxValue;
 
         foreach (var candidate in candidates)
@@ -335,7 +406,9 @@ internal sealed class DependencyResolutionEngine
             if (candidate.FactoryExpression is not null)
             {
                 resolutionPath.Remove(lookupKey);
-                var unknownFactoryResult = ResolutionResult.Resolvable(ResolutionConfidence.Unknown);
+                var unknownFactoryResult = ResolutionResult.Resolvable(
+                    ResolutionConfidence.Unknown
+                );
                 resolutionCache[lookupKey] = unknownFactoryResult;
                 return unknownFactoryResult;
             }
@@ -356,7 +429,8 @@ internal sealed class DependencyResolutionEngine
             var implementationType = TryGetClosedImplementationTypeForDependency(
                 request.Type,
                 candidate.ServiceType,
-                candidate.ImplementationType);
+                candidate.ImplementationType
+            );
             if (implementationType is null)
             {
                 continue;
@@ -370,7 +444,8 @@ internal sealed class DependencyResolutionEngine
                 candidate.FactoryProvidedParameterTypes,
                 assumeFrameworkServicesRegistered,
                 resolutionCache,
-                resolutionPath);
+                resolutionPath
+            );
             if (candidateResult.IsResolvable)
             {
                 resolutionPath.Remove(lookupKey);
@@ -378,8 +453,10 @@ internal sealed class DependencyResolutionEngine
                 return candidateResult;
             }
 
-            var prefixedMissingDependencies = candidateResult.MissingDependencies
-                .Select(missingDependency => missingDependency.PrependProvenance(request.ProvenanceStep))
+            var prefixedMissingDependencies = candidateResult
+                .MissingDependencies.Select(missingDependency =>
+                    missingDependency.PrependProvenance(request.ProvenanceStep)
+                )
                 .ToImmutableArray();
 
             if (prefixedMissingDependencies.Length < bestMissingCount)
@@ -394,7 +471,8 @@ internal sealed class DependencyResolutionEngine
         if (bestMissingDependencies.IsDefaultOrEmpty)
         {
             var directMissingResult = ResolutionResult.Missing(
-                ImmutableArray.Create(MissingDependency.CreateDirect(request)));
+                ImmutableArray.Create(MissingDependency.CreateDirect(request))
+            );
             resolutionCache[lookupKey] = directMissingResult;
             return directMissingResult;
         }
@@ -407,12 +485,10 @@ internal sealed class DependencyResolutionEngine
     private IEnumerable<ServiceRegistration> GetCandidateRegistrations(
         ITypeSymbol dependencyType,
         object? key,
-        bool isKeyed)
+        bool isKeyed
+    )
     {
-        var candidates = GetCandidateRegistrationsForServiceAndKey(
-                dependencyType,
-                key,
-                isKeyed)
+        var candidates = GetCandidateRegistrationsForServiceAndKey(dependencyType, key, isKeyed)
             .ToArray();
         foreach (var registration in candidates)
         {
@@ -424,15 +500,14 @@ internal sealed class DependencyResolutionEngine
             yield break;
         }
 
-        var hasConcreteKey =
-            isKeyed &&
-            !SyntaxValueHelpers.IsKeyedServiceAnyKey(key);
+        var hasConcreteKey = isKeyed && !SyntaxValueHelpers.IsKeyedServiceAnyKey(key);
         if (hasConcreteKey)
         {
             candidates = GetCandidateRegistrationsForServiceAndKey(
                     dependencyType,
                     KeyedServiceAnyKey.Instance,
-                    isKeyed: true)
+                    isKeyed: true
+                )
                 .ToArray();
             foreach (var registration in candidates)
             {
@@ -446,18 +521,16 @@ internal sealed class DependencyResolutionEngine
         }
 
         if (
-            dependencyType is not INamedTypeSymbol namedDependencyType ||
-            !namedDependencyType.IsGenericType ||
-            namedDependencyType.IsUnboundGenericType)
+            dependencyType is not INamedTypeSymbol namedDependencyType
+            || !namedDependencyType.IsGenericType
+            || namedDependencyType.IsUnboundGenericType
+        )
         {
             yield break;
         }
 
         var openDependencyType = namedDependencyType.ConstructUnboundGenericType();
-        candidates = GetCandidateRegistrationsForServiceAndKey(
-                openDependencyType,
-                key,
-                isKeyed)
+        candidates = GetCandidateRegistrationsForServiceAndKey(openDependencyType, key, isKeyed)
             .ToArray();
         foreach (var registration in candidates)
         {
@@ -469,10 +542,13 @@ internal sealed class DependencyResolutionEngine
             yield break;
         }
 
-        foreach (var registration in GetCandidateRegistrationsForServiceAndKey(
-                     openDependencyType,
-                     KeyedServiceAnyKey.Instance,
-                     isKeyed: true))
+        foreach (
+            var registration in GetCandidateRegistrationsForServiceAndKey(
+                openDependencyType,
+                KeyedServiceAnyKey.Instance,
+                isKeyed: true
+            )
+        )
         {
             yield return registration;
         }
@@ -481,26 +557,27 @@ internal sealed class DependencyResolutionEngine
     private IEnumerable<ServiceRegistration> GetCandidateRegistrationsForServiceAndKey(
         ITypeSymbol serviceType,
         object? key,
-        bool isKeyed)
+        bool isKeyed
+    )
     {
         var matchingRegistrations = _availableRegistrations
             .Where(registration =>
-                registration.IsKeyed == isKeyed &&
-                Equals(registration.Key, key) &&
-                SymbolEqualityComparer.Default.Equals(
-                    registration.ServiceType,
-                    serviceType))
+                registration.IsKeyed == isKeyed
+                && Equals(registration.Key, key)
+                && SymbolEqualityComparer.Default.Equals(registration.ServiceType, serviceType)
+            )
             .ToList();
-        var selectedRegistration =
-            SelectEffectiveSingleServiceRegistration(matchingRegistrations);
+        var selectedRegistration = SelectEffectiveSingleServiceRegistration(matchingRegistrations);
         if (selectedRegistration is not null)
         {
             yield return selectedRegistration;
 
-            foreach (var opaqueCandidate in matchingRegistrations.Where(
-                         registration =>
-                             !ReferenceEquals(registration, selectedRegistration) &&
-                             registration.FactoryExpression is not null))
+            foreach (
+                var opaqueCandidate in matchingRegistrations.Where(registration =>
+                    !ReferenceEquals(registration, selectedRegistration)
+                    && registration.FactoryExpression is not null
+                )
+            )
             {
                 yield return opaqueCandidate;
             }
@@ -508,25 +585,28 @@ internal sealed class DependencyResolutionEngine
     }
 
     internal static ServiceRegistration? SelectEffectiveSingleServiceRegistration(
-        IReadOnlyList<ServiceRegistration> registrations) =>
-        registrations.LastOrDefault(static registration =>
-            !registration.PrependToCollection) ??
-        registrations.FirstOrDefault();
+        IReadOnlyList<ServiceRegistration> registrations
+    ) =>
+        registrations.LastOrDefault(static registration => !registration.PrependToCollection)
+        ?? registrations.FirstOrDefault();
 
     private static INamedTypeSymbol? TryGetClosedImplementationTypeForDependency(
         ITypeSymbol dependencyType,
         INamedTypeSymbol serviceType,
-        INamedTypeSymbol implementationType)
+        INamedTypeSymbol implementationType
+    )
     {
         if (!implementationType.IsUnboundGenericType)
         {
             return implementationType;
         }
 
-        if (dependencyType is not INamedTypeSymbol namedDependencyType ||
-            !namedDependencyType.IsGenericType ||
-            namedDependencyType.IsUnboundGenericType ||
-            !serviceType.IsUnboundGenericType)
+        if (
+            dependencyType is not INamedTypeSymbol namedDependencyType
+            || !namedDependencyType.IsGenericType
+            || namedDependencyType.IsUnboundGenericType
+            || !serviceType.IsUnboundGenericType
+        )
         {
             return null;
         }
@@ -551,22 +631,26 @@ internal sealed class DependencyResolutionEngine
         ITypeSymbol dependencyType,
         IParameterSymbol? parameter,
         bool isKeyed,
-        bool assumeFrameworkServicesRegistered)
+        bool assumeFrameworkServicesRegistered
+    )
     {
         if (parameter?.HasExplicitDefaultValue == true)
         {
             return true;
         }
 
-        if (parameter is not null &&
-            KeyedServiceHelpers.IsServiceKeyParameter(parameter))
+        if (parameter is not null && KeyedServiceHelpers.IsServiceKeyParameter(parameter))
         {
             return true;
         }
 
-        if (_wellKnownTypes is not null &&
-            (_wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType) ||
-             _wellKnownTypes.IsServiceProviderInspectionService(dependencyType)))
+        if (
+            _wellKnownTypes is not null
+            && (
+                _wellKnownTypes.IsServiceProviderOrFactoryOrKeyed(dependencyType)
+                || _wellKnownTypes.IsServiceProviderInspectionService(dependencyType)
+            )
+        )
         {
             return true;
         }
@@ -576,7 +660,8 @@ internal sealed class DependencyResolutionEngine
             return true;
         }
 
-        return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType, isKeyed);
+        return assumeFrameworkServicesRegistered
+            && IsFrameworkProvidedDependency(dependencyType, isKeyed);
     }
 
     private static bool IsContainerProvidedDependency(ITypeSymbol dependencyType)
@@ -586,9 +671,9 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        return namedType.Name == "IEnumerable" &&
-               namedType.IsGenericType &&
-               namedType.ContainingNamespace.ToDisplayString() == "System.Collections.Generic";
+        return namedType.Name == "IEnumerable"
+            && namedType.IsGenericType
+            && namedType.ContainingNamespace.ToDisplayString() == "System.Collections.Generic";
     }
 
     private bool IsFrameworkProvidedDependency(ITypeSymbol dependencyType, bool isKeyed)
@@ -598,10 +683,7 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        return _knownLifetimeClassifier.TryGetLifetime(
-            dependencyType,
-            isKeyed,
-            out _);
+        return _knownLifetimeClassifier.TryGetLifetime(dependencyType, isKeyed, out _);
     }
 
     private bool IsExplicitFrameworkRegistrationRequired(ITypeSymbol dependencyType)
@@ -611,33 +693,47 @@ internal sealed class DependencyResolutionEngine
             return false;
         }
 
-        if (_wellKnownTypes is not null &&
-            (_wellKnownTypes.IsHttpClientFactory(namedType) ||
-             _wellKnownTypes.IsMemoryCache(namedType) ||
-             _wellKnownTypes.IsHttpContextAccessor(namedType)))
+        if (
+            _wellKnownTypes is not null
+            && (
+                _wellKnownTypes.IsHttpClientFactory(namedType)
+                || _wellKnownTypes.IsMemoryCache(namedType)
+                || _wellKnownTypes.IsHttpContextAccessor(namedType)
+            )
+        )
         {
             return true;
         }
 
         var namespaceName = namedType.ContainingNamespace.ToDisplayString();
-        return (namedType.Name == "IHttpClientFactory" &&
-                namespaceName == "System.Net.Http") ||
-               (namedType.Name == "IMemoryCache" &&
-                namespaceName == "Microsoft.Extensions.Caching.Memory") ||
-               (namedType.Name == "IHttpContextAccessor" &&
-                namespaceName == "Microsoft.AspNetCore.Http");
+        return (namedType.Name == "IHttpClientFactory" && namespaceName == "System.Net.Http")
+            || (
+                namedType.Name == "IMemoryCache"
+                && namespaceName == "Microsoft.Extensions.Caching.Memory"
+            )
+            || (
+                namedType.Name == "IHttpContextAccessor"
+                && namespaceName == "Microsoft.AspNetCore.Http"
+            );
     }
 
     private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(
         IParameterSymbol parameter,
         object? inheritedKey,
         bool hasInheritedKey,
-        string? inheritedKeyLiteral) =>
-        KeyedServiceHelpers.GetServiceKey(parameter, inheritedKey, hasInheritedKey, inheritedKeyLiteral);
+        string? inheritedKeyLiteral
+    ) =>
+        KeyedServiceHelpers.GetServiceKey(
+            parameter,
+            inheritedKey,
+            hasInheritedKey,
+            inheritedKeyLiteral
+        );
 
     private static bool IsServiceImplementationCompatible(
         INamedTypeSymbol serviceType,
-        INamedTypeSymbol implementationType)
+        INamedTypeSymbol implementationType
+    )
     {
         if (SymbolEqualityComparer.Default.Equals(serviceType, implementationType))
         {
@@ -652,14 +748,21 @@ internal sealed class DependencyResolutionEngine
             }
 
             var originalService = serviceType.OriginalDefinition;
-            if (SymbolEqualityComparer.Default.Equals(implementationType.OriginalDefinition, originalService))
+            if (
+                SymbolEqualityComparer.Default.Equals(
+                    implementationType.OriginalDefinition,
+                    originalService
+                )
+            )
             {
                 return true;
             }
 
             foreach (var iface in implementationType.OriginalDefinition.AllInterfaces)
             {
-                if (SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService))
+                if (
+                    SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, originalService)
+                )
                 {
                     return true;
                 }
@@ -668,7 +771,12 @@ internal sealed class DependencyResolutionEngine
             var currentBaseType = implementationType.OriginalDefinition.BaseType;
             while (currentBaseType is not null)
             {
-                if (SymbolEqualityComparer.Default.Equals(currentBaseType.OriginalDefinition, originalService))
+                if (
+                    SymbolEqualityComparer.Default.Equals(
+                        currentBaseType.OriginalDefinition,
+                        originalService
+                    )
+                )
                 {
                     return true;
                 }
@@ -703,8 +811,8 @@ internal sealed class DependencyResolutionEngine
 
     private static bool Matches(MissingDependency left, MissingDependency right)
     {
-        return SymbolEqualityComparer.Default.Equals(left.Type, right.Type) &&
-               Equals(left.Key, right.Key) &&
-               left.IsKeyed == right.IsKeyed;
+        return SymbolEqualityComparer.Default.Equals(left.Type, right.Type)
+            && Equals(left.Key, right.Key)
+            && left.IsKeyed == right.IsKeyed;
     }
 }
