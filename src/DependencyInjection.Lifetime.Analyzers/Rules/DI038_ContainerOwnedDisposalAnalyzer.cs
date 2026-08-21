@@ -485,6 +485,13 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                              identifier.Identifier.ValueText == parameter.Name:
                         return true;
 
+                    case AssignmentExpressionSyntax deconstruction
+                        when deconstruction.Left is TupleExpressionSyntax tuple &&
+                             tuple.DescendantNodes()
+                                 .OfType<IdentifierNameSyntax>()
+                                 .Any(name => name.Identifier.ValueText == parameter.Name):
+                        return true;
+
                     case ArgumentSyntax argument
                         when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None) &&
                              argument.Expression is IdentifierNameSyntax argumentIdentifier &&
@@ -578,6 +585,17 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                          SymbolEqualityComparer.Default.Equals(
                              semanticModel.GetSymbolInfo(argumentIdentifier).Symbol,
                              local):
+                    return true;
+
+                case AssignmentExpressionSyntax deconstruction
+                    when deconstruction.Left is TupleExpressionSyntax tuple &&
+                         tuple.DescendantNodes()
+                             .OfType<IdentifierNameSyntax>()
+                             .Any(name =>
+                                 name.Identifier.ValueText == local.Name &&
+                                 SymbolEqualityComparer.Default.Equals(
+                                     semanticModel.GetSymbolInfo(name).Symbol,
+                                     local)):
                     return true;
             }
         }
@@ -924,6 +942,19 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         }
 
                         break;
+
+                    // A deconstruction (`(_dep, x) = ...`) writes the member with a value the
+                    // proof cannot classify, and a `ref`/`out` argument hands the member to a
+                    // callee that can rebind it.
+                    case AssignmentExpressionSyntax deconstruction
+                        when deconstruction.Left is TupleExpressionSyntax tuple &&
+                             TupleWritesMember(tuple, member, semanticModel):
+                        return false;
+
+                    case ArgumentSyntax argument
+                        when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None) &&
+                             IsAssignmentToMember(argument.Expression, member, semanticModel):
+                        return false;
                 }
             }
         }
@@ -985,6 +1016,32 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             default:
                 return false;
         }
+    }
+
+    private static bool TupleWritesMember(
+        TupleExpressionSyntax tuple,
+        ISymbol member,
+        SemanticModel semanticModel)
+    {
+        foreach (var argument in tuple.Arguments)
+        {
+            if (argument.Expression is TupleExpressionSyntax nested)
+            {
+                if (TupleWritesMember(nested, member, semanticModel))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (IsAssignmentToMember(argument.Expression, member, semanticModel))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsAssignmentToMember(

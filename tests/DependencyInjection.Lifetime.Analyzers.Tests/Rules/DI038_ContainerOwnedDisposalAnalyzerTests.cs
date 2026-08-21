@@ -838,6 +838,110 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.ReferenceAssembliesWithKeyedDi);
     }
 
+    [Fact]
+    public async Task DeconstructionReassignsField_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private IConnection _connection;
+                    private int _generation;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Swap()
+                    {
+                        (_connection, _generation) = (new Connection(), 1);
+                    }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OutArgumentRebindsField_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Reconnect()
+                    {
+                        Create(out _connection);
+                    }
+
+                    private static void Create(out IConnection connection) =>
+                        connection = new Connection();
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DeconstructionReassignsConstructorParameter_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer
+                {
+                    public Consumer(IConnection connection)
+                    {
+                        (connection, _) = ((IConnection)new Connection(), 0);
+                        connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
     // ---- Resolved leg: positives ----
 
     [Fact]
@@ -984,6 +1088,28 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                         var provider = services.BuildServiceProvider();
                         var connection = provider.GetRequiredService<IConnection>();
                         connection = new Connection();
+                        connection.Dispose();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DeconstructionReassignsLocal_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public static class Startup
+                {
+                    public static void Run(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        var provider = services.BuildServiceProvider();
+                        var connection = provider.GetRequiredService<IConnection>();
+                        (connection, _) = ((IConnection)new Connection(), 0);
                         connection.Dispose();
                     }
                 }
