@@ -379,6 +379,36 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI038 (injected tier): a constructor-injected singleton or scoped dependency is disposed
+    /// by its consumer, tearing down an instance the container and other consumers still hold.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ContainerOwnedInjectedServiceDisposed = new(
+        id: DiagnosticIds.ContainerOwnedServiceDisposedByConsumer,
+        title: "Container-owned service disposed by consumer",
+        messageFormat: "'{0}' is provided by the container as a {1} service; disposing it here hands every other consumer of that instance a disposed object",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The container owns the lifetime of every service it creates: singletons are disposed with the root provider, scoped services when their scope ends. A consumer that disposes an injected dependency tears the shared instance down while the container and every other consumer still hold it, causing ObjectDisposedException or corrupted teardown ordering. Remove the Dispose call and let the container run disposal, or create and own a private instance instead of taking the container's.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
+    /// DI038 (resolved tier): the result of a GetService/GetRequiredService call for a singleton
+    /// is disposed, tearing down the application-wide instance for every other consumer.
+    /// </summary>
+    public static readonly DiagnosticDescriptor ContainerOwnedResolvedServiceDisposed = new(
+        id: DiagnosticIds.ContainerOwnedServiceDisposedByConsumer,
+        title: "Container-owned service disposed by consumer",
+        messageFormat: "'{0}' is registered as a singleton; disposing the resolved instance hands every other consumer a disposed object",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A service resolved from the container is the container's to dispose, and a singleton in particular is one shared instance for the whole application. Wrapping the resolution in a using, or calling Dispose on the result, destroys that shared instance while every other consumer still holds it. Resolve and use the service without disposing it; dispose the provider or scope that owns it instead.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI031: One implementation registered under several service types yields one instance per
     /// registration, not one shared instance.
     /// </summary>

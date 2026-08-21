@@ -966,6 +966,18 @@
           "occurrence": 2
         }
       ]
+    },
+    {
+      "folder": "DI038",
+      "ruleId": "DI038",
+      "claims": [
+        {
+          "filePathContains": "DI038/ContainerOwnedDisposalExamples.cs",
+          "anchor": "_channel.Dispose();",
+          "ruleId": "DI038",
+          "severity": "warning"
+        }
+      ]
     }
   ],
   "fileClaims": [],

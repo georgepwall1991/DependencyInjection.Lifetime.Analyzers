@@ -43,13 +43,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.7.8
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.8.0
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.8.0">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -57,7 +57,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.7.8" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.8.0" />
 ```
 
 Then reference it from the project file:
@@ -182,6 +182,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [DI035: Non-Thread-Safe Service Shared Across a Fan-Out](#di035-non-thread-safe-service-shared-across-a-fan-out)
 - [DI036: Registration Added After The Provider Was Built](#di036-registration-added-after-the-provider-was-built)
 - [DI037: Un-awaited Task Escapes The Scope That Created It](#di037-un-awaited-task-escapes-the-scope-that-created-it)
+- [DI038: Container-Owned Service Disposed By Consumer](#di038-container-owned-service-disposed-by-consumer)
 - [Configuration](#configuration)
 - [Adoption Guide](#adoption-guide)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -227,6 +228,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 | [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 | [DI037](#di037-un-awaited-task-escapes-the-scope-that-created-it) | Un-awaited task escapes the scope that created it | Warning | No |
+| [DI038](#di038-container-owned-service-disposed-by-consumer) | Container-owned service disposed by consumer | Warning | No |
 
 ---
 
@@ -1755,9 +1757,54 @@ public async Task Dispatch(int orderId)
 
 ---
 
+## DI038: Container-Owned Service Disposed By Consumer
+
+**What it catches:** a consumer disposing a service instance the container owns. Two shapes report. The **injected** shape: a registered consumer disposes a constructor-injected dependency whose registrations are all singleton or all scoped — directly, through `?.`, behind a cast to `IDisposable`/`IAsyncDisposable`, on the parameter itself, or on a field/auto-property provably assigned only from the constructor. The **resolved** shape: the result of a framework `GetService<T>`/`GetRequiredService<T>` call for a singleton-registered service is wrapped in a `using` declaration or statement, disposed on the spot, or disposed later through a local that is never reassigned.
+
+**Why it matters:** the container disposes every service it creates — singletons when the root provider is disposed, scoped services when their scope ends. The official DI guidelines are explicit that services resolved from the container should never be disposed by the code that consumes them. A consumer that does so anyway tears down an instance the container and every other consumer still hold: the next consumer gets `ObjectDisposedException`, and at teardown the reverse-creation disposal order the container guarantees runs against an instance that is already dead.
+
+> **Explain Like I'm Ten:** The library owns the book you borrowed. If you shred it when you finish, the next reader checks out confetti.
+
+**Problem:**
+
+```csharp
+public sealed class ReportSender : IDisposable
+{
+    private readonly ITelemetryChannel _channel;   // registered AddSingleton
+
+    public ReportSender(ITelemetryChannel channel) => _channel = channel;
+
+    public void Dispose()
+    {
+        _channel.Dispose();  // DI038: every other consumer now holds a disposed channel
+    }
+}
+```
+
+**Better pattern:** remove the call and let the container run disposal; it disposes the channel when the provider is disposed.
+
+```csharp
+public sealed class ReportSender
+{
+    private readonly ITelemetryChannel _channel;
+
+    public ReportSender(ITelemetryChannel channel) => _channel = channel;
+
+    // No Dispose: the container owns the channel's lifetime.
+}
+```
+
+**Guardrails:** the rule reports only proven container ownership on both sides of the call. The consumer must have a type-based registration — the container constructs it, so its constructor arguments are container-supplied; factory-built consumers (`AddSingleton<T>(sp => new T(...))`) and unregistered types stay silent because their arguments may be caller-owned. The dependency's unkeyed registrations must agree on a lifetime: transients are DI008's finding, mixed lifetimes are ambiguous, `[FromKeyedServices]` parameters live in a keyed slot the unkeyed proof does not inspect, and a pre-built instance (`AddSingleton(instance)`) is exempt because disposing one deliberately is DI033's documented remediation. Framework extensions whose implementation type is opaque (`AddMemoryCache`, `AddLogging`, `AddHttpContextAccessor`, `AddHttpClient`) still count as container-created, and framework-known lifetimes (`IMemoryCache`, `ILoggerFactory`, `IHttpClientFactory`, …) prove ownership when no source registration exists. The member proof accepts only a field or auto-property that outside code cannot reassign (private or readonly field; property with no externally accessible setter) whose every non-null assignment is a direct reference to a constructor parameter of the dependency's own type — a field initializer referencing a primary-constructor parameter qualifies, while any computed value, compound assignment, or `: this(...)` constructor chaining bails out. A constructor parameter reassigned or passed by `ref`/`out` before the dispose, or a local reassigned anywhere in its member, drops the candidate. `IServiceProvider`, `IServiceScope`, `AsyncServiceScope`, and `IServiceScopeFactory` receivers are never this rule's finding — disposing those is DI001's and DI014's required behavior — and only the exact framework resolution extensions participate, so user-defined helpers with the same names stay silent.
+
+Accepted false negatives, all deliberate: a dependency stored in an unregistered base class of the registered consumer; a factory-registered consumer whose lambda resolves its arguments from the provider; disposal routed through a helper method (`Shutdown(_channel)`); a `using` statement over the member itself (`using (_channel)`); non-generic `GetService(typeof(T))` and keyed resolutions; a scoped resolution disposed inside the scope that produced it (a double dispose at worst, so the resolved shape stays singleton-only); and ownership transferred through covariant storage, where the parameter's declared type differs from the member's.
+
+**Code Fix:** No — the repair is deleting the Dispose call or restructuring ownership (create a private instance, or take a factory and own what it returns), and only the author knows which one the design intends.
+
+---
+
 ## Samples
 
-- `samples/SampleApp`: diagnostic examples for `DI001` to `DI037`.
+- `samples/SampleApp`: diagnostic examples for `DI001` to `DI038`.
 - `samples/DI015InAction`: runnable unresolved-dependency demonstration.
 
 ## Configuration

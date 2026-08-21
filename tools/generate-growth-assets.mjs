@@ -285,6 +285,13 @@ const ruleSampleConfig = {
       { label: "Sample app await-inside-scope pattern", symbol: "ArchiveGood" },
     ],
   },
+  DI038: {
+    samplePath: "samples/SampleApp/Diagnostics/DI038/ContainerOwnedDisposalExamples.cs",
+    highlights: [
+      { label: "Sample app consumer-disposal warning", symbol: "Bad_DisposesInjectedChannel" },
+      { label: "Sample app container-owned disposal pattern", symbol: "Good_LeavesDisposalToContainer" },
+    ],
+  },
   DI033: {
     samplePath: "samples/SampleApp/Diagnostics/DI033/ExternallyOwnedInstanceExamples.cs",
     highlights: [

@@ -5,4 +5,4 @@
 
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI037 | DependencyInjection | Warning | Task started on a scope-resolved service leaves the using scope without being awaited
+DI038 | DependencyInjection | Warning | Consumer disposes a container-owned service: a constructor-injected singleton/scoped dependency, or a resolved singleton

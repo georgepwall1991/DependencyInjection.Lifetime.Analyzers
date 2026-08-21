@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-08-21
+
+### Added
+
+- **DI038: Container-owned service disposed by consumer** (Warning). The disposal-ownership family (DI008, DI014, DI032, DI033) covered every way an owner fails to dispose; this closes the inverse: a consumer disposing what the container owns. The injected shape reports a registered consumer disposing a constructor-injected dependency whose unkeyed registrations are all singleton or all scoped — directly, through `?.`, behind an `IDisposable`/`IAsyncDisposable` cast, on the parameter itself, or on a private/readonly field or auto-property provably assigned only from constructor parameters (primary-constructor field initializers included). The resolved shape reports `using` over, or explicit disposal of, the result of the exact framework `GetService<T>`/`GetRequiredService<T>` for a singleton-registered service, including through an unreassigned local. Ownership proofs keep it quiet for transients (DI008's finding), mixed lifetimes, keyed slots, pre-built instances (disposing one deliberately is DI033's remediation), factory-built or unregistered consumers, externally assignable members, reassigned parameters/locals, provider/scope infrastructure types (DI001/DI014), and user-defined resolution helpers. Framework-opaque registrations (`AddMemoryCache`, `AddLogging`, `AddHttpContextAccessor`, `AddHttpClient`) count as container-created, and framework-known lifetimes prove ownership without a source registration. Accepted false negatives, all deliberate: base-class-held dependencies, factory lambdas resolving from the provider, helper-routed disposal, `using (_member)` statements, non-generic `typeof` and keyed resolutions, scoped resolutions disposed in their own scope, and covariant storage. No code fix: the repair is deleting the call or restructuring ownership, which only the author can choose.
+
+
 ## [3.7.8] - 2026-08-12
 
 ### Fixed
