@@ -51,7 +51,7 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
-    public async Task InjectedScoped_DisposedInConsumerDispose_ReportsDiagnostic()
+    public async Task TransientConsumer_ScopedDependency_ReportsDiagnostic()
     {
         var source =
             Usings
@@ -73,7 +73,7 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                     public static void Configure(IServiceCollection services)
                     {
                         services.AddScoped<IConnection, Connection>();
-                        services.AddScoped<Consumer>();
+                        services.AddTransient<Consumer>();
                     }
                 }
                 """;
@@ -104,7 +104,7 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                     public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        services.AddSingleton<Consumer>();
+                        services.AddScoped<Consumer>();
                     }
                 }
                 """;
@@ -337,7 +337,493 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.ReferenceAssembliesWithFrameworkExtensions);
     }
 
+    [Fact]
+    public async Task ThisQualifiedFieldDispose_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        {|DI038:this._connection.Dispose()|};
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     // ---- Injected leg: negatives ----
+
+    [Fact]
+    public async Task WrapThenStoreDecorator_NoDiagnostic()
+    {
+        // The constructor rebinds the parameter to a consumer-owned wrapper before storing it,
+        // so the disposed member holds the consumer's own object.
+        var source =
+            Usings
+            + """
+                public sealed class LoggingConnection : IConnection
+                {
+                    public LoggingConnection(IConnection inner) { }
+                    public void Dispose() { }
+                }
+
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Consumer(IConnection connection)
+                    {
+                        connection = new LoggingConnection(connection);
+                        _connection = connection;
+                    }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ManuallyComposedInstanceMemberDispose_NoDiagnostic()
+    {
+        // Disposing through another instance's member may target a manually composed graph the
+        // caller owns; only this-rooted access proves the container-built instance.
+        var source =
+            Usings
+            + """
+                public sealed class Holder
+                {
+                    public Holder(IConnection connection) { Connection = connection; }
+
+                    public IConnection Connection { get; }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Holder>();
+                    }
+
+                    public static void ManualComposition()
+                    {
+                        var mine = new Holder(new Connection());
+                        mine.Connection.Dispose();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task InitOnlyProperty_NoDiagnostic()
+    {
+        // An init-only property is assignable from object initializers outside the type, which
+        // the assignment scan never sees.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    public IConnection Connection { get; init; }
+
+                    public Consumer(IConnection connection) { Connection = connection; }
+
+                    public void Dispose()
+                    {
+                        Connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RefAliasRebindsField_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Swap()
+                    {
+                        ref IConnection alias = ref _connection;
+                        alias = new Connection();
+                    }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
+
+    [Fact]
+    public async Task EqualLifetime_ScopedPair_NoDiagnostic()
+    {
+        // A scoped consumer and its scoped dependency are torn down together at scope end; the
+        // flagged call would be a contractually idempotent co-teardown double dispose, the same
+        // shape the resolved tier's scoped exclusion and DI026's same-scope reasoning accept.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddScoped<IConnection, Connection>();
+                        services.AddScoped<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task EqualLifetime_SingletonPair_NoDiagnostic()
+    {
+        // A singleton consumer's Dispose runs only at provider teardown, when its singleton
+        // dependency is being disposed in the same pass; CA2213 actively prescribes this code.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddSingleton<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NamedDisposeWithoutInterface_NoDiagnostic()
+    {
+        // The container disposes only through the disposal interfaces; a method that merely
+        // shares the Dispose name is an ordinary method the consumer may legitimately call.
+        var source = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IPool
+            {
+                void Dispose();
+            }
+
+            public sealed class Pool : IPool
+            {
+                public void Dispose() { }
+            }
+
+            public sealed class Consumer
+            {
+                private readonly IPool _pool;
+
+                public Consumer(IPool pool) { _pool = pool; }
+
+                public void Shutdown()
+                {
+                    _pool.Dispose();
+                }
+            }
+
+            public static class Startup
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IPool, Pool>();
+                    services.AddTransient<Consumer>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task NamedDisposeAsyncWithoutInterface_NoDiagnostic()
+    {
+        var source = """
+            using System;
+            using System.Threading.Tasks;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IFlusher
+            {
+                ValueTask DisposeAsync();
+            }
+
+            public sealed class Flusher : IFlusher
+            {
+                public ValueTask DisposeAsync() => default;
+            }
+
+            public sealed class Consumer
+            {
+                private readonly IFlusher _flusher;
+
+                public Consumer(IFlusher flusher) { _flusher = flusher; }
+
+                public async Task ShutdownAsync()
+                {
+                    await _flusher.DisposeAsync();
+                }
+            }
+
+            public static class Startup
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IFlusher, Flusher>();
+                    services.AddTransient<Consumer>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OverriddenConsumerRegistration_NoDiagnostic()
+    {
+        // The later factory registration wins the consumer's slot, so at runtime the consumer is
+        // factory-built with a caller-owned argument; the superseded type-based default must not
+        // prove container construction.
+        var source =
+            Usings
+            + """
+                public interface IWidget { }
+
+                public sealed class Widget : IWidget, IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Widget(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddScoped<IWidget, Widget>();
+                        services.AddScoped<IWidget>(sp => new Widget(new Connection()));
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ClearedConsumerRegistration_NoDiagnostic()
+    {
+        // The type-based consumer registration is removed by Clear() before the provider is
+        // built, so the container never constructs the consumer.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddTransient<Consumer>();
+                        services.Clear();
+                        services.AddSingleton<IConnection, Connection>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task OwnershipFlagGuard_NoDiagnostic()
+    {
+        // The dual-use leaveOpen idiom: the container fills the default (non-owning) flag, so
+        // the guarded disposal never runs on the container path.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private readonly bool _owns;
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (_owns)
+                        {
+                            _connection.Dispose();
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task DisposedLatchGuard_StillReportsDiagnostic()
+    {
+        // A run-once latch is assigned in methods, not from a constructor parameter, so it does
+        // not read as conditional ownership.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private bool _disposed;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Dispose()
+                    {
+                        if (!_disposed)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                            _disposed = true;
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+
 
     [Fact]
     public async Task TransientDependency_NoDiagnostic()
@@ -459,7 +945,7 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                     public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        services.AddSingleton<Consumer>(sp => new Consumer(new Connection()));
+                        services.AddTransient<Consumer>(sp => new Consumer(new Connection()));
                     }
                 }
                 """;
@@ -748,10 +1234,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
 
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IServiceScopeFactory, PoolingScopeFactory>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         var factory = provider.GetRequiredService<IServiceScopeFactory>();
                         ((IDisposable)factory).Dispose();
                     }
@@ -915,6 +1404,73 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task RefAliasRebindsConstructorParameter_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Consumer
+                {
+                    public Consumer(IConnection connection)
+                    {
+                        ref IConnection alias = ref connection;
+                        alias = new Connection();
+                        connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ConditionalAccessMemberWrite_NoDiagnostic()
+    {
+        // `other?._connection = ...` (C# 14) writes the member through a receiver the ownership
+        // scan cannot classify.
+        var source =
+            Usings
+            + """
+                public sealed class Consumer : IDisposable
+                {
+                    private IConnection _connection;
+
+                    public Consumer(IConnection connection) { _connection = connection; }
+
+                    public void Adopt(Consumer other)
+                    {
+                        other?._connection = new Connection();
+                    }
+
+                    public void Dispose()
+                    {
+                        _connection.Dispose();
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Consumer>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task DeconstructionReassignsConstructorParameter_NoDiagnostic()
     {
         var source =
@@ -952,10 +1508,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         using var connection = {|DI038:provider.GetRequiredService<IConnection>()|};
                     }
                 }
@@ -972,10 +1531,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         {|DI038:provider.GetRequiredService<IConnection>().Dispose()|};
                     }
                 }
@@ -992,10 +1554,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         var connection = provider.GetRequiredService<IConnection>();
                         {|DI038:connection.Dispose()|};
                     }
@@ -1013,10 +1578,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         using (var connection = {|DI038:provider.GetService<IConnection>()|})
                         {
                         }
@@ -1028,6 +1596,61 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     // ---- Resolved leg: negatives ----
+
+    [Fact]
+    public async Task ThrowawayProviderResolution_NoDiagnostic()
+    {
+        // A provider built and disposed by the same member has one consumer; disposing the
+        // resolution early is an idempotent double dispose, not a shared-instance defect.
+        var source =
+            Usings
+            + """
+                public static class Startup
+                {
+                    public static void Run(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        using var provider = services.BuildServiceProvider();
+                        using var connection = provider.GetRequiredService<IConnection>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CustomProviderReceiver_NoDiagnostic()
+    {
+        // A hand-rolled provider can hand out caller-owned instances; only the framework
+        // provider types prove the instance came from the container the registrations describe.
+        var source =
+            Usings
+            + """
+                public sealed class StubProvider : IServiceProvider
+                {
+                    public object GetService(Type serviceType) => new Connection();
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                    }
+
+                    public static void Run()
+                    {
+                        var custom = new StubProvider();
+                        using var connection = custom.GetRequiredService<IConnection>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+
 
     [Fact]
     public async Task ResolvedScopedService_NoDiagnostic()
@@ -1062,11 +1685,40 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddTransient<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         using var connection = provider.GetRequiredService<IConnection>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RefAliasRebindsLocal_NoDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
+                        var connection = provider.GetRequiredService<IConnection>();
+                        ref IConnection alias = ref connection;
+                        alias = new Connection();
+                        connection.Dispose();
                     }
                 }
                 """;
@@ -1082,10 +1734,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         var connection = provider.GetRequiredService<IConnection>();
                         connection = new Connection();
                         connection.Dispose();
@@ -1104,10 +1759,13 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
             + """
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
                         var connection = provider.GetRequiredService<IConnection>();
                         (connection, _) = ((IConnection)new Connection(), 0);
                         connection.Dispose();
@@ -1124,18 +1782,21 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
         var source =
             Usings
             + """
-                public static class Locator
+                public static class LocatorExtensions
                 {
-                    public static T GetRequiredService<T>(IServiceProvider provider) => default;
+                    public static T GetRequiredService<T>(this IServiceProvider provider, int marker) => default;
                 }
 
                 public static class Startup
                 {
-                    public static void Run(IServiceCollection services)
+                    public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IConnection, Connection>();
-                        var provider = services.BuildServiceProvider();
-                        using var connection = (IDisposable)Locator.GetRequiredService<IConnection>(provider);
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
+                        using var connection = (IDisposable)LocatorExtensions.GetRequiredService<IConnection>(provider, 1);
                     }
                 }
                 """;

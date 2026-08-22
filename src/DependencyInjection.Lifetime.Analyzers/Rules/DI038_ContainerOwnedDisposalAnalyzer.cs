@@ -59,13 +59,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     var invocation = (InvocationExpressionSyntax)syntaxContext.Node;
                     registrationCollector.AnalyzeInvocation(invocation, syntaxContext.SemanticModel);
 
-                    // The collector models AddMemoryCache/AddLogging/AddHttpContextAccessor/
-                    // AddHttpClient as instance-backed because the framework implementation type
-                    // is opaque — but the container does create and dispose those services, so
-                    // their locations must not be mistaken for real pre-built instances.
+                    // The collector models AddMemoryCache/AddLogging as instance-backed
+                    // because the framework implementation type is opaque — but the container
+                    // does create and dispose MemoryCache and LoggerFactory, so their locations
+                    // must not be mistaken for real pre-built instances. AddHttpContextAccessor
+                    // and AddHttpClient register implementations the container never disposes
+                    // (neither is IDisposable), so they deliberately stay out.
                     if (TryGetInvokedMethodNameText(invocation, out var invokedName) &&
-                        invokedName is "AddMemoryCache" or "AddLogging" or "AddHttpContextAccessor"
-                            or "AddHttpClient")
+                        invokedName is "AddMemoryCache" or "AddLogging")
                     {
                         var location = invocation.GetLocation();
                         frameworkExtensionLocations.TryAdd(
@@ -134,7 +135,18 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
             compilationContext.RegisterCompilationEndAction(endContext =>
             {
-                var registrations = registrationCollector.AllRegistrations.ToImmutableArray();
+                // A registration removed by a later unconditional Clear/RemoveAll/Replace in the
+                // same flow never reaches the provider, so neither ownership proof may count it.
+                var allRegistrations = registrationCollector.AllRegistrations.ToList();
+                var registrationCandidates = registrationCollector.RegistrationCandidates.ToList();
+                var definitelyRemoved = DefinitelyRemovedRegistrationSet.Create(
+                    endContext.Compilation,
+                    allRegistrations,
+                    registrationCandidates,
+                    registrationCollector.OrderedMutations);
+                var registrations = definitelyRemoved
+                    .GetEffectiveRegistrations(allRegistrations, registrationCandidates)
+                    .ToImmutableArray();
                 var semanticModels = new Dictionary<SyntaxTree, SemanticModel>();
                 var reportedLocations = new HashSet<(string FilePath, int Start, int Length)>();
 
@@ -161,11 +173,6 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
                 foreach (var candidate in parameterCandidates)
                 {
-                    if (!IsContainerConstructedImplementation(candidate.ContainingType, registrations))
-                    {
-                        continue;
-                    }
-
                     var lifetime = GetProvenContainerLifetime(
                         candidate.Parameter.Type,
                         registrations,
@@ -173,6 +180,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         wellKnownTypes,
                         frameworkExtensionLocations);
                     if (lifetime is not (ServiceLifetime.Singleton or ServiceLifetime.Scoped))
+                    {
+                        continue;
+                    }
+
+                    if (!ConsumerIsTornDownBeforeDependency(
+                            candidate.ContainingType,
+                            lifetime.Value,
+                            registrations))
                     {
                         continue;
                     }
@@ -188,11 +203,6 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
                 foreach (var candidate in memberCandidates)
                 {
-                    if (!IsContainerConstructedImplementation(candidate.ContainingType, registrations))
-                    {
-                        continue;
-                    }
-
                     var memberType = GetMemberType(candidate.Member);
                     var lifetime = GetProvenContainerLifetime(
                         memberType,
@@ -201,6 +211,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         wellKnownTypes,
                         frameworkExtensionLocations);
                     if (lifetime is not (ServiceLifetime.Singleton or ServiceLifetime.Scoped))
+                    {
+                        continue;
+                    }
+
+                    if (!ConsumerIsTornDownBeforeDependency(
+                            candidate.ContainingType,
+                            lifetime.Value,
+                            registrations))
                     {
                         continue;
                     }
@@ -265,7 +283,7 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         ConcurrentQueue<InjectedParameterDisposal> parameterCandidates,
         ConcurrentQueue<ResolvedServiceDisposal> resolvedCandidates)
     {
-        if (!TryGetDisposeReceiver(invocation, semanticModel, out var receiverExpression))
+        if (!TryGetDisposeReceiver(invocation, semanticModel, wellKnownTypes, out var receiverExpression))
         {
             return;
         }
@@ -295,6 +313,16 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         var receiverSymbol = semanticModel.GetSymbolInfo(receiver).Symbol;
+
+        // `if (_owns) _dep.Dispose()` with an ownership flag the constructor supplied is the
+        // dual-use leaveOpen idiom: the container path fills the default (non-owning) value, so
+        // the guarded call never runs for container-built instances.
+        if (receiverSymbol is IParameterSymbol or IFieldSymbol or IPropertySymbol &&
+            IsGuardedByConstructionProvidedFlag(invocation, semanticModel))
+        {
+            return;
+        }
+
         switch (receiverSymbol)
         {
             case IParameterSymbol parameter:
@@ -309,8 +337,13 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
                 break;
 
+            // Only a this-rooted access proves the disposed member belongs to the instance the
+            // container built; `other._dep.Dispose()` may target a manually composed object
+            // whose whole graph the caller owns.
             case IFieldSymbol field:
-                if (!field.IsStatic && field.ContainingType is not null)
+                if (!field.IsStatic &&
+                    field.ContainingType is not null &&
+                    IsThisRootedMemberAccess(receiver))
                 {
                     memberCandidates.Enqueue(new InjectedMemberDisposal(
                         field,
@@ -321,7 +354,9 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                 break;
 
             case IPropertySymbol property:
-                if (!property.IsStatic && property.ContainingType is not null)
+                if (!property.IsStatic &&
+                    property.ContainingType is not null &&
+                    IsThisRootedMemberAccess(receiver))
                 {
                     memberCandidates.Enqueue(new InjectedMemberDisposal(
                         property,
@@ -337,6 +372,120 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         }
     }
 
+    private static bool IsThisRootedMemberAccess(ExpressionSyntax receiver) =>
+        receiver is IdentifierNameSyntax ||
+        receiver is MemberAccessExpressionSyntax thisAccess &&
+        thisAccess.Expression is ThisExpressionSyntax;
+
+    /// <summary>
+    /// True when the disposal sits under an <c>if</c> whose condition reads a Boolean the
+    /// constructor supplied — a `bool owns` parameter, or a bool member assigned from one.
+    /// A latch flag like `_disposed` is assigned in methods, not from constructor parameters,
+    /// so it never suppresses.
+    /// </summary>
+    private static bool IsGuardedByConstructionProvidedFlag(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        for (SyntaxNode? node = invocation.Parent; node is not null; node = node.Parent)
+        {
+            switch (node)
+            {
+                case MethodDeclarationSyntax:
+                case ConstructorDeclarationSyntax:
+                case AccessorDeclarationSyntax:
+                case LocalFunctionStatementSyntax:
+                case AnonymousFunctionExpressionSyntax:
+                case PropertyDeclarationSyntax:
+                    return false;
+
+                case IfStatementSyntax ifStatement
+                    when ConditionReadsConstructionProvidedFlag(ifStatement.Condition, semanticModel):
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ConditionReadsConstructionProvidedFlag(
+        ExpressionSyntax condition,
+        SemanticModel semanticModel)
+    {
+        foreach (var identifier in condition.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+        {
+            var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            switch (symbol)
+            {
+                case IParameterSymbol parameter
+                    when parameter.Type.SpecialType == SpecialType.System_Boolean &&
+                         IsQualifyingConstructorParameter(parameter):
+                    return true;
+
+                case IFieldSymbol field
+                    when field.Type.SpecialType == SpecialType.System_Boolean &&
+                         !field.IsStatic &&
+                         IsBooleanMemberAssignedFromConstructorParameter(field, semanticModel):
+                    return true;
+
+                case IPropertySymbol property
+                    when property.Type.SpecialType == SpecialType.System_Boolean &&
+                         !property.IsStatic &&
+                         IsBooleanMemberAssignedFromConstructorParameter(property, semanticModel):
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsBooleanMemberAssignedFromConstructorParameter(
+        ISymbol member,
+        SemanticModel semanticModel)
+    {
+        foreach (var reference in member.ContainingType.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is not TypeDeclarationSyntax typeDeclaration ||
+                typeDeclaration.SyntaxTree != semanticModel.SyntaxTree)
+            {
+                continue;
+            }
+
+            foreach (var node in typeDeclaration.DescendantNodes())
+            {
+                ExpressionSyntax? value = node switch
+                {
+                    AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                             IsAssignmentToMember(assignment.Left, member, semanticModel) =>
+                        assignment.Right,
+                    EqualsValueClauseSyntax initializer
+                        when initializer.Parent is VariableDeclaratorSyntax declarator &&
+                             SymbolEqualityComparer.Default.Equals(
+                                 semanticModel.GetDeclaredSymbol(declarator),
+                                 member) =>
+                        initializer.Value,
+                    _ => null,
+                };
+
+                if (value is null)
+                {
+                    continue;
+                }
+
+                if (StripTrivialWrappers(value) is IdentifierNameSyntax valueIdentifier &&
+                    semanticModel.GetSymbolInfo(valueIdentifier).Symbol is IParameterSymbol parameter &&
+                    parameter.Type.SpecialType == SpecialType.System_Boolean &&
+                    IsQualifyingConstructorParameter(parameter))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Matches a zero-argument <c>Dispose()</c> or <c>DisposeAsync()</c> call and returns the
     /// receiver expression it is invoked on. Conditional-access (`x?.Dispose()`) is supported for
@@ -345,6 +494,7 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
     private static bool TryGetDisposeReceiver(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
+        WellKnownTypes wellKnownTypes,
         out ExpressionSyntax receiverExpression)
     {
         receiverExpression = null!;
@@ -386,14 +536,64 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        if (name == "Dispose")
+        // A method that merely shares the Dispose/DisposeAsync name is an ordinary method: the
+        // container only disposes instances through the actual disposal interfaces, so the
+        // consumer calling such a method is not tearing down container-run disposal.
+        return name == "Dispose"
+            ? ImplementsDisposalInterfaceMember(methodSymbol, wellKnownTypes.IDisposable, "Dispose")
+            : ImplementsDisposalInterfaceMember(
+                methodSymbol,
+                wellKnownTypes.IAsyncDisposable,
+                "DisposeAsync");
+    }
+
+    private static bool ImplementsDisposalInterfaceMember(
+        IMethodSymbol method,
+        INamedTypeSymbol? disposalInterface,
+        string memberName)
+    {
+        if (disposalInterface is null)
         {
-            return methodSymbol.ReturnsVoid;
+            return false;
         }
 
-        return methodSymbol.ReturnType is INamedTypeSymbol returnType &&
-               returnType.Name is "ValueTask" or "Task" &&
-               returnType.ContainingNamespace.ToDisplayString() == "System.Threading.Tasks";
+        if (SymbolEqualityComparer.Default.Equals(method.ContainingType, disposalInterface))
+        {
+            return true;
+        }
+
+        var interfaceMember = disposalInterface
+            .GetMembers(memberName)
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(candidate => candidate.Parameters.Length == 0);
+        if (interfaceMember is null ||
+            method.ContainingType.FindImplementationForInterfaceMember(interfaceMember)
+                is not IMethodSymbol implementation)
+        {
+            return false;
+        }
+
+        // The bound method and the mapped implementation may sit at different points of one
+        // override chain (a virtual Dispose(bool)-pattern base and its override).
+        for (var candidate = method; candidate is not null; candidate = candidate.OverriddenMethod)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate, implementation))
+            {
+                return true;
+            }
+        }
+
+        for (var candidate = implementation;
+            candidate is not null;
+            candidate = candidate.OverriddenMethod)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate, method))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -444,7 +644,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
     private static bool IsQualifyingConstructorParameter(IParameterSymbol parameter)
     {
         // `this.Dispose()` binds to the implicit `this` parameter of the enclosing method; it is
-        // not an injected dependency.
+        // not an injected dependency. Defense-in-depth: the self-type's equal lifetime rank also
+        // blocks it downstream, but that coupling is incidental rather than designed.
         if (parameter.IsThis)
         {
             return false;
@@ -496,6 +697,11 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None) &&
                              argument.Expression is IdentifierNameSyntax argumentIdentifier &&
                              argumentIdentifier.Identifier.ValueText == parameter.Name:
+                        return true;
+
+                    case RefExpressionSyntax refAlias
+                        when refAlias.Expression is IdentifierNameSyntax refIdentifier &&
+                             refIdentifier.Identifier.ValueText == parameter.Name:
                         return true;
                 }
             }
@@ -597,6 +803,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                                      semanticModel.GetSymbolInfo(name).Symbol,
                                      local)):
                     return true;
+
+                case RefExpressionSyntax refAlias
+                    when refAlias.Expression is IdentifierNameSyntax refIdentifier &&
+                         refIdentifier.Identifier.ValueText == local.Name &&
+                         SymbolEqualityComparer.Default.Equals(
+                             semanticModel.GetSymbolInfo(refIdentifier).Symbol,
+                             local):
+                    return true;
             }
         }
 
@@ -661,9 +875,76 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        // The framework extension binds on any IServiceProvider, including hand-rolled providers
+        // whose results are caller-owned. Only a receiver whose natural type is the framework
+        // provider interface (or Microsoft's own container class) proves the instance came from
+        // the container the registrations describe.
+        ExpressionSyntax? receiverExpression =
+            method.ReducedFrom is not null &&
+            invocation.Expression is MemberAccessExpressionSyntax memberAccess
+                ? memberAccess.Expression
+                : invocation.ArgumentList.Arguments.Count > 0
+                    ? invocation.ArgumentList.Arguments[0].Expression
+                    : null;
+        if (receiverExpression is null)
+        {
+            return false;
+        }
+
+        var strippedReceiver = StripTrivialWrappers(receiverExpression);
+        var receiverType = semanticModel.GetTypeInfo(strippedReceiver).Type;
+        if (!wellKnownTypes.IsServiceProvider(receiverType) &&
+            !IsMicrosoftServiceProviderClass(receiverType))
+        {
+            return false;
+        }
+
+        // A provider built and owned by the resolving member itself is a throwaway container:
+        // its one consumer disposes everything in the same frame, so disposing the resolution
+        // early is a contractually idempotent double dispose, not a shared-instance defect.
+        if (IsThrowawayProviderReceiver(strippedReceiver, semanticModel))
+        {
+            return false;
+        }
+
         serviceType = method.TypeArguments[0];
         return true;
     }
+
+    private static bool IsThrowawayProviderReceiver(
+        ExpressionSyntax receiverExpression,
+        SemanticModel semanticModel)
+    {
+        if (receiverExpression is InvocationExpressionSyntax directBuild)
+        {
+            return IsBuildServiceProviderInvocation(directBuild, semanticModel);
+        }
+
+        if (receiverExpression is IdentifierNameSyntax identifier &&
+            semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol local &&
+            local.DeclaringSyntaxReferences.Length == 1 &&
+            local.DeclaringSyntaxReferences[0].GetSyntax() is VariableDeclaratorSyntax declarator &&
+            declarator.Initializer is not null &&
+            StripTrivialWrappers(declarator.Initializer.Value)
+                is InvocationExpressionSyntax initializerInvocation)
+        {
+            return IsBuildServiceProviderInvocation(initializerInvocation, semanticModel);
+        }
+
+        return false;
+    }
+
+    private static bool IsBuildServiceProviderInvocation(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel) =>
+        semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method &&
+        method.Name == "BuildServiceProvider" &&
+        method.ContainingType.ContainingNamespace.ToDisplayString() ==
+            "Microsoft.Extensions.DependencyInjection";
+
+    private static bool IsMicrosoftServiceProviderClass(ITypeSymbol? type) =>
+        type?.Name == "ServiceProvider" &&
+        type.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
 
     private static bool IsFrameworkServiceResolutionExtension(IMethodSymbol method, Compilation compilation)
     {
@@ -687,18 +968,97 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                 "Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions") is not null);
     }
 
-    private static bool IsContainerConstructedImplementation(
+    /// <summary>
+    /// Proves the container both constructs the consumer (so its constructor arguments are
+    /// container-supplied) and tears it down strictly before the dependency's owner does. A
+    /// consumer with the same lifetime as its dependency is co-disposed with it — the same
+    /// benign teardown double-dispose the resolved tier's scoped exclusion and DI026's
+    /// same-scope reasoning already accept — so only a strictly shorter-lived consumer reports:
+    /// its Dispose runs while the shared instance is still live for everyone else.
+    /// </summary>
+    private static bool ConsumerIsTornDownBeforeDependency(
         INamedTypeSymbol containingType,
+        ServiceLifetime dependencyLifetime,
         ImmutableArray<ServiceRegistration> registrations)
     {
-        // Only a type-based registration proves the container constructs the consumer and
-        // therefore supplies its constructor arguments. A factory-built consumer receives
-        // whatever the factory lambda passed, which may well be caller-owned.
-        return registrations.Any(registration =>
-            !registration.HasImplementationInstance &&
-            registration.ImplementationType is not null &&
-            SymbolEqualityComparer.Default.Equals(registration.ImplementationType, containingType));
+        var sawConsumerRegistration = false;
+
+        foreach (var registration in registrations)
+        {
+            // Only the registration that wins its service-type slot decides how the consumer is
+            // built: a type-based default overridden by a later factory is factory-built at
+            // runtime, and a factory's constructor arguments may be caller-owned.
+            if (!IsSlotWinner(registration, registrations))
+            {
+                continue;
+            }
+
+            var isConsumerConstruction =
+                !registration.HasImplementationInstance &&
+                registration.ImplementationType is not null &&
+                SymbolEqualityComparer.Default.Equals(registration.ImplementationType, containingType);
+            var isConsumerSlot =
+                SymbolEqualityComparer.Default.Equals(registration.ServiceType, containingType) ||
+                isConsumerConstruction;
+
+            if (!isConsumerSlot)
+            {
+                continue;
+            }
+
+            if (!isConsumerConstruction)
+            {
+                // The winning registration for this consumer is a factory or an instance, so
+                // container construction of the disposing type is not proven for this slot.
+                continue;
+            }
+
+            sawConsumerRegistration = true;
+            if (LifetimeRank(registration.Lifetime) >= LifetimeRank(dependencyLifetime))
+            {
+                return false;
+            }
+        }
+
+        return sawConsumerRegistration;
     }
+
+    /// <summary>
+    /// Mirrors the collector's effective-slot selection: within one service-type slot the last
+    /// non-prepended registration wins single resolution.
+    /// </summary>
+    private static bool IsSlotWinner(
+        ServiceRegistration registration,
+        ImmutableArray<ServiceRegistration> registrations)
+    {
+        ServiceRegistration? winner = null;
+        ServiceRegistration? first = null;
+        foreach (var candidate in registrations)
+        {
+            if (candidate.IsKeyed != registration.IsKeyed ||
+                !Equals(candidate.Key, registration.Key) ||
+                !SymbolEqualityComparer.Default.Equals(candidate.ServiceType, registration.ServiceType))
+            {
+                continue;
+            }
+
+            first ??= candidate;
+            if (!candidate.PrependToCollection)
+            {
+                winner = candidate;
+            }
+        }
+
+        return ReferenceEquals(winner ?? first, registration);
+    }
+
+    private static int LifetimeRank(ServiceLifetime lifetime) =>
+        lifetime switch
+        {
+            ServiceLifetime.Transient => 0,
+            ServiceLifetime.Scoped => 1,
+            _ => 2,
+        };
 
     /// <summary>
     /// Proves the container owns instances of <paramref name="serviceType"/>: every unkeyed
@@ -783,8 +1143,12 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             return provenLifetime;
         }
 
+        // The classifier knows many framework lifetimes, but only MemoryCache and LoggerFactory
+        // among them are implementations the container actually disposes; the rest either are
+        // not disposable or are host-registered instances the container never tears down.
         if (lifetimeClassifier.TryGetLifetime(namedType, isKeyed: false, out var knownLifetime) &&
-            knownLifetime is ServiceLifetime.Singleton or ServiceLifetime.Scoped)
+            knownLifetime == ServiceLifetime.Singleton &&
+            (wellKnownTypes.IsMemoryCache(namedType) || wellKnownTypes.IsLoggerFactory(namedType)))
         {
             return knownLifetime;
         }
@@ -955,6 +1319,29 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None) &&
                              IsAssignmentToMember(argument.Expression, member, semanticModel):
                         return false;
+
+                    // A `ref` alias (`ref var r = ref _dep`) can rebind the member through
+                    // another name, and a null-conditional assignment (`other?._dep = ...`)
+                    // writes it through a receiver this scan cannot classify.
+                    case RefExpressionSyntax refAlias
+                        when IsAssignmentToMember(refAlias.Expression, member, semanticModel):
+                        return false;
+
+                    case AssignmentExpressionSyntax conditionalWrite
+                        when conditionalWrite.Left is ConditionalAccessExpressionSyntax conditionalLeft &&
+                             SymbolEqualityComparer.Default.Equals(
+                                 semanticModel.GetSymbolInfo(conditionalLeft.WhenNotNull).Symbol,
+                                 member):
+                        return false;
+
+                    // C# 14 parses `other?._dep = value` with the assignment nested inside the
+                    // conditional access, so the left side is a member binding.
+                    case AssignmentExpressionSyntax nestedConditionalWrite
+                        when nestedConditionalWrite.Left is MemberBindingExpressionSyntax memberBinding &&
+                             SymbolEqualityComparer.Default.Equals(
+                                 semanticModel.GetSymbolInfo(memberBinding).Symbol,
+                                 member):
+                        return false;
                 }
             }
         }
@@ -983,6 +1370,9 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         if (value is IdentifierNameSyntax identifier &&
             semanticModel.GetSymbolInfo(identifier).Symbol is IParameterSymbol parameter &&
             IsQualifyingConstructorParameter(parameter) &&
+            // A parameter rebound anywhere in the constructor may hold a consumer-owned value
+            // (the wrap-then-store decorator idiom) by the time it reaches the member.
+            !IsParameterReassigned(parameter) &&
             SymbolEqualityComparer.Default.Equals(
                 parameter.ContainingSymbol.ContainingType,
                 containingType) &&
@@ -1008,9 +1398,11 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     return true;
                 }
 
+                // An init-only setter is still assignable from outside the type (object
+                // initializers, `with` clones), which this scan never sees.
                 var setter = property.SetMethod;
                 return setter is null ||
-                       setter.IsInitOnly ||
+                       !setter.IsInitOnly &&
                        setter.DeclaredAccessibility == Accessibility.Private;
 
             default:

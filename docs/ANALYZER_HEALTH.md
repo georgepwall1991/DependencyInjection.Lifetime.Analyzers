@@ -33,6 +33,35 @@ guard mutation-tested — deleting the guard makes its regression test fail).
   lifetimes, which is silent — the conservative direction.
 - **Severity note:** both descriptors (injected tier, resolved tier) share the DI038 ID at
   Warning, matching the severity-parity test.
+- **Equal-lifetime exclusion (adversarial round 2):** a scoped consumer disposing its scoped
+  dependency, or a singleton disposing its singleton dependency, is co-disposed with it in the
+  container's own teardown pass — the same benign double dispose DI026's same-scope reasoning and
+  this rule's resolved-tier scoped exclusion already accept, and the shape CA2213 actively
+  prescribes. The injected tier therefore requires the consumer's slot-winning lifetime to be
+  strictly shorter than the dependency's. The teardown-ordering corruption window on equal
+  lifetimes (a sibling's Dispose using the shared instance later in the same pass) is a
+  documented accepted false negative, not a Warning.
+- **Throwaway-provider exclusion (adversarial round 2):** `using var provider =
+  services.BuildServiceProvider(); using var x = provider.GetRequiredService<T>()` has one
+  consumer and dies in the same frame — the dominant test/benchmark shape. A receiver tracing to
+  a same-member `BuildServiceProvider()` local stays silent; shared providers (parameters,
+  injected providers, `scope.ServiceProvider`, `host.Services`) still report.
+- **Disposal-interface proof (Codex review):** a zero-argument method merely named
+  `Dispose`/`DisposeAsync` is an ordinary method — the container disposes only through the real
+  interfaces — so the bound method must implement `IDisposable.Dispose`/
+  `IAsyncDisposable.DisposeAsync` (override chains honored).
+- **Framework whitelist correction (adversarial round 2):** `AddHttpContextAccessor` and
+  `AddHttpClient` were dropped from the framework-owned set — `HttpContextAccessor` and
+  `DefaultHttpClientFactory` implement no disposal interface, so the container disposes neither.
+  Only `AddMemoryCache`/`AddLogging` (and the matching `IMemoryCache`/`ILoggerFactory` classifier
+  claims) prove framework ownership.
+- **Instance and slot honesty (Codex + round 3):** ownership proofs run over effective
+  registrations (`DefinitelyRemovedRegistrationSet` replay of `Clear`/`RemoveAll`/`Replace`), the
+  consumer proof uses its slot-winning registration (a later factory override defeats a type-based
+  default), member disposal must be this-rooted, and the member/parameter/local write scans treat
+  deconstructions, `ref`/`out` arguments, `ref` aliases, null-conditional member writes, and
+  rebound constructor parameters as proof-breaking. The `if (owns)`-guarded dual-use idiom
+  (constructor-supplied Boolean) is silent; `_disposed`-latch guards are not.
 
 ## Historical Release Snapshots
 
