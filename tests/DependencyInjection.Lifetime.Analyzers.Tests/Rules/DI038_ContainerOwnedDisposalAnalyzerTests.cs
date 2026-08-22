@@ -966,6 +966,136 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task OrConditionOwnershipFlag_ReportsDiagnostic()
+    {
+        // `if (_owns || force)` disposes on the non-owning container path whenever force holds,
+        // so the branch does not imply ownership.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private readonly bool _owns;
+                    public bool Force { get; set; }
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (_owns || Force)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RefWrittenOwnershipFlag_ReportsDiagnostic()
+    {
+        // A flag handed out by ref can be flipped on a container-built instance.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private bool _owns;
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void TakeOwnership()
+                    {
+                        SetTrue(ref _owns);
+                    }
+
+                    private static void SetTrue(ref bool flag) => flag = true;
+
+                    public void Dispose()
+                    {
+                        if (_owns)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task PublicSettableOwnershipFlag_ReportsDiagnostic()
+    {
+        // An externally settable flag can be flipped by any other code before Dispose runs.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+
+                    public bool Owns { get; set; }
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        Owns = owns;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (Owns)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task DisposedLatchGuard_StillReportsDiagnostic()
     {
         // A run-once latch is assigned in methods, not from a constructor parameter, so it does

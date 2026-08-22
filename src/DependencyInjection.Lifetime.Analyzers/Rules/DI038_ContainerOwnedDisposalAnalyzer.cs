@@ -446,7 +446,7 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
     {
         foreach (var identifier in condition.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
         {
-            if (!HasPositivePolarity(identifier, condition))
+            if (!BranchImpliesFlag(identifier, condition))
             {
                 continue;
             }
@@ -479,38 +479,40 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// A flag read under an odd number of logical negations, or compared to <c>false</c>,
-    /// guards the branch the non-owning container path executes, so it proves nothing.
+    /// Entering the then-branch must imply the flag is true, so on the path from the flag
+    /// reference up to the condition root only parentheses and <c>&amp;&amp;</c> are allowed:
+    /// a negation flips the guard, and an <c>||</c> lets the branch run with the flag false
+    /// (`if (owns || force)` disposes on the non-owning container path whenever `force` holds).
     /// </summary>
-    private static bool HasPositivePolarity(IdentifierNameSyntax identifier, ExpressionSyntax conditionRoot)
+    private static bool BranchImpliesFlag(IdentifierNameSyntax identifier, ExpressionSyntax conditionRoot)
     {
-        var negations = 0;
-        for (SyntaxNode? node = identifier.Parent; node is not null && node != conditionRoot.Parent; node = node.Parent)
+        if (identifier == conditionRoot)
+        {
+            return true;
+        }
+
+        for (SyntaxNode? node = identifier.Parent; node is not null; node = node.Parent)
         {
             switch (node)
             {
-                case PrefixUnaryExpressionSyntax prefix
-                    when prefix.IsKind(SyntaxKind.LogicalNotExpression):
-                    negations++;
+                case ParenthesizedExpressionSyntax:
                     break;
 
-                case BinaryExpressionSyntax equalsFalse
-                    when equalsFalse.IsKind(SyntaxKind.EqualsExpression) &&
-                         (equalsFalse.Left.IsKind(SyntaxKind.FalseLiteralExpression) ||
-                          equalsFalse.Right.IsKind(SyntaxKind.FalseLiteralExpression)):
-                    negations++;
+                case BinaryExpressionSyntax conjunction
+                    when conjunction.IsKind(SyntaxKind.LogicalAndExpression):
                     break;
 
-                case BinaryExpressionSyntax notEqualsTrue
-                    when notEqualsTrue.IsKind(SyntaxKind.NotEqualsExpression) &&
-                         (notEqualsTrue.Left.IsKind(SyntaxKind.TrueLiteralExpression) ||
-                          notEqualsTrue.Right.IsKind(SyntaxKind.TrueLiteralExpression)):
-                    negations++;
-                    break;
+                default:
+                    return false;
+            }
+
+            if (node == conditionRoot)
+            {
+                return true;
             }
         }
 
-        return negations % 2 == 0;
+        return false;
     }
 
     /// <summary>
@@ -524,6 +526,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         Compilation compilation,
         Dictionary<SyntaxTree, SemanticModel> semanticModels)
     {
+        // A flag other code can assign — an accessible mutable field or setter, a ref/out
+        // argument, a ref alias, or a deconstruction — can flip on a container-built instance,
+        // exactly like the dependency members this rule already refuses to trust.
+        if (!IsAssignmentScanComplete(member))
+        {
+            return false;
+        }
+
         var sawConstructorAssignment = false;
 
         foreach (var reference in member.ContainingType.DeclaringSyntaxReferences)
@@ -558,6 +568,20 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                                  member):
                         value = initializer.Value;
                         break;
+
+                    case ArgumentSyntax argument
+                        when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None) &&
+                             IsAssignmentToMember(argument.Expression, member, semanticModel):
+                        return false;
+
+                    case RefExpressionSyntax refAlias
+                        when IsAssignmentToMember(refAlias.Expression, member, semanticModel):
+                        return false;
+
+                    case AssignmentExpressionSyntax deconstruction
+                        when deconstruction.Left is TupleExpressionSyntax tuple &&
+                             TupleWritesMember(tuple, member, semanticModel):
+                        return false;
 
                     default:
                         continue;

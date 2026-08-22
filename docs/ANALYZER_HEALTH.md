@@ -68,10 +68,19 @@ guard mutation-tested — deleting the guard makes its regression test fail).
   non-owning container path and still report. The resolved tier requires the service type to
   implement a real disposal interface: `await using` accepts a pattern-based `DisposeAsync` the
   container never calls, and that shape stays silent — while a disposable implementation behind
-  a non-disposable abstraction still counts as container-disposed. Every write to the flag must
-  come from a constructor parameter: a flag rewritten in a method (`_owns = true`) can flip on a
-  container-built instance and no longer suppresses. An `owns || other` condition still
-  suppresses (any positive read counts) — a documented over-suppression.
+  a non-disposable abstraction still counts as container-disposed. The flag proof requires full
+  implication: the flag reaches the condition root through only parentheses and `&&` (an
+  `owns || force` branch runs on the non-owning path, so it reports), every write is a
+  constructor-parameter reference (no method rewrites, `ref`/`out`, ref aliases, or
+  deconstructions), and the flag is not externally assignable.
+- **Provider provenance boundary (declined, durable):** Codex re-raised requiring provenance
+  from an `IServiceProvider`-typed receiver back to a Microsoft-built provider. Declined: an
+  interface-typed provider parameter or property is overwhelmingly the framework's provider in
+  real code, DI019 accepts the same static-type trust for its provider legs, and demanding
+  cross-method provenance would silence the injected-provider and `scope.ServiceProvider`
+  shapes that carry the resolved tier's value. Hand-rolled provider *classes* are already
+  rejected by natural type; a hand-rolled provider hidden behind the interface type remains the
+  documented accepted residual.
 
 ## Historical Release Snapshots
 
