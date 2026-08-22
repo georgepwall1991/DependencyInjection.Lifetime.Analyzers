@@ -192,6 +192,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
+                    if (IsGuardedByConstructionProvidedFlag(
+                            candidate.Invocation,
+                            endContext.Compilation,
+                            semanticModels))
+                    {
+                        continue;
+                    }
+
                     Report(
                         endContext,
                         DiagnosticDescriptors.ContainerOwnedInjectedServiceDisposed,
@@ -219,6 +227,14 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                             candidate.ContainingType,
                             lifetime.Value,
                             registrations))
+                    {
+                        continue;
+                    }
+
+                    if (IsGuardedByConstructionProvidedFlag(
+                            candidate.Invocation,
+                            endContext.Compilation,
+                            semanticModels))
                     {
                         continue;
                     }
@@ -314,15 +330,6 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
         var receiverSymbol = semanticModel.GetSymbolInfo(receiver).Symbol;
 
-        // `if (_owns) _dep.Dispose()` with an ownership flag the constructor supplied is the
-        // dual-use leaveOpen idiom: the container path fills the default (non-owning) value, so
-        // the guarded call never runs for container-built instances.
-        if (receiverSymbol is IParameterSymbol or IFieldSymbol or IPropertySymbol &&
-            IsGuardedByConstructionProvidedFlag(invocation, semanticModel))
-        {
-            return;
-        }
-
         switch (receiverSymbol)
         {
             case IParameterSymbol parameter:
@@ -332,7 +339,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     parameterCandidates.Enqueue(new InjectedParameterDisposal(
                         parameter,
                         parameter.ContainingType,
-                        reportLocation));
+                        reportLocation,
+                        invocation));
                 }
 
                 break;
@@ -348,7 +356,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     memberCandidates.Enqueue(new InjectedMemberDisposal(
                         field,
                         field.ContainingType,
-                        reportLocation));
+                        reportLocation,
+                        invocation));
                 }
 
                 break;
@@ -361,7 +370,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     memberCandidates.Enqueue(new InjectedMemberDisposal(
                         property,
                         property.ContainingType,
-                        reportLocation));
+                        reportLocation,
+                        invocation));
                 }
 
                 break;
@@ -378,15 +388,19 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         thisAccess.Expression is ThisExpressionSyntax;
 
     /// <summary>
-    /// True when the disposal sits under an <c>if</c> whose condition reads a Boolean the
-    /// constructor supplied — a `bool owns` parameter, or a bool member assigned from one.
-    /// A latch flag like `_disposed` is assigned in methods, not from constructor parameters,
-    /// so it never suppresses.
+    /// True when the disposal sits in the then-branch of an <c>if</c> whose condition reads,
+    /// with positive polarity, a Boolean the constructor supplied — a `bool owns` parameter, or
+    /// a bool member assigned from one. A latch flag like `_disposed` is assigned in methods,
+    /// not from constructor parameters, so it never suppresses; nor does a disposal in the
+    /// else-branch or under a negated flag, which the non-owning container path can execute.
+    /// Runs at compilation end so partial declarations in other files can prove the flag.
     /// </summary>
     private static bool IsGuardedByConstructionProvidedFlag(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel)
+        Compilation compilation,
+        Dictionary<SyntaxTree, SemanticModel> semanticModels)
     {
+        var semanticModel = GetSemanticModel(compilation, invocation.SyntaxTree, semanticModels);
         for (SyntaxNode? node = invocation.Parent; node is not null; node = node.Parent)
         {
             switch (node)
@@ -400,7 +414,12 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     return false;
 
                 case IfStatementSyntax ifStatement
-                    when ConditionReadsConstructionProvidedFlag(ifStatement.Condition, semanticModel):
+                    when ifStatement.Statement.Span.Contains(invocation.SpanStart) &&
+                         ConditionReadsConstructionProvidedFlag(
+                             ifStatement.Condition,
+                             semanticModel,
+                             compilation,
+                             semanticModels):
                     return true;
             }
         }
@@ -410,10 +429,17 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool ConditionReadsConstructionProvidedFlag(
         ExpressionSyntax condition,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel,
+        Compilation compilation,
+        Dictionary<SyntaxTree, SemanticModel> semanticModels)
     {
         foreach (var identifier in condition.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
         {
+            if (!HasPositivePolarity(identifier, condition))
+            {
+                continue;
+            }
+
             var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
             switch (symbol)
             {
@@ -425,13 +451,15 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                 case IFieldSymbol field
                     when field.Type.SpecialType == SpecialType.System_Boolean &&
                          !field.IsStatic &&
-                         IsBooleanMemberAssignedFromConstructorParameter(field, semanticModel):
+                         IsBooleanMemberAssignedFromConstructorParameter(
+                             field, compilation, semanticModels):
                     return true;
 
                 case IPropertySymbol property
                     when property.Type.SpecialType == SpecialType.System_Boolean &&
                          !property.IsStatic &&
-                         IsBooleanMemberAssignedFromConstructorParameter(property, semanticModel):
+                         IsBooleanMemberAssignedFromConstructorParameter(
+                             property, compilation, semanticModels):
                     return true;
             }
         }
@@ -439,17 +467,55 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// A flag read under an odd number of logical negations, or compared to <c>false</c>,
+    /// guards the branch the non-owning container path executes, so it proves nothing.
+    /// </summary>
+    private static bool HasPositivePolarity(IdentifierNameSyntax identifier, ExpressionSyntax conditionRoot)
+    {
+        var negations = 0;
+        for (SyntaxNode? node = identifier.Parent; node is not null && node != conditionRoot.Parent; node = node.Parent)
+        {
+            switch (node)
+            {
+                case PrefixUnaryExpressionSyntax prefix
+                    when prefix.IsKind(SyntaxKind.LogicalNotExpression):
+                    negations++;
+                    break;
+
+                case BinaryExpressionSyntax equalsFalse
+                    when equalsFalse.IsKind(SyntaxKind.EqualsExpression) &&
+                         (equalsFalse.Left.IsKind(SyntaxKind.FalseLiteralExpression) ||
+                          equalsFalse.Right.IsKind(SyntaxKind.FalseLiteralExpression)):
+                    negations++;
+                    break;
+
+                case BinaryExpressionSyntax notEqualsTrue
+                    when notEqualsTrue.IsKind(SyntaxKind.NotEqualsExpression) &&
+                         (notEqualsTrue.Left.IsKind(SyntaxKind.TrueLiteralExpression) ||
+                          notEqualsTrue.Right.IsKind(SyntaxKind.TrueLiteralExpression)):
+                    negations++;
+                    break;
+            }
+        }
+
+        return negations % 2 == 0;
+    }
+
     private static bool IsBooleanMemberAssignedFromConstructorParameter(
         ISymbol member,
-        SemanticModel semanticModel)
+        Compilation compilation,
+        Dictionary<SyntaxTree, SemanticModel> semanticModels)
     {
         foreach (var reference in member.ContainingType.DeclaringSyntaxReferences)
         {
-            if (reference.GetSyntax() is not TypeDeclarationSyntax typeDeclaration ||
-                typeDeclaration.SyntaxTree != semanticModel.SyntaxTree)
+            if (reference.GetSyntax() is not TypeDeclarationSyntax typeDeclaration)
             {
                 continue;
             }
+
+            var semanticModel = GetSemanticModel(
+                compilation, typeDeclaration.SyntaxTree, semanticModels);
 
             foreach (var node in typeDeclaration.DescendantNodes())
             {
@@ -907,8 +973,37 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        serviceType = method.TypeArguments[0];
+        // `await using` accepts a pattern-based DisposeAsync the container will never call; the
+        // container disposes only through the real interfaces, so a service type implementing
+        // neither is not container-run disposal.
+        var resolvedType = method.TypeArguments[0];
+        if (!ImplementsAnyDisposalInterface(resolvedType, wellKnownTypes))
+        {
+            return false;
+        }
+
+        serviceType = resolvedType;
         return true;
+    }
+
+    private static bool ImplementsAnyDisposalInterface(
+        ITypeSymbol type,
+        WellKnownTypes wellKnownTypes)
+    {
+        if (IsDisposalInterface(type, wellKnownTypes))
+        {
+            return true;
+        }
+
+        foreach (var implemented in type.AllInterfaces)
+        {
+            if (IsDisposalInterface(implemented, wellKnownTypes))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsThrowawayProviderReceiver(
@@ -1529,11 +1624,16 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
     private sealed class InjectedMemberDisposal
     {
-        public InjectedMemberDisposal(ISymbol member, INamedTypeSymbol containingType, Location location)
+        public InjectedMemberDisposal(
+            ISymbol member,
+            INamedTypeSymbol containingType,
+            Location location,
+            InvocationExpressionSyntax invocation)
         {
             Member = member;
             ContainingType = containingType;
             Location = location;
+            Invocation = invocation;
         }
 
         public ISymbol Member { get; }
@@ -1541,6 +1641,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         public INamedTypeSymbol ContainingType { get; }
 
         public Location Location { get; }
+
+        public InvocationExpressionSyntax Invocation { get; }
     }
 
     private sealed class InjectedParameterDisposal
@@ -1548,11 +1650,13 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         public InjectedParameterDisposal(
             IParameterSymbol parameter,
             INamedTypeSymbol containingType,
-            Location location)
+            Location location,
+            InvocationExpressionSyntax invocation)
         {
             Parameter = parameter;
             ContainingType = containingType;
             Location = location;
+            Invocation = invocation;
         }
 
         public IParameterSymbol Parameter { get; }
@@ -1560,6 +1664,8 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         public INamedTypeSymbol ContainingType { get; }
 
         public Location Location { get; }
+
+        public InvocationExpressionSyntax Invocation { get; }
     }
 
     private sealed class ResolvedServiceDisposal

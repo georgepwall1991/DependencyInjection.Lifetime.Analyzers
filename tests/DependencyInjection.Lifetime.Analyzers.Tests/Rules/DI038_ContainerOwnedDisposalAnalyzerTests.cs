@@ -786,6 +786,140 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task PartialConsumerOwnershipFlag_NoDiagnostic()
+    {
+        // The ownership flag is assigned in one partial declaration file and read in another;
+        // the proof must cross syntax trees.
+        var file1 = """
+            using System;
+            using Microsoft.Extensions.DependencyInjection;
+
+            public interface IConnection : IDisposable { }
+            public sealed class Connection : IConnection { public void Dispose() { } }
+
+            public sealed partial class Exporter
+            {
+                private readonly IConnection _connection;
+                private readonly bool _owns;
+
+                public Exporter(IConnection connection, bool owns = false)
+                {
+                    _connection = connection;
+                    _owns = owns;
+                }
+            }
+
+            public static class Startup
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddSingleton<IConnection, Connection>();
+                    services.AddTransient<Exporter>();
+                }
+            }
+            """;
+        var file2 = """
+            using System;
+
+            public sealed partial class Exporter : IDisposable
+            {
+                public void Dispose()
+                {
+                    if (_owns)
+                    {
+                        _connection.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(
+            new[] { ("/0/File1.cs", file1), ("/0/File2.cs", file2) });
+    }
+
+    [Fact]
+    public async Task NegatedOwnershipFlag_ReportsDiagnostic()
+    {
+        // `if (!_owns)` guards the branch the non-owning container path executes.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private readonly bool _owns;
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (!_owns)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task ElseBranchOwnershipFlag_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private readonly bool _owns;
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (_owns)
+                        {
+                        }
+                        else
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task DisposedLatchGuard_StillReportsDiagnostic()
     {
         // A run-once latch is assigned in methods, not from a constructor parameter, so it does
@@ -1219,7 +1353,7 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
-    public async Task ScopeFactoryResolution_NoDiagnostic()
+    public async Task ScopeFactoryDependency_NoDiagnostic()
     {
         // Provider infrastructure types have their own disposal rules (DI001, DI014); they are
         // never this rule's finding even when a registration exists.
@@ -1232,17 +1366,24 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                     public void Dispose() { }
                 }
 
+                public sealed class Consumer : IDisposable
+                {
+                    private readonly IServiceScopeFactory _factory;
+
+                    public Consumer(IServiceScopeFactory factory) { _factory = factory; }
+
+                    public void Dispose()
+                    {
+                        ((IDisposable)_factory).Dispose();
+                    }
+                }
+
                 public static class Startup
                 {
                     public static void Configure(IServiceCollection services)
                     {
                         services.AddSingleton<IServiceScopeFactory, PoolingScopeFactory>();
-                    }
-
-                    public static void Run(IServiceProvider provider)
-                    {
-                        var factory = provider.GetRequiredService<IServiceScopeFactory>();
-                        ((IDisposable)factory).Dispose();
+                        services.AddTransient<Consumer>();
                     }
                 }
                 """;
@@ -1596,6 +1737,70 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     // ---- Resolved leg: negatives ----
+
+    [Fact]
+    public async Task AwaitUsingResolvedAsyncDisposable_ReportsDiagnostic()
+    {
+        var source =
+            Usings
+            + """
+                public interface IQueue : IAsyncDisposable { }
+                public sealed class Queue : IQueue
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IQueue, Queue>();
+                    }
+
+                    public static async Task RunAsync(IServiceProvider provider)
+                    {
+                        await using var queue = {|DI038:provider.GetRequiredService<IQueue>()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task AwaitUsingPatternOnlyAsyncDisposable_NoDiagnostic()
+    {
+        // Pattern-based DisposeAsync satisfies `await using`, but the container disposes only
+        // through the real interfaces, so this is not container-run disposal.
+        var source =
+            Usings
+            + """
+                public interface IBatch
+                {
+                    ValueTask DisposeAsync();
+                }
+
+                public sealed class Batch : IBatch
+                {
+                    public ValueTask DisposeAsync() => default;
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IBatch, Batch>();
+                    }
+
+                    public static async Task RunAsync(IServiceProvider provider)
+                    {
+                        await using var batch = provider.GetRequiredService<IBatch>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
 
     [Fact]
     public async Task ThrowawayProviderResolution_NoDiagnostic()

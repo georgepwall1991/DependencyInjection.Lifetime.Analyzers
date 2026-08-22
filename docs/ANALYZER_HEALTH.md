@@ -62,6 +62,13 @@ guard mutation-tested — deleting the guard makes its regression test fail).
   deconstructions, `ref`/`out` arguments, `ref` aliases, null-conditional member writes, and
   rebound constructor parameters as proof-breaking. The `if (owns)`-guarded dual-use idiom
   (constructor-supplied Boolean) is silent; `_disposed`-latch guards are not.
+- **Flag-guard precision (Codex round 2):** the ownership-flag proof runs at compilation end so
+  partial declarations in other files can prove the flag; it requires the disposal in the
+  then-branch with positive flag polarity — `if (!owns)` and else-branch disposal run on the
+  non-owning container path and still report. The resolved tier requires the service type to
+  implement a real disposal interface: `await using` accepts a pattern-based `DisposeAsync` the
+  container never calls, and that shape stays silent. An `owns || other` condition still
+  suppresses (any positive read counts) — a documented over-suppression.
 
 ## Historical Release Snapshots
 
