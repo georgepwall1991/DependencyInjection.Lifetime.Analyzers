@@ -163,6 +163,17 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
+                    // `await using` accepts a pattern-based DisposeAsync the container never
+                    // calls; container-run disposal needs the service type — or every proven
+                    // implementation behind it — to implement a real disposal interface.
+                    if (!ResolvedServiceIsContainerDisposed(
+                            candidate.ServiceType,
+                            registrations,
+                            wellKnownTypes))
+                    {
+                        continue;
+                    }
+
                     Report(
                         endContext,
                         DiagnosticDescriptors.ContainerOwnedResolvedServiceDisposed,
@@ -502,16 +513,24 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
         return negations % 2 == 0;
     }
 
+    /// <summary>
+    /// True only when every write to the flag member, in every declaration of the type, is a
+    /// direct reference to a qualifying Boolean constructor parameter. A flag rewritten in a
+    /// method (`_owns = true`) can flip on a container-built instance, so any other write —
+    /// including a compound assignment or a `false` literal — drops the proof.
+    /// </summary>
     private static bool IsBooleanMemberAssignedFromConstructorParameter(
         ISymbol member,
         Compilation compilation,
         Dictionary<SyntaxTree, SemanticModel> semanticModels)
     {
+        var sawConstructorAssignment = false;
+
         foreach (var reference in member.ContainingType.DeclaringSyntaxReferences)
         {
             if (reference.GetSyntax() is not TypeDeclarationSyntax typeDeclaration)
             {
-                continue;
+                return false;
             }
 
             var semanticModel = GetSemanticModel(
@@ -519,24 +538,29 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
 
             foreach (var node in typeDeclaration.DescendantNodes())
             {
-                ExpressionSyntax? value = node switch
+                ExpressionSyntax? value;
+                switch (node)
                 {
-                    AssignmentExpressionSyntax assignment
-                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
-                             IsAssignmentToMember(assignment.Left, member, semanticModel) =>
-                        assignment.Right,
-                    EqualsValueClauseSyntax initializer
+                    case AssignmentExpressionSyntax assignment
+                        when IsAssignmentToMember(assignment.Left, member, semanticModel):
+                        if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                        {
+                            return false;
+                        }
+
+                        value = assignment.Right;
+                        break;
+
+                    case EqualsValueClauseSyntax initializer
                         when initializer.Parent is VariableDeclaratorSyntax declarator &&
                              SymbolEqualityComparer.Default.Equals(
                                  semanticModel.GetDeclaredSymbol(declarator),
-                                 member) =>
-                        initializer.Value,
-                    _ => null,
-                };
+                                 member):
+                        value = initializer.Value;
+                        break;
 
-                if (value is null)
-                {
-                    continue;
+                    default:
+                        continue;
                 }
 
                 if (StripTrivialWrappers(value) is IdentifierNameSyntax valueIdentifier &&
@@ -544,12 +568,15 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
                     parameter.Type.SpecialType == SpecialType.System_Boolean &&
                     IsQualifyingConstructorParameter(parameter))
                 {
-                    return true;
+                    sawConstructorAssignment = true;
+                    continue;
                 }
+
+                return false;
             }
         }
 
-        return false;
+        return sawConstructorAssignment;
     }
 
     /// <summary>
@@ -973,17 +1000,60 @@ public sealed class DI038_ContainerOwnedDisposalAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        // `await using` accepts a pattern-based DisposeAsync the container will never call; the
-        // container disposes only through the real interfaces, so a service type implementing
-        // neither is not container-run disposal.
-        var resolvedType = method.TypeArguments[0];
-        if (!ImplementsAnyDisposalInterface(resolvedType, wellKnownTypes))
+        serviceType = method.TypeArguments[0];
+        return true;
+    }
+
+    private static bool ResolvedServiceIsContainerDisposed(
+        ITypeSymbol serviceType,
+        ImmutableArray<ServiceRegistration> registrations,
+        WellKnownTypes wellKnownTypes)
+    {
+        if (ImplementsAnyDisposalInterface(serviceType, wellKnownTypes))
+        {
+            return true;
+        }
+
+        if (serviceType is not INamedTypeSymbol namedType)
         {
             return false;
         }
 
-        serviceType = resolvedType;
-        return true;
+        INamedTypeSymbol? openGeneric = null;
+        if (namedType.IsGenericType && !namedType.IsUnboundGenericType)
+        {
+            openGeneric = namedType.ConstructUnboundGenericType();
+        }
+
+        var sawImplementation = false;
+        foreach (var registration in registrations)
+        {
+            if (registration.IsKeyed)
+            {
+                continue;
+            }
+
+            var matches =
+                SymbolEqualityComparer.Default.Equals(registration.ServiceType, namedType) ||
+                openGeneric is not null &&
+                SymbolEqualityComparer.Default.Equals(registration.ServiceType, openGeneric);
+            if (!matches)
+            {
+                continue;
+            }
+
+            var implementationType =
+                registration.ImplementationType ?? registration.FactoryConstructedType;
+            if (implementationType is null ||
+                !ImplementsAnyDisposalInterface(implementationType, wellKnownTypes))
+            {
+                return false;
+            }
+
+            sawImplementation = true;
+        }
+
+        return sawImplementation;
     }
 
     private static bool ImplementsAnyDisposalInterface(

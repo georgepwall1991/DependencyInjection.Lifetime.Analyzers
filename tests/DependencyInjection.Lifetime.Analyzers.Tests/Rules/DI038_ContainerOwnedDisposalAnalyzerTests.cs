@@ -920,6 +920,52 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
     }
 
     [Fact]
+    public async Task MutableOwnershipFlagRewritten_ReportsDiagnostic()
+    {
+        // A flag rewritten in a method can flip on a container-built instance, so it proves no
+        // conditional ownership.
+        var source =
+            Usings
+            + """
+                public sealed class Exporter : IDisposable
+                {
+                    private readonly IConnection _connection;
+                    private bool _owns;
+
+                    public Exporter(IConnection connection, bool owns = false)
+                    {
+                        _connection = connection;
+                        _owns = owns;
+                    }
+
+                    public void TakeOwnership()
+                    {
+                        _owns = true;
+                    }
+
+                    public void Dispose()
+                    {
+                        if (_owns)
+                        {
+                            {|DI038:_connection.Dispose()|};
+                        }
+                    }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IConnection, Connection>();
+                        services.AddTransient<Exporter>();
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task DisposedLatchGuard_StillReportsDiagnostic()
     {
         // A run-once latch is assigned in methods, not from a constructor parameter, so it does
@@ -1760,6 +1806,38 @@ public class DI038_ContainerOwnedDisposalAnalyzerTests
                     public static async Task RunAsync(IServiceProvider provider)
                     {
                         await using var queue = {|DI038:provider.GetRequiredService<IQueue>()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI038_ContainerOwnedDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CastDisposeResolvedDisposableImplementation_ReportsDiagnostic()
+    {
+        // The service abstraction is not disposable, but the registered implementation is, so
+        // the container disposes it and the cast-dispose tears down the shared instance.
+        var source =
+            Usings
+            + """
+                public interface IExportChannel { }
+
+                public sealed class ExportChannel : IExportChannel, IDisposable
+                {
+                    public void Dispose() { }
+                }
+
+                public static class Startup
+                {
+                    public static void Configure(IServiceCollection services)
+                    {
+                        services.AddSingleton<IExportChannel, ExportChannel>();
+                    }
+
+                    public static void Run(IServiceProvider provider)
+                    {
+                        {|DI038:((IDisposable)provider.GetRequiredService<IExportChannel>()).Dispose()|};
                     }
                 }
                 """;

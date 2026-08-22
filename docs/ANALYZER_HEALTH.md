@@ -67,7 +67,10 @@ guard mutation-tested — deleting the guard makes its regression test fail).
   then-branch with positive flag polarity — `if (!owns)` and else-branch disposal run on the
   non-owning container path and still report. The resolved tier requires the service type to
   implement a real disposal interface: `await using` accepts a pattern-based `DisposeAsync` the
-  container never calls, and that shape stays silent. An `owns || other` condition still
+  container never calls, and that shape stays silent — while a disposable implementation behind
+  a non-disposable abstraction still counts as container-disposed. Every write to the flag must
+  come from a constructor parameter: a flag rewritten in a method (`_owns = true`) can flip on a
+  container-built instance and no longer suppresses. An `owns || other` condition still
   suppresses (any positive read counts) — a documented over-suppression.
 
 ## Historical Release Snapshots
