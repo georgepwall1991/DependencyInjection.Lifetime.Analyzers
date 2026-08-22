@@ -224,4 +224,12 @@ public static class DiagnosticIds
     /// expiration nor a size limit. The store grows monotonically for the life of the process.
     /// </summary>
     public const string UnboundedSingletonCache = "DI030";
+
+    /// <summary>
+    /// DI038: A consumer disposes a service the container owns — a constructor-injected
+    /// singleton/scoped dependency, or the result of a GetService/GetRequiredService call for a
+    /// singleton. The container disposes what it creates; a consumer disposing it first hands
+    /// every other consumer of the same instance a disposed object.
+    /// </summary>
+    public const string ContainerOwnedServiceDisposedByConsumer = "DI038";
 }

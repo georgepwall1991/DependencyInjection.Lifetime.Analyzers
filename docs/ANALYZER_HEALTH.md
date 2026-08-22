@@ -1,19 +1,98 @@
 # Analyzer Health Report
 
+**Current release candidate:** 3.8.0 — DI038 container-owned service disposed by consumer. The
+disposal-ownership family (DI008, DI014, DI032, DI033) covered every way an owner fails to
+dispose; DI038 closes the inverse quadrant: a consumer disposing what the container owns — a
+constructor-injected singleton/scoped dependency, or a resolved singleton wrapped in `using` or
+explicitly disposed. Warning severity: the shared instance dies for every other consumer, which
+is a runtime `ObjectDisposedException` class of defect.
+
+**Last refreshed:** 2026-08-21
+**Package version:** 3.8.0
+**Test result:** see CHANGELOG 3.8.0 and the DI038 test suite (36 focused tests; every negative
+guard mutation-tested — deleting the guard makes its regression test fail).
+
+**DI038 boundary decisions (durable, do not re-litigate):**
+
+- **vs DI008:** DI008 owns transient disposables, so DI038 never fires on a transient lifetime —
+  same restriction rationale as DI032.
+- **vs DI032/DI033:** those are registration-site disposal-ownership claims (cannot dispose
+  synchronously / will never dispose a pre-built instance); DI038 is the consumption-site claim.
+  Pre-built instance registrations are excluded from DI038 outright, because a consumer that
+  deliberately disposes a pre-built instance at shutdown is DI033's documented remediation, not a
+  defect.
+- **vs DI001/DI014:** disposing scopes and root providers you created is required behavior, so
+  `IServiceScope`, `AsyncServiceScope`, `IServiceProvider`, `IServiceScopeFactory`, and
+  `IServiceCollection` receivers are excluded by type.
+- **Collector nuance:** the RegistrationCollector models `AddMemoryCache`/`AddLogging`/
+  `AddHttpContextAccessor`/`AddHttpClient` as instance-backed registrations (opaque framework
+  implementation). DI038 records those invocation locations itself and treats instance-backed
+  registrations at exactly those locations as container-created, so the pre-built-instance
+  exclusion does not swallow framework singletons. Registration-mutation replay (`Clear`/
+  `Replace`) is not consulted in v1; a cleared-then-re-registered lifetime shows up as mixed
+  lifetimes, which is silent — the conservative direction.
+- **Severity note:** both descriptors (injected tier, resolved tier) share the DI038 ID at
+  Warning, matching the severity-parity test.
+- **Equal-lifetime exclusion (adversarial round 2):** a scoped consumer disposing its scoped
+  dependency, or a singleton disposing its singleton dependency, is co-disposed with it in the
+  container's own teardown pass — the same benign double dispose DI026's same-scope reasoning and
+  this rule's resolved-tier scoped exclusion already accept, and the shape CA2213 actively
+  prescribes. The injected tier therefore requires the consumer's slot-winning lifetime to be
+  strictly shorter than the dependency's. The teardown-ordering corruption window on equal
+  lifetimes (a sibling's Dispose using the shared instance later in the same pass) is a
+  documented accepted false negative, not a Warning.
+- **Throwaway-provider exclusion (adversarial round 2):** `using var provider =
+  services.BuildServiceProvider(); using var x = provider.GetRequiredService<T>()` has one
+  consumer and dies in the same frame — the dominant test/benchmark shape. A receiver tracing to
+  a same-member `BuildServiceProvider()` local stays silent; shared providers (parameters,
+  injected providers, `scope.ServiceProvider`, `host.Services`) still report.
+- **Disposal-interface proof (Codex review):** a zero-argument method merely named
+  `Dispose`/`DisposeAsync` is an ordinary method — the container disposes only through the real
+  interfaces — so the bound method must implement `IDisposable.Dispose`/
+  `IAsyncDisposable.DisposeAsync` (override chains honored).
+- **Framework whitelist correction (adversarial round 2):** `AddHttpContextAccessor` and
+  `AddHttpClient` were dropped from the framework-owned set — `HttpContextAccessor` and
+  `DefaultHttpClientFactory` implement no disposal interface, so the container disposes neither.
+  Only `AddMemoryCache`/`AddLogging` (and the matching `IMemoryCache`/`ILoggerFactory` classifier
+  claims) prove framework ownership.
+- **Instance and slot honesty (Codex + round 3):** ownership proofs run over effective
+  registrations (`DefinitelyRemovedRegistrationSet` replay of `Clear`/`RemoveAll`/`Replace`), the
+  consumer proof uses its slot-winning registration (a later factory override defeats a type-based
+  default), member disposal must be this-rooted, and the member/parameter/local write scans treat
+  deconstructions, `ref`/`out` arguments, `ref` aliases, null-conditional member writes, and
+  rebound constructor parameters as proof-breaking. The `if (owns)`-guarded dual-use idiom
+  (constructor-supplied Boolean) is silent; `_disposed`-latch guards are not.
+- **Flag-guard precision (Codex round 2):** the ownership-flag proof runs at compilation end so
+  partial declarations in other files can prove the flag; it requires the disposal in the
+  then-branch with positive flag polarity — `if (!owns)` and else-branch disposal run on the
+  non-owning container path and still report. The resolved tier requires the service type to
+  implement a real disposal interface: `await using` accepts a pattern-based `DisposeAsync` the
+  container never calls, and that shape stays silent — while a disposable implementation behind
+  a non-disposable abstraction still counts as container-disposed. The flag proof requires full
+  implication: the flag reaches the condition root through only parentheses and `&&` (an
+  `owns || force` branch runs on the non-owning path, so it reports), every write is a
+  constructor-parameter reference (no method rewrites, `ref`/`out`, ref aliases, or
+  deconstructions), and the flag is not externally assignable.
+- **Provider provenance boundary (declined, durable):** Codex re-raised requiring provenance
+  from an `IServiceProvider`-typed receiver back to a Microsoft-built provider. Declined: an
+  interface-typed provider parameter or property is overwhelmingly the framework's provider in
+  real code, DI019 accepts the same static-type trust for its provider legs, and demanding
+  cross-method provenance would silence the injected-provider and `scope.ServiceProvider`
+  shapes that carry the resolved tier's value. Hand-rolled provider *classes* are already
+  rejected by natural type; a hand-rolled provider hidden behind the interface type remains the
+  documented accepted residual.
+
+## Historical Release Snapshots
+
 **Current release candidate:** 3.5.20 — DI009 and DI011 now ignore registrations provably removed
 by a later unconditional `IServiceCollection.Clear()` in the same straight-line flow. Conditional
 clears remain conservative, and unrelated descriptor collections do not enter the mutation stream.
-
-**Last refreshed:** 2026-07-27
-**Package version:** 3.5.20
-**Base audited commit:** `5796552` (`origin/main`; release `v3.5.19`)
-**Test result:** 2026-07-27 local Release build passed with 0 errors and 76 existing intentional
-sample warnings. The Release suite passed 2,738 tests with 0 failed and 0 skipped. Focused DI011
-`Clear` coverage passed 5 tests after red-phase interface, concrete-receiver, and multi-registration
-false positives, including conditional-clear and unrelated-descriptor-list guardrails; a focused
-DI009 regression also passed.
-
-## Historical Release Snapshots
+(Last refreshed 2026-07-27; package 3.5.20; base audited commit `5796552`, `origin/main`, release
+`v3.5.19`. Test result: 2026-07-27 local Release build passed with 0 errors and 76 existing
+intentional sample warnings. The Release suite passed 2,738 tests with 0 failed and 0 skipped.
+Focused DI011 `Clear` coverage passed 5 tests after red-phase interface, concrete-receiver, and
+multi-registration false positives, including conditional-clear and unrelated-descriptor-list
+guardrails; a focused DI009 regression also passed.)
 
 **Current release candidate:** 3.0.1 — DI002 now recognizes scoped services handed to mutating collection methods on caller-owned parameters such as `destination.Add(service)`, for both direct resolutions and tracked locals. The existing enumerable-receiver and void/bool/int mutator gates remain in force. Ordinary by-value parameters definitely replaced with fresh collections stay silent only while the replacement remains local; longer-lived storage, later returns, direct local aliases, intervening conditional/nested/`ref`/`out` writes, and caller-visible `ref`/`out` parameter replacements preserve the diagnostic. Local collections also remain silent because they do not outlive the scope. (Originally prepared as 2.18.25; re-versioned to 3.0.1 after the 3.0.0 release shipped first.)
 

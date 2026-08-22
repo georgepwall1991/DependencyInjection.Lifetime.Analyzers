@@ -48,6 +48,7 @@ For the latest full rule content, see:
 | [DI035](#di035-non-thread-safe-service-shared-across-a-fan-out) | Non-thread-safe service shared across a fan-out | Warning | No |
 | [DI036](#di036-registration-added-after-the-provider-was-built) | Registration added after the provider was built | Warning | No |
 | [DI037](#di037-un-awaited-task-escapes-the-scope-that-created-it) | Un-awaited task escapes the scope that created it | Warning | No |
+| [DI038](#di038-container-owned-service-disposed-by-consumer) | Container-owned service disposed by consumer | Warning | No |
 
 ---
 
@@ -1569,5 +1570,50 @@ public async Task Dispatch(int orderId)
 **Guardrails:** the scope must be disposed by the body that starts the work — a `using` declaration or a `using` statement — because that is what fixes the moment of teardown; a scope without one has no proven disposal point here and is DI001's finding instead. The receiver must be scope-derived: the scope's `ServiceProvider`, a service resolved through it, or a local that holds either, grown transitively and dropped entirely if any of those locals is reassigned or passed by `ref`/`out`. The call must hand back a `Task` or `ValueTask`; a synchronous call finishes inside the scope by definition. A task consumed where it stands is not reported — `await`, `await ... .ConfigureAwait(false)`, `.GetAwaiter().GetResult()`, `.Wait()`, an `await` of the `Task.WhenAll` it was passed to, or a wait on anything reached from the service, such as a completion property it exposes — and neither is one whose fate this rule cannot name, such as a local declared inside the scope. Work that finishes before it is handed back is not reported either: a body with no `await` on the path taken, or whose awaits are all of work already over — `Task.CompletedTask`, `Task.FromResult`, `Task.Delay(0)`, `Task.WhenAll` of finished tasks, `Task.WhenAny` where one is finished, a local or readonly field holding any of those, or an await a preceding `IsCompleted` check has already settled — because such a call is done before the scope closes. A `true` or `false` argument counts here too: a guard clause the call site's own literal sends the body out of is a path with no await on it. Work started inside a lambda, a local function, or a query clause is skipped: a delegate runs when its consumer chooses, and background work started with `Task.Run` is DI023's finding rather than this rule's. Accepted false negatives: a task whose escape route runs through a helper method, a service resolved from a scope created in another method, and a scope-resolved singleton, which the scope does not own and therefore does not dispose. Accepted false positives: a token cancelled before the call, which leaves the work faulted at its first check but reads here as ordinary escaping work; and a join signalled through something this rule cannot connect back to the task, such as a `ManualResetEventSlim` the service sets when its work ends, still reads as an escape — waiting on an unrelated handle is far commoner than hand-rolled completion signalling, and treating every later wait as the join would silence real findings.
 
 **Code Fix:** No — the repair is a choice between awaiting inside the scope, making the caller own the scope, and giving the background work a scope of its own, and only the author knows which of the three the surrounding code can support.
+
+---
+
+## DI038: Container-Owned Service Disposed By Consumer
+
+**What it catches:** a consumer disposing a service instance the container owns and other consumers still need. Two shapes report. The **injected** shape: a container-constructed consumer whose lifetime is **strictly shorter** than the dependency's — a transient or scoped consumer of a singleton, or a transient consumer of a scoped service — disposes that constructor-injected dependency: directly, through `?.`, behind a cast to `IDisposable`/`IAsyncDisposable`, on the parameter itself, or on a this-rooted field/auto-property provably assigned only from the constructor. The **resolved** shape: the result of a framework `GetService<T>`/`GetRequiredService<T>` call on a shared provider, for a singleton-registered service, is wrapped in a `using` declaration or statement, disposed on the spot, or disposed later through a local that is never reassigned. Only calls that actually implement `IDisposable.Dispose`/`IAsyncDisposable.DisposeAsync` count — a method that merely shares the name is an ordinary method.
+
+**Why it matters:** the container disposes every service it creates — singletons when the root provider is disposed, scoped services when their scope ends. The official DI guidelines are explicit that services resolved from the container should never be disposed by the code that consumes them. A consumer that does so anyway tears down an instance the container and every other consumer still hold: the next consumer gets `ObjectDisposedException`, and at teardown the reverse-creation disposal order the container guarantees runs against an instance that is already dead.
+
+> **Explain Like I'm Ten:** The library owns the book you borrowed. If you shred it when you finish, the next reader checks out confetti.
+
+**Problem:**
+
+```csharp
+public sealed class ReportSender : IDisposable
+{
+    private readonly ITelemetryChannel _channel;   // registered AddSingleton
+
+    public ReportSender(ITelemetryChannel channel) => _channel = channel;
+
+    public void Dispose()
+    {
+        _channel.Dispose();  // DI038: every other consumer now holds a disposed channel
+    }
+}
+```
+
+**Better pattern:** remove the call and let the container run disposal; it disposes the channel when the provider is disposed.
+
+```csharp
+public sealed class ReportSender
+{
+    private readonly ITelemetryChannel _channel;
+
+    public ReportSender(ITelemetryChannel channel) => _channel = channel;
+
+    // No Dispose: the container owns the channel's lifetime.
+}
+```
+
+**Guardrails:** the rule reports only proven container ownership on both sides of the call, and only where the disposal outruns the container's own teardown. Equal-lifetime pairs stay silent: a scoped consumer disposing its scoped dependency, or a singleton disposing its singleton dependency (the CA2213-prescribed pattern), is co-disposed with it at the same teardown — the contractually idempotent double dispose the DI026 same-scope reasoning already accepts — so only a strictly shorter-lived consumer, whose Dispose runs while the shared instance is still live for everyone else, reports. The consumer must be container-constructed through the registration that **wins its service-type slot** after `Clear`/`RemoveAll`/`Replace` replay — a type-based default overridden by a later factory is factory-built at runtime, and factory arguments may be caller-owned — and member disposal must be this-rooted (`_dep`, `this._dep`): reaching through another instance (`mine.Connection.Dispose()`) may target a manually composed graph the caller owns. The dependency's unkeyed registrations must agree on a lifetime: transients are DI008's finding, mixed lifetimes are ambiguous, `[FromKeyedServices]` parameters live in a keyed slot the unkeyed proof does not inspect, and a pre-built instance (`AddSingleton(instance)`) is exempt because disposing one deliberately is DI033's documented remediation. `AddMemoryCache` and `AddLogging` count as container-created despite their opaque implementation types (the container disposes `MemoryCache` and `LoggerFactory`), and the same two prove ownership through framework knowledge when no source registration exists; `AddHttpContextAccessor` and `AddHttpClient` deliberately do not, because neither registers anything the container disposes. The member proof accepts only a field or auto-property that outside code cannot reassign (private or readonly field; property with no setter or a private non-init setter — `init` is assignable from object initializers the scan never sees) whose every non-null assignment is a direct reference to a never-rebound constructor parameter of the dependency's own type; a field initializer referencing a primary-constructor parameter qualifies, while computed values, compound assignments, `: this(...)` chaining, deconstruction or null-conditional writes, `ref`/`out` arguments, and `ref` aliases all break the proof, for members, parameters, and locals alike. A disposal in the then-branch of an `if` whose taking implies a construction-provided Boolean is true — the flag reaches the condition root through only parentheses and `&&`, every write to it (across partial declarations) is a constructor-parameter reference, and outside code cannot assign it — stays silent: the dual-use leaveOpen idiom. A `_disposed` latch assigned in methods, a flag rewritten anywhere (`_owns = true`, `ref _owns`), an externally settable flag, a negated flag (`if (!owns)`), a disjunction (`if (owns || force)`), or an else-branch disposal — every shape the non-owning container path can execute — still reports. On the resolved side, only the exact framework resolution extensions participate, the resolved service type — or every proven implementation registered behind it — must implement a real disposal interface (`await using` accepts a pattern-based `DisposeAsync` the container will never call, while a disposable implementation behind a non-disposable abstraction still counts), the receiver's natural type must be the framework provider interface or Microsoft's own container class (a hand-rolled provider can return caller-owned instances), and a provider built by the resolving member itself (`BuildServiceProvider()` in the same method) is a throwaway container whose early disposal is an idempotent double dispose, not a shared-instance defect. `IServiceProvider`, `IServiceScope`, `AsyncServiceScope`, and `IServiceScopeFactory` receivers are never this rule's finding — disposing those is DI001's and DI014's required behavior.
+
+Accepted false negatives, all deliberate: a dependency stored in an unregistered base class of the registered consumer; a factory-registered consumer whose lambda resolves its arguments from the provider; disposal routed through a helper method (`Shutdown(_channel)`); a `using` statement over the member itself (`using (_channel)`); non-generic `GetService(typeof(T))` and keyed resolutions; a scoped resolution disposed inside the scope that produced it (a double dispose at worst, so the resolved shape stays singleton-only); open-generic consumers; positional-record consumers; equal-lifetime pairs whose teardown-ordering corruption window (a sibling's Dispose using the shared instance later in the same teardown pass) is real but indistinguishable from the benign mainline; and ownership transferred through covariant storage, where the parameter's declared type differs from the member's. Accepted residual false positive: a hand-rolled provider held behind an `IServiceProvider`-typed variable cannot be told apart from the framework's, so its resolutions are judged against the compilation's registrations.
+
+**Code Fix:** No — the repair is deleting the Dispose call or restructuring ownership (create a private instance, or take a factory and own what it returns), and only the author knows which one the design intends.
 
 ---
