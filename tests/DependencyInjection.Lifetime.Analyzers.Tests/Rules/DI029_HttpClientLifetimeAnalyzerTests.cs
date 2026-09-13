@@ -1408,6 +1408,37 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
+    public async Task StaticLazyOfHttpClient_WithPlainFactory_ReportsOnceOnField()
+    {
+        // The construction inside the Lazy factory runs at most once (first .Value access), so it is
+        // not a per-invocation socket leak; the only diagnostic is the static-member stale-DNS one.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Lazy<HttpClient> {|#0:Shared|} =
+                        new Lazy<HttpClient>(() => new HttpClient());
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsStaticMember
+                )
+                .WithLocation(0)
+                .WithArguments("Shared", "field")
+        );
+    }
+
+    [Fact]
     public async Task StaticLazyOfHttpClient_WithFactoryPooledLifetime_Silent()
     {
         // The Lazy's factory configures PooledConnectionLifetime, so the single retained handler
