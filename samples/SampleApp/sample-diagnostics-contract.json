@@ -830,6 +830,12 @@
           "anchor": "private static readonly Lazy<HttpClient> Shared = new Lazy<HttpClient>();",
           "ruleId": "DI029",
           "severity": "warning"
+        },
+        {
+          "filePathContains": "DI029/HttpClientLifetimeExamples.cs",
+          "anchor": "private readonly HttpClient _http = new HttpClient();",
+          "ruleId": "DI029",
+          "severity": "warning"
         }
       ],
       "approvedSecondaryDiagnostics": []

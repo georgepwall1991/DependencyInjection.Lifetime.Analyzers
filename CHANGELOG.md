@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.10] - 2026-09-13
+
+### Fixed
+
+- DI029 now reports an `HttpClient` stored in a member of a singleton-registered service: a singleton is constructed once, so `private readonly HttpClient _http = new HttpClient();` (or a constructor assignment) pins one handler for the life of the process — the same stale-DNS defect as a `static HttpClient`, and the most common way the bug actually appears. Reports cover field and property initializers, `this`-/implicit/`base`-qualified constructor assignments, members declared on base types, and singletons registered via `AddSingleton(new Foo())`; a construction that configures `PooledConnectionLifetime` stays silent because its connections still retire on an interval. Assignments outside the constructor, members of other objects (`other.Client = ...`), object-initializer members (`new Wrapper { Client = ... }`), and scoped owners remain accepted false negatives — none of them proves a process-lifetime pin on the service instance.
+
 ## [3.7.9] - 2026-09-13
 
 ### Fixed

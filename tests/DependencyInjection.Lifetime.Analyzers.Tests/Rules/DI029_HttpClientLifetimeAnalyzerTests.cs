@@ -495,8 +495,157 @@ public class DI029_HttpClientLifetimeAnalyzerTests
         await VerifySilentAsync(source);
     }
 
+    // ----------------------------------------------------------------
+    // Tier A -- client retained in a member of a singleton service
+    // ----------------------------------------------------------------
+
     [Fact]
-    public async Task RegisteredSingletonService_NewHttpClientInConstructor_Silent()
+    public async Task RegisteredSingletonService_NewHttpClientInConstructor_Reports()
+    {
+        // The singleton is constructed once, so the member-held client pins one handler for the
+        // life of the process -- the same stale-DNS defect as a static HttpClient.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http;
+
+                    public ApiClient()
+                    {
+                        _http = {|#0:new HttpClient()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_FieldInitializerHttpClient_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http = {|#0:new HttpClient()|};
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_AutoPropertyInitializer_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    public HttpClient Client { get; } = {|#0:new HttpClient()|};
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "Client")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonInstance_FieldInitializerHttpClient_Reports()
+    {
+        // AddSingleton(new ApiClient()) maps ApiClient as the implementation type, so the member
+        // it initializes still pins a process-lifetime handler.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton(new ApiClient());
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http = {|#0:new HttpClient()|};
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_ThisQualifiedFieldAssignment_Reports()
     {
         var source =
             Prelude
@@ -513,8 +662,231 @@ public class DI029_HttpClientLifetimeAnalyzerTests
 
                     public ApiClient()
                     {
+                        this._http = {|#0:new HttpClient()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_BaseClassFieldAssignment_Reports()
+    {
+        // A member declared on a base type is still storage on this instance.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClientBase
+                {
+                    protected HttpClient _http = null!;
+                }
+
+                public class ApiClient : ApiClientBase
+                {
+                    public ApiClient()
+                    {
+                        _http = {|#0:new HttpClient()|};
+                    }
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_RotatingHandlerField_Silent()
+    {
+        // PooledConnectionLifetime retires connections on an interval, so DNS is re-resolved even
+        // though the member-held client itself is never rotated.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http = new HttpClient(
+                        new SocketsHttpHandler
+                        {
+                            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                        });
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_MethodAssignedMember_Silent()
+    {
+        // An assignment outside the constructor may run any number of times, so the member is not
+        // proven to hold a single construction.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private HttpClient? _http;
+
+                    public void Init()
+                    {
                         _http = new HttpClient();
                     }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_OtherInstanceMemberAssignment_Silent()
+    {
+        // The client lands in a member of a different object; whether that object lives for the
+        // process cannot be proven from the singleton's constructor.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class Wrapper
+                {
+                    public HttpClient? Client { get; set; }
+                }
+
+                public class ApiClient
+                {
+                    public ApiClient(Wrapper other)
+                    {
+                        other.Client = new HttpClient();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_ObjectInitializerMember_Silent()
+    {
+        // The member belongs to the object being created, not to the singleton instance.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class Wrapper
+                {
+                    public HttpClient? Client { get; set; }
+                }
+
+                public class ApiClient
+                {
+                    public ApiClient()
+                    {
+                        var wrapper = new Wrapper { Client = new HttpClient() };
+                        _ = wrapper;
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredSingletonService_LocalHttpClientInConstructor_Silent()
+    {
+        // A constructor-local client is used and abandoned once per process -- neither a leak
+        // nor a stale-DNS pin.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    public ApiClient()
+                    {
+                        var http = new HttpClient();
+                        _ = http.GetHashCode();
+                    }
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredScopedService_FieldInitializerHttpClient_Silent()
+    {
+        // A scoped owner creates and releases its member-held client per scope; the singleton
+        // claim does not apply.
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddScoped<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http = new HttpClient();
                 }
                 """;
 

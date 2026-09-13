@@ -681,6 +681,20 @@ public static class DiagnosticDescriptors
     );
 
     /// <summary>
+    /// DI029: A constructed HttpClient is stored in a member of a singleton-registered service.
+    /// </summary>
+    public static readonly DiagnosticDescriptor HttpClientStaleDnsRetainedMember = new(
+        id: DiagnosticIds.HttpClientLifetimeMisuse,
+        title: "Do not store a constructed HttpClient on a singleton service",
+        messageFormat: "'{0}' is registered as Singleton and stores a constructed {1} in member '{2}'. The client's handler is never rotated, so it keeps using connections opened when the service was created and never observes DNS changes; inject IHttpClientFactory or a typed client instead.",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A singleton service lives for the life of the process, so an HttpClient stored in one of its fields or properties keeps a single handler for that entire time -- the same stale-DNS failure mode as holding the client in a static member. The handler is never rotated, connections opened when the service was constructed are never re-resolved, and traffic keeps routing to endpoints that have since moved. Inject IHttpClientFactory and create short-lived clients (or register a typed client with AddHttpClient) so the container owns the handler pool and rotates it.",
+        customTags: WellKnownDiagnosticTags.CompilationEnd
+    );
+
+    /// <summary>
     /// DI030: A singleton-owned or static collection grows without bound and is never evicted.
     /// </summary>
     public static readonly DiagnosticDescriptor UnboundedSingletonCache = new(

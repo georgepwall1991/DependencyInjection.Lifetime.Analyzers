@@ -27,6 +27,7 @@ namespace SampleApp.Diagnostics.DI029
         public static void Configure(IServiceCollection services)
         {
             services.AddSingleton<IHttpClientFactory, StubHttpClientFactory>();
+            services.AddSingleton<Bad_SingletonHoldsClient>();
             services.AddScoped<Bad_HttpClientPerRequest>();
             services.AddScoped<Good_InjectedFactory>();
         }
@@ -58,6 +59,15 @@ namespace SampleApp.Diagnostics.DI029
         private static readonly Lazy<HttpClient> Shared = new Lazy<HttpClient>();
 
         public Task<string> GetAsync(string url) => Shared.Value.GetStringAsync(url);
+    }
+
+    public class Bad_SingletonHoldsClient
+    {
+        // [DI029] The service is registered as a singleton, so this field keeps one client — and
+        // one handler — for the life of the process. It never rotates and never re-resolves DNS.
+        private readonly HttpClient _http = new HttpClient();
+
+        public Task<string> GetAsync(string url) => _http.GetStringAsync(url);
     }
 
     public class Good_InjectedFactory

@@ -13,8 +13,9 @@ namespace DependencyInjection.Lifetime.Analyzers.Rules;
 /// <summary>
 /// DI029: two opposite lifetime errors on the same connection pool. A registered service constructs
 /// <see cref="System.Net.Http.HttpClient"/> or one of its pooling handlers on a per-invocation path,
-/// exhausting sockets under load; or an <c>HttpClient</c> is handed to the container as a singleton
-/// or held in a static member, pinning a handler that then never rotates and never re-resolves DNS.
+/// exhausting sockets under load; or an <c>HttpClient</c> is handed to the container as a singleton,
+/// held in a static member, or stored in a member of a singleton-registered service -- all of which
+/// pin a handler that then never rotates and never re-resolves DNS.
 /// <para>
 /// The boundary with DI008 is the registration shape: DI008 owns transient disposable registrations,
 /// while DI029 owns singleton registrations and exact type-backed scoped <c>HttpClient</c>
@@ -30,7 +31,8 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             DiagnosticDescriptors.HttpClientSocketExhaustion,
             DiagnosticDescriptors.HttpClientStaleDnsRegistration,
             DiagnosticDescriptors.HttpClientScopedRegistration,
-            DiagnosticDescriptors.HttpClientStaleDnsStaticMember
+            DiagnosticDescriptors.HttpClientStaleDnsStaticMember,
+            DiagnosticDescriptors.HttpClientStaleDnsRetainedMember
         );
 
     /// <inheritdoc />
@@ -132,6 +134,8 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             bool inLoopBody,
             bool inConstructorOrInstanceInitializer,
             HttpClientCreationEscape escape,
+            string? retainedMemberName,
+            bool rotationConfigured,
             Location location
         )
         {
@@ -140,6 +144,8 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             InLoopBody = inLoopBody;
             InConstructorOrInstanceInitializer = inConstructorOrInstanceInitializer;
             Escape = escape;
+            RetainedMemberName = retainedMemberName;
+            RotationConfigured = rotationConfigured;
             Location = location;
         }
 
@@ -148,6 +154,20 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         public bool InLoopBody { get; }
         public bool InConstructorOrInstanceInitializer { get; }
         public HttpClientCreationEscape Escape { get; }
+
+        /// <summary>
+        /// The name of the member retaining the client when that member is provably storage on the
+        /// constructing instance (an own field/property initializer or a <c>this</c>-rooted
+        /// assignment); null when the retention target is another object or cannot be proven.
+        /// </summary>
+        public string? RetainedMemberName { get; }
+
+        /// <summary>
+        /// Whether the construction itself configures <c>PooledConnectionLifetime</c>, which makes a
+        /// pinned handler acceptable because its connections still retire on an interval.
+        /// </summary>
+        public bool RotationConfigured { get; }
+
         public Location Location { get; }
     }
 
@@ -241,6 +261,18 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        var retainedMemberName =
+            escape == HttpClientCreationEscape.RetainedInMember
+            && HttpClientCreationClassification.TryGetOwnRetainedMemberName(
+                creation,
+                semanticModel,
+                site.ContainingType,
+                cancellationToken,
+                out var memberName
+            )
+                ? memberName
+                : null;
+
         var createdType = semanticModel.GetTypeInfo(creation, cancellationToken).Type;
         records.Add(
             new CreationRecord(
@@ -249,6 +281,8 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
                 site.InLoopBody,
                 site.InConstructorOrInstanceInitializer,
                 escape,
+                retainedMemberName,
+                ConfiguresConnectionRotation(creation),
                 creation.GetLocation()
             )
         );
@@ -286,40 +320,83 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            if (!IsReportableSite(record, lifetime))
+            switch (ClassifyReportableSite(record, lifetime))
             {
-                continue;
-            }
+                case HttpClientSiteVerdict.SocketExhaustion:
+                    context.ReportDiagnostic(
+                        Diagnostic.Create(
+                            DiagnosticDescriptors.HttpClientSocketExhaustion,
+                            record.Location,
+                            record.ContainingType.Name,
+                            lifetime.ToString(),
+                            record.CreatedTypeName
+                        )
+                    );
+                    break;
 
-            context.ReportDiagnostic(
-                Diagnostic.Create(
-                    DiagnosticDescriptors.HttpClientSocketExhaustion,
-                    record.Location,
-                    record.ContainingType.Name,
-                    lifetime.ToString(),
-                    record.CreatedTypeName
-                )
-            );
+                case HttpClientSiteVerdict.RetainedBySingleton:
+                    context.ReportDiagnostic(
+                        Diagnostic.Create(
+                            DiagnosticDescriptors.HttpClientStaleDnsRetainedMember,
+                            record.Location,
+                            record.ContainingType.Name,
+                            record.CreatedTypeName,
+                            record.RetainedMemberName
+                        )
+                    );
+                    break;
+            }
         }
     }
 
+    private enum HttpClientSiteVerdict
+    {
+        Silent,
+        SocketExhaustion,
+        RetainedBySingleton,
+    }
+
     /// <summary>
-    /// Decides whether a construction site actually repeats, which needs both where the site sits and
-    /// how long its owner lives.
+    /// Decides what a construction site proves, which needs both where the site sits and how long
+    /// its owner lives.
     /// <para>
     /// A client stored in a member is one pool shared for the owner's lifetime — correct for a
-    /// singleton or scoped owner, and one fresh socket per resolution for a transient one. That is
-    /// the same syntax with opposite verdicts, which is why the escape kind cannot be judged at the
-    /// construction site alone.
+    /// scoped owner, one fresh socket per resolution for a transient one, and a process-lifetime
+    /// stale-DNS pin for a singleton one. That is the same syntax with three verdicts, which is why
+    /// the escape kind cannot be judged at the construction site alone.
     /// </para>
     /// </summary>
-    private static bool IsReportableSite(CreationRecord record, ServiceLifetime lifetime)
+    private static HttpClientSiteVerdict ClassifyReportableSite(
+        CreationRecord record,
+        ServiceLifetime lifetime
+    )
     {
         if (record.Escape == HttpClientCreationEscape.RetainedInMember)
         {
             // A loop that repeatedly overwrites a member burns a socket per iteration whatever the
-            // owner's lifetime; otherwise only a transient owner reconstructs the member.
-            return record.InLoopBody || lifetime == ServiceLifetime.Transient;
+            // owner's lifetime; a transient owner reconstructs the member per resolution.
+            if (record.InLoopBody || lifetime == ServiceLifetime.Transient)
+            {
+                return HttpClientSiteVerdict.SocketExhaustion;
+            }
+
+            // A singleton that provably retains the client in one of its own members during
+            // construction holds it for the life of the process -- the stale-DNS defect, not
+            // churn. An assignment outside the constructor may run repeatedly (and could rotate
+            // the member), and a member belonging to a different object says nothing about this
+            // instance, so both stay silent; a construction that already configures connection
+            // rotation retires its pooled connections on an interval.
+            if (
+                lifetime == ServiceLifetime.Singleton
+                && record.InConstructorOrInstanceInitializer
+                && record.RetainedMemberName is not null
+                && !record.RotationConfigured
+            )
+            {
+                return HttpClientSiteVerdict.RetainedBySingleton;
+            }
+
+            return HttpClientSiteVerdict.Silent;
         }
 
         // A loop body is per-iteration regardless of lifetime. Outside a loop, a constructor or
@@ -327,8 +404,10 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         // service it runs once per scope or once per process, which is an accepted false negative
         // rather than a socket leak.
         return record.InLoopBody
-            || !record.InConstructorOrInstanceInitializer
-            || lifetime == ServiceLifetime.Transient;
+                || !record.InConstructorOrInstanceInitializer
+                || lifetime == ServiceLifetime.Transient
+            ? HttpClientSiteVerdict.SocketExhaustion
+            : HttpClientSiteVerdict.Silent;
     }
 
     /// <summary>

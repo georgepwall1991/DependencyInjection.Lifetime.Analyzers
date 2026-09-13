@@ -387,6 +387,140 @@ internal static class HttpClientCreationClassification
         return false;
     }
 
+    /// <summary>
+    /// Reports the name of the member that retains the created client, but only when that member is
+    /// provably storage on the constructing instance itself: a field or property initializer (which
+    /// can only ever belong to the declaring type), or a constructor-time assignment whose target is
+    /// reached through an implicit, <c>this</c>-, or <c>base</c>-qualified receiver and is declared
+    /// on the containing type or one of its bases.
+    /// <para>
+    /// An object-initializer member (<c>new Wrapper { Client = ... }</c>) belongs to the object being
+    /// created, not to the containing instance, and an assignment like <c>other.Client = ...</c>
+    /// retains the client on whichever object the receiver evaluates to -- neither is storage on this
+    /// instance, so both report false even though <see cref="ClassifyEscape"/> calls them
+    /// <see cref="HttpClientCreationEscape.RetainedInMember"/>.
+    /// </para>
+    /// </summary>
+    public static bool TryGetOwnRetainedMemberName(
+        BaseObjectCreationExpressionSyntax creation,
+        SemanticModel semanticModel,
+        INamedTypeSymbol containingType,
+        System.Threading.CancellationToken cancellationToken,
+        out string memberName
+    )
+    {
+        memberName = string.Empty;
+
+        SyntaxNode current = creation;
+        var parent = current.Parent;
+
+        while (
+            parent
+                is ParenthesizedExpressionSyntax
+                    or CastExpressionSyntax
+                    or AwaitExpressionSyntax
+                    or PostfixUnaryExpressionSyntax
+        )
+        {
+            current = parent;
+            parent = current.Parent;
+        }
+
+        switch (parent)
+        {
+            case EqualsValueClauseSyntax equalsValue:
+                switch (equalsValue.Parent)
+                {
+                    // A field declarator that is not a local/using declaration (those were filtered
+                    // by ClassifyEscape) is a field of the declaring type.
+                    case VariableDeclaratorSyntax declarator
+                        when declarator.Parent?.Parent is FieldDeclarationSyntax:
+                        memberName = declarator.Identifier.ValueText;
+                        return true;
+
+                    case PropertyDeclarationSyntax property:
+                        memberName = property.Identifier.ValueText;
+                        return true;
+
+                    default:
+                        return false;
+                }
+
+            case AssignmentExpressionSyntax assignment when assignment.Right == current:
+                // An object-initializer member belongs to the new object, not this instance.
+                if (assignment.Parent is InitializerExpressionSyntax)
+                {
+                    return false;
+                }
+
+                var targetSymbol = semanticModel
+                    .GetSymbolInfo(assignment.Left, cancellationToken)
+                    .Symbol;
+                if (
+                    targetSymbol is not IFieldSymbol and not IPropertySymbol
+                    || targetSymbol.IsStatic
+                    || !IsOwnInstanceReceiver(assignment.Left)
+                    || !IsDeclaredOnTypeOrBase(targetSymbol.ContainingType, containingType)
+                )
+                {
+                    return false;
+                }
+
+                memberName = targetSymbol.Name;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether an assignment target names a member of the instance running the code: a bare
+    /// identifier (implicit <c>this</c>) or a member access whose receiver is <c>this</c> or
+    /// <c>base</c>. Any other receiver (<c>other.Client</c>, <c>this._inner.Client</c>) retains the
+    /// value on a different object.
+    /// </summary>
+    private static bool IsOwnInstanceReceiver(ExpressionSyntax target)
+    {
+        switch (target)
+        {
+            case IdentifierNameSyntax:
+                return true;
+
+            case MemberAccessExpressionSyntax memberAccess:
+                var receiver = memberAccess.Expression;
+                while (receiver is ParenthesizedExpressionSyntax parenthesized)
+                {
+                    receiver = parenthesized.Expression;
+                }
+
+                return receiver is ThisExpressionSyntax or BaseExpressionSyntax;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsDeclaredOnTypeOrBase(
+        INamedTypeSymbol? memberContainingType,
+        INamedTypeSymbol containingType
+    )
+    {
+        for (
+            var type = containingType;
+            type is not null && type.SpecialType != SpecialType.System_Object;
+            type = type.BaseType
+        )
+        {
+            if (SymbolEqualityComparer.Default.Equals(memberContainingType, type))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool AssignmentTargetIsInstanceMember(
         ExpressionSyntax target,
         SemanticModel semanticModel,
