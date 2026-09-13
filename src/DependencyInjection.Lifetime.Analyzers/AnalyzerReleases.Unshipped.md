@@ -5,4 +5,3 @@
 
 Rule ID | Category | Severity | Notes
 --------|----------|----------|-------
-DI037 | DependencyInjection | Warning | Task started on a scope-resolved service leaves the using scope without being awaited
