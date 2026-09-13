@@ -537,6 +537,30 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
+    /// <summary>
+    /// Reports whether the member type provably retains a single <see cref="System.Net.Http.HttpClient"/>:
+    /// either the exact type itself or one or more <see cref="System.Lazy{T}"/> wrappers around it
+    /// (matched by namespace and metadata name, so source-declared stubs count too). A Lazy of a
+    /// derived client stays silent — the subclass may own a handler whose rotation is not modeled.
+    /// </summary>
+    private static bool IsHttpClientOrLazyOfHttpClient(
+        ITypeSymbol? type,
+        WellKnownTypes wellKnownTypes
+    )
+    {
+        while (
+            type is INamedTypeSymbol named
+            && named.TypeArguments.Length == 1
+            && named.OriginalDefinition.ContainingNamespace?.ToDisplayString() is "System"
+            && named.OriginalDefinition.MetadataName is "Lazy`1"
+        )
+        {
+            type = named.TypeArguments[0];
+        }
+
+        return wellKnownTypes.IsHttpClient(type);
+    }
+
     private static bool PropertyRetainsValue(IPropertySymbol property)
     {
         if (property.DeclaringSyntaxReferences.IsEmpty)
@@ -600,9 +624,12 @@ public sealed class DI029_HttpClientLifetimeAnalyzer : DiagnosticAnalyzer
             _ => (null, string.Empty),
         };
 
-        // Exact HttpClient only. A Lazy<HttpClient>, Func<HttpClient>, or dictionary-of-clients
-        // wrapper is an accepted false negative rather than a guess about the wrapper's semantics.
-        if (!wellKnownTypes.IsHttpClient(memberType))
+        // Exact HttpClient, or HttpClient inside System.Lazy<>: Lazy<T> produces its value at
+        // most once and retains it, so a static Lazy<HttpClient> pins one handler exactly like a
+        // static HttpClient. Func<HttpClient> is a factory rather than a holder, and
+        // dictionary-of-clients wrappers stay accepted false negatives rather than guesses about
+        // the wrapper's semantics.
+        if (!IsHttpClientOrLazyOfHttpClient(memberType, wellKnownTypes))
         {
             return;
         }

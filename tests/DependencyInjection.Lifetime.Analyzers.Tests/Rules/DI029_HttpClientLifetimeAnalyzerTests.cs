@@ -1318,14 +1318,164 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
-    public async Task StaticLazyOfHttpClientField_Silent()
+    public async Task StaticLazyOfHttpClientField_Reports()
+    {
+        // Lazy<T> produces its value at most once and retains it, so a static Lazy<HttpClient>
+        // pins exactly one handler for the life of the process -- the same stale-DNS claim as a
+        // plain static HttpClient.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Lazy<HttpClient> {|#0:Shared|} = new Lazy<HttpClient>();
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsStaticMember
+                )
+                .WithLocation(0)
+                .WithArguments("Shared", "field")
+        );
+    }
+
+    [Fact]
+    public async Task StaticLazyOfHttpClientProperty_Reports()
     {
         var source =
             Prelude
             + """
                 public class ApiClient
                 {
-                    private static readonly Lazy<HttpClient> Shared = new Lazy<HttpClient>();
+                    public static Lazy<HttpClient> {|#0:Shared|} { get; } = new Lazy<HttpClient>();
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsStaticMember
+                )
+                .WithLocation(0)
+                .WithArguments("Shared", "property")
+        );
+    }
+
+    [Fact]
+    public async Task StaticLazyOfLazyHttpClient_Reports()
+    {
+        // A nested Lazy still retains exactly one client; the wrapper count does not change the
+        // single-handler claim.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Lazy<Lazy<HttpClient>> {|#0:Shared|} =
+                        new Lazy<Lazy<HttpClient>>();
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsStaticMember
+                )
+                .WithLocation(0)
+                .WithArguments("Shared", "field")
+        );
+    }
+
+    [Fact]
+    public async Task StaticLazyOfHttpClient_WithFactoryPooledLifetime_Silent()
+    {
+        // The Lazy's factory configures PooledConnectionLifetime, so the single retained handler
+        // still rotates its connections -- the documented rotation escape applies through the
+        // wrapper.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Lazy<HttpClient> Shared = new Lazy<HttpClient>(() =>
+                        new HttpClient(new SocketsHttpHandler
+                        {
+                            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                        }));
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticFuncOfHttpClientField_Silent()
+    {
+        // Func<HttpClient> is a factory, not a holder: every invocation may produce a fresh
+        // client, so no single handler is pinned.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Func<HttpClient> Shared = () => new HttpClient();
+                }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticLazyOfDerivedHttpClient_Silent()
+    {
+        // A subclass may own or rotate its own handler; the exact-type boundary is preserved
+        // inside the Lazy wrapper.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private static readonly Lazy<PooledClient> Shared = new Lazy<PooledClient>();
+                }
+
+                public class PooledClient : HttpClient { }
+                """;
+
+        await VerifySilentAsync(source);
+    }
+
+    [Fact]
+    public async Task InstanceLazyOfHttpClientField_Silent()
+    {
+        // The static-member tier claims process lifetime; an instance Lazy<HttpClient> on an
+        // unregistered type is not that claim.
+        var source =
+            Prelude
+            + """
+                public class ApiClient
+                {
+                    private readonly Lazy<HttpClient> _http = new Lazy<HttpClient>();
                 }
                 """;
 

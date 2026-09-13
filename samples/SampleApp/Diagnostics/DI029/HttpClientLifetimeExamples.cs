@@ -1,3 +1,4 @@
+using System;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,6 +48,16 @@ namespace SampleApp.Diagnostics.DI029
             using var http = new HttpClient();
             return await http.GetStringAsync(url);
         }
+    }
+
+    public class Bad_StaticLazyClient
+    {
+        // [DI029] Lazy<T> creates its value at most once and retains it, so a static
+        // Lazy<HttpClient> pins one handler for the life of the process — the same stale-DNS
+        // claim as a plain static HttpClient field.
+        private static readonly Lazy<HttpClient> Shared = new Lazy<HttpClient>();
+
+        public Task<string> GetAsync(string url) => Shared.Value.GetStringAsync(url);
     }
 
     public class Good_InjectedFactory

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.9] - 2026-09-13
+
+### Fixed
+
+- DI029's static-member tier now recognizes `Lazy<HttpClient>` wrappers (including nested `Lazy<Lazy<HttpClient>>`): `Lazy<T>` produces its value at most once and retains it, so a static `Lazy<HttpClient>` pins a single handler for the life of the process exactly like a plain static `HttpClient`. `Func<HttpClient>` and dictionary-of-clients wrappers remain accepted false negatives — a factory is not a holder — and a `Lazy<HttpClient>` whose factory configures `PooledConnectionLifetime` still satisfies the rotation escape.
+
 ## [3.7.8] - 2026-08-12
 
 ### Fixed
