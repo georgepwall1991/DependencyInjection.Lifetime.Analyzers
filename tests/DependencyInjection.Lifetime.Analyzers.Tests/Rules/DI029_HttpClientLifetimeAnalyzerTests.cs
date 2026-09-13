@@ -575,6 +575,40 @@ public class DI029_HttpClientLifetimeAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredSingletonService_ImplicitNewFieldInitializer_Reports()
+    {
+        var source =
+            Prelude
+            + """
+                public static class Registrations
+                {
+                    public static void Configure(IServiceCollection services) =>
+                        services.AddSingleton<ApiClient>();
+                }
+
+                public class ApiClient
+                {
+                    private readonly HttpClient _http = {|#0:new()|};
+                }
+                """;
+
+        await AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.VerifyDiagnosticsWithReferencesAsync(
+            source,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>.ReferenceAssembliesWithFrameworkExtensions,
+            AnalyzerVerifier<DI029_HttpClientLifetimeAnalyzer>
+                .Diagnostic(
+                    DependencyInjection
+                        .Lifetime
+                        .Analyzers
+                        .DiagnosticDescriptors
+                        .HttpClientStaleDnsRetainedMember
+                )
+                .WithLocation(0)
+                .WithArguments("ApiClient", "HttpClient", "_http")
+        );
+    }
+
+    [Fact]
     public async Task RegisteredSingletonService_AutoPropertyInitializer_Reports()
     {
         var source =
