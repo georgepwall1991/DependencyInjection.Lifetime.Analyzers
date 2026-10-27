@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-10-27
+
+### Fixed
+
+- DI019 no longer treats a custom wrapper's `ServiceProvider` property as the root provider; only the singleton's own or inherited provider properties, known host properties, and real scope providers qualify.
+- DI001 treats a scope wrapped in a directly returned object as caller-owned, while still reporting a wrapper stored locally without disposal.
+
+### Changed
+
+- The pinned scan corpus is now 14 public repositories and 471 findings, adding `jasontaylordev/CleanArchitecture` and `elsa-workflows/elsa-core`.
+
 ## [3.8.0] - 2026-10-27
 
 ### Added

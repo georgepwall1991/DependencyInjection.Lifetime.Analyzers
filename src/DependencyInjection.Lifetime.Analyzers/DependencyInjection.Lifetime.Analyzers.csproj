@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.8.0</Version>
+    <Version>3.9.0</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
@@ -22,7 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Adds the di-scan tool, starter .editorconfig profiles, per-rule docs, a 12-repository pinned scan corpus, and test-code suppression. Narrows DI001, DI006, and DI015 false positives found on real repositories.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Narrows DI001 and DI019 false positives found in real scope wrappers, expands the pinned scan corpus to 14 public repositories, and keeps the di-scan tool, profiles, per-rule docs, and test-code suppression from 3.8.0.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

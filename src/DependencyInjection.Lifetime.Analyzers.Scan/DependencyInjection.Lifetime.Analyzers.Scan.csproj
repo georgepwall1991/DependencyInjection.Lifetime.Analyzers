@@ -31,7 +31,7 @@
     <PackageTags>dependency-injection;di;ioc;lifetime;singleton;scoped;transient;captive-dependency;roslyn;analyzer;dotnet-tool;sarif;code-scanning;static-analysis;false-positives</PackageTags>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Initial di-scan release: scan any .NET solution with DependencyInjection.Lifetime.Analyzers injected, with SARIF, Markdown, and HTML output, SARIF/text baselines, and CI-friendly severity gates.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Scan any .NET solution with DependencyInjection.Lifetime.Analyzers injected, with SARIF, Markdown, and HTML output, SARIF/text baselines, and CI-friendly severity gates. This release runs the DI001/DI019 precision fixes and the 14-repository pinned corpus.</PackageReleaseNotes>
 
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
