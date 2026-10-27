@@ -45,13 +45,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.9.1
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.9.2
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.1">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.2">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -59,7 +59,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.1" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.2" />
 ```
 
 Then reference it from the project file:
@@ -93,7 +93,7 @@ dnx DependencyInjection.Lifetime.Analyzers.Scan -- MyApp.slnx --fail-on warning
 
 It prints `ruleId path:line:column`, the surrounding source, severity, and a link to the rule page,
 and writes SARIF, Markdown, and HTML for triage. Use `--baseline` to fail only on new findings.
-See [docs/scanning.md](docs/scanning.md) for the full option set and CI examples.
+See [docs/scanning.md](docs/scanning.md) for the full option set and CI examples, or install the tool package from [NuGet](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers.Scan).
 
 The package ships four starter profiles under `profiles/`: `default`, `brownfield-adoption`,
 `strict-ci`, and `library-author`. Every rule also has a standalone page under

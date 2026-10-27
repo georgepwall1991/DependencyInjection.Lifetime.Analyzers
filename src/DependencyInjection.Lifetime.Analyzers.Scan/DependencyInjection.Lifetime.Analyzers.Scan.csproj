@@ -20,18 +20,18 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>di-scan</ToolCommandName>
     <PackageId>DependencyInjection.Lifetime.Analyzers.Scan</PackageId>
-    <Title>DI Scan — scan a .NET solution for dependency injection lifetime problems</Title>
+    <Title>di-scan — DI lifetime scanner for .NET solutions</Title>
     <Authors>George Wall</Authors>
     <Copyright>Copyright (c) George Wall and contributors 2026</Copyright>
-    <Description>Scan any .NET solution for Microsoft.Extensions.DependencyInjection lifetime problems without changing its project files. DI Scan builds the solution with the DependencyInjection.Lifetime.Analyzers analyzers injected, then reports the rules that fired, where they fired, and the surrounding source, with SARIF, HTML, and Markdown output for false-positive triage and CI.</Description>
+    <Description>di-scan builds any .NET solution with DependencyInjection.Lifetime.Analyzers injected, without changing its project files, and reports Microsoft.Extensions.DependencyInjection lifetime problems with ruleId path:line:column, surrounding source, SARIF, HTML, Markdown, baselines, and CI severity gates.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>
+    <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/</PackageProjectUrl>
     <PackageTags>dependency-injection;di;ioc;lifetime;singleton;scoped;transient;captive-dependency;scope-leak;roslyn;roslyn-analyzer;analyzer;dotnet-tool;di-scan;sarif;code-scanning;static-analysis;false-positives;ci;github-actions;microsoft-extensions-dependencyinjection;aspnetcore;worker-service</PackageTags>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Scanner README now includes the 14-repository/471-finding proof and the dedicated scanner guide. No behavior changes.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">NuGet search polish: the package title, description, tags, and project URL now target di-scan and the scanner guide. No behavior changes.</PackageReleaseNotes>
 
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>

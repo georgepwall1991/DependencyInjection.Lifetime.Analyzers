@@ -15,12 +15,12 @@
     <Title>DependencyInjection Lifetime Analyzers — Roslyn DI captive dependency and scope leak analyzer</Title>
     <Authors>George Wall</Authors>
     <Copyright>Copyright (c) 2024-2026 George Wall</Copyright>
-    <Description>38 compile-time Roslyn diagnostics for Microsoft.Extensions.DependencyInjection: dependency injection lifetime bugs including captive dependencies, DI scope leaks, BuildServiceProvider misuse, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime. No runtime dependency. Ships starter editorconfig profiles and the di-scan tool for scanning existing repositories.</Description>
+    <Description>38 compile-time Roslyn diagnostics for Microsoft.Extensions.DependencyInjection: a dependency injection lifetime analyzer covering captive dependencies, DI scope leaks, BuildServiceProvider misuse, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime. No runtime dependency. Ships starter editorconfig profiles and the di-scan tool for scanning existing repositories.</Description>
     <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;captive-dependencies;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;aspnet-core;worker-service;generic-host;roslyn;roslyn-analyzer;roslyn-diagnostics;dotnet-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet;di-scan;dotnet-tool;sarif;code-scanning</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Packaging and documentation release: the NuGet README is now concise and scanner-focused, the docs site has a dedicated di-scan page with search/sitemap/structured data, and GitHub metadata now surfaces the scanner. No analyzer behavior changes.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">NuGet search and packaging polish: the analyzer description now names the dependency injection lifetime analyzer explicitly, and the di-scan package title, description, and project URL target the scanner query. No analyzer behavior changes.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>

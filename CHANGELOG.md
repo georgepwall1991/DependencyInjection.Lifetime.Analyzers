@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.2] - 2026-10-27
+
+### Changed
+
+- NuGet search polish for the scanner: the package title, description, tags, and project URL now use the exact `di-scan` name and link to the scanner guide.
+- The analyzer description now names the dependency injection lifetime analyzer explicitly while keeping the high-intent lifetime, captive-dependency, scope-leak, and BuildServiceProvider terms.
+- The README scanner section links to the scanner NuGet package.
+
 ## [3.9.1] - 2026-10-27
 
 ### Changed
