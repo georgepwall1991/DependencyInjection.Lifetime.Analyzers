@@ -20,7 +20,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Scanner UX and maintenance release: di-scan gains --fix and --update-baseline, Windows/macOS scanner CI, false-positive/negative issue forms, a second mutation shard, and dedicated scanner/blog/upgrading docs. No analyzer behavior changes.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Maintenance release: strengthens the shared-resolution-helper mutation gate to 94.92% with direct tests for assignability, constructor selection, and keyed-service extraction. No analyzer or scanner behavior changes.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>

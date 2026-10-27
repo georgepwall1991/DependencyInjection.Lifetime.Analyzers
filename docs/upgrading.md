@@ -19,7 +19,14 @@ or from noisy to quiet.
 If a previously reported finding disappeared, check whether the scope is now proven caller-owned or
 the provider is a custom wrapper. If the new result is wrong, open a false-negative report.
 
-### 3.10.0 — scanner UX and maintenance
+### 3.10.1 — test and mutation hardening
+
+- The shared-resolution-helper mutation gate rises from 80.00% to 94.92%, with direct tests for
+  assignability, constructor selection, and keyed-service extraction.
+- The nullable assignability check is expressed as explicit guards. No analyzer or scanner behavior
+  changes.
+
+## 3.10.0 — scanner UX and maintenance
 
 - `di-scan --fix` applies safe code fixes with `dotnet format`.
 - `di-scan --update-baseline <file>` writes a text baseline that `--baseline` reads back.
