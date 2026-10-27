@@ -85,10 +85,10 @@ By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`
 
 ## Upgrading
 
-Moving from 3.7 or 3.8? Read [docs/upgrading.md](docs/upgrading.md) for the behavior changes that can
-remove findings: test-code suppression, DI001/DI006/DI015 narrowing, and the DI019 scope-wrapper fix.
-The page also covers pinning the previous version, suppressing one rule, and regenerating a scanner
-baseline after a reviewed change.
+Upgrading from an earlier 3.x release? Read [docs/upgrading.md](docs/upgrading.md) for the behavior
+changes that can remove findings: test-code suppression, DI001/DI006/DI015 narrowing, and the DI019
+scope-wrapper fix. The page also covers pinning the previous version, suppressing one rule, and
+regenerating a scanner baseline after a reviewed change.
 
 ## Scan before you install
 

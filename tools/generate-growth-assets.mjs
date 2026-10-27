@@ -1776,7 +1776,7 @@ function renderUpgradingPage(site) {
   const content = `
     <section class="page-intro">
       <p class="eyebrow">Upgrading</p>
-      <h1>Move to 3.9 without guessing why findings changed</h1>
+      <h1>Move to 3.10 without guessing why findings changed</h1>
       <p class="lede">Diagnostic IDs and default severities are stable. Releases can still remove findings when a rule is narrowed to avoid a proven false positive.</p>
     </section>
     <section class="card prose">
@@ -1787,12 +1787,12 @@ function renderUpgradingPage(site) {
   return renderPage(site, {
     pagePath: "/upgrading/",
     title: `Upgrading | ${site.packageId}`,
-    description: "Behavior changes from 3.7 and 3.8 to 3.9: test-code suppression, DI001/DI006/DI015/DI019 narrowing, pinning a previous version, and regenerating scanner baselines.",
+    description: "Behavior changes from 3.7 through 3.10: test-code suppression, DI001/DI006/DI015/DI019 narrowing, scanner --fix and baselines, pinning a previous version, and regenerating scanner baselines.",
     content,
     structuredData: {
       "@context": "https://schema.org",
       "@type": "TechArticle",
-      headline: "Upgrading DependencyInjection.Lifetime.Analyzers to 3.9",
+      headline: "Upgrading DependencyInjection.Lifetime.Analyzers to 3.10",
       description: "Behavior changes, version pinning, rule suppression, and scanner baseline regeneration.",
       author: { "@type": "Person", name: "George Wall" },
       publisher: { "@type": "Organization", name: site.packageId },
@@ -2081,7 +2081,7 @@ function renderNotFoundPage(site) {
         <article class="card"><h2><a href="${siteHref(site, "/problems/")}">Problem guides</a></h2><p>Start from a real failure mode.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/scanner/")}">di-scan</a></h2><p>Scan an existing repository without editing it.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/blog/")}">Engineering note</a></h2><p>How the pinned corpus found 471 DI findings.</p></article>
-        <article class="card"><h2><a href="${siteHref(site, "/upgrading/")}">Upgrading</a></h2><p>Behavior changes from 3.7/3.8 to 3.9.</p></article>
+        <article class="card"><h2><a href="${siteHref(site, "/upgrading/")}">Upgrading</a></h2><p>Behavior changes from 3.7 through 3.10.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/adoption/")}">Adoption guide</a></h2><p>Rollout and severity guidance.</p></article>
       </section>
     `,
@@ -2178,7 +2178,7 @@ Version ${site.version}. Install: \`dotnet add package ${site.packageId} --versi
 
 ## Upgrading
 
-- [Upgrading to 3.9](${site.baseUrl}/upgrading/): behavior changes, version pinning, suppression, and baseline regeneration.
+- [Upgrading to 3.10](${site.baseUrl}/upgrading/): behavior changes, version pinning, suppression, and baseline regeneration.
 
 ## Blog
 
