@@ -86,7 +86,7 @@ jobs:
         run: dotnet nuget push ./artifacts/package/DependencyInjection.Lifetime.Analyzers.*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.metadata.outputs.tag_name }}
           files: ./artifacts/package/DependencyInjection.Lifetime.Analyzers.*.nupkg
