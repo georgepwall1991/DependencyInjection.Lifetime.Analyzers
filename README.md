@@ -45,13 +45,13 @@ When the analyzer cannot prove a bug statically, it **stays quiet**. High-signal
 Install from NuGet:
 
 ```bash
-dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.9.2
+dotnet add package DependencyInjection.Lifetime.Analyzers --version 3.9.3
 ```
 
 Or add a package reference directly:
 
 ```xml
-<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.2">
+<PackageReference Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.3">
   <PrivateAssets>all</PrivateAssets>
 </PackageReference>
 ```
@@ -59,7 +59,7 @@ Or add a package reference directly:
 For Central Package Management (`Directory.Packages.props`):
 
 ```xml
-<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.2" />
+<PackageVersion Include="DependencyInjection.Lifetime.Analyzers" Version="3.9.3" />
 ```
 
 Then reference it from the project file:

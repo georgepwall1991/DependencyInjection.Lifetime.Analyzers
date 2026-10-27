@@ -14,15 +14,15 @@
 
   <PropertyGroup>
     <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
-    <Version>3.9.2</Version>
+    <Version>3.9.3</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
     <Description>38 compile-time Roslyn diagnostics for Microsoft.Extensions.DependencyInjection: a dependency injection lifetime analyzer covering captive dependencies, DI scope leaks, BuildServiceProvider misuse, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime. No runtime dependency. Ships starter editorconfig profiles and the di-scan tool for scanning existing repositories.</Description>
-    <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;captive-dependencies;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;aspnet-core;worker-service;generic-host;roslyn;roslyn-analyzer;roslyn-diagnostics;dotnet-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet;di-scan;dotnet-tool;sarif;code-scanning</PackageTags>
+    <PackageTags>dependency-injection;di;dependency-injection-analyzer;di-analyzer;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;captive-dependencies;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;aspnet-core;worker-service;generic-host;roslyn;roslyn-analyzer;roslyn-diagnostics;dotnet-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet;di-scan;dotnet-tool;sarif;code-scanning</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">NuGet search and packaging polish: the analyzer description now names the dependency injection lifetime analyzer explicitly, and the di-scan package title, description, and project URL target the scanner query. No analyzer behavior changes.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">NuGet discovery polish: adds dependency-injection-analyzer/di-analyzer tags to the analyzer and scanner/dependency-injection-scanner/dotnet-scan tags to di-scan, and fixes the scanner page install CTA. No analyzer behavior changes.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</PackageProjectUrl>

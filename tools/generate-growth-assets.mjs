@@ -1836,7 +1836,7 @@ di-scan ./MyApp.slnx --fail-on warning --baseline di.sarif --sarif di-new.sarif<
       <h2>Tested against real repositories</h2>
       <p>The scanner and rules are regression-tested against <strong>14 pinned public repositories</strong> and <strong>471 findings</strong>, including ASP.NET Core apps, framework libraries, workers, open generics, keyed services, and alternate containers. The corpus has already driven precision fixes in DI001, DI006, DI015, and DI019.</p>
       <div class="hero-actions">
-        <a class="button" href="${scannerHref}">Scanner guide</a>
+        <a class="button" href="https://www.nuget.org/packages/${SCANNER_PACKAGE_ID}">Install di-scan</a>
         <a class="button button-secondary" href="https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md">Corpus and triage notes</a>
       </div>
     </section>

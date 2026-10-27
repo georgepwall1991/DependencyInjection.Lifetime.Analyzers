@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.3] - 2026-10-27
+
+### Changed
+
+- Added `dependency-injection-analyzer` and `di-analyzer` NuGet tags to the analyzer.
+- Added `scanner`, `dependency-injection-scanner`, and `dotnet-scan` NuGet tags to `di-scan`.
+- The scanner page CTA now installs `di-scan` from NuGet instead of linking to itself.
+
 ## [3.9.2] - 2026-10-27
 
 ### Changed
