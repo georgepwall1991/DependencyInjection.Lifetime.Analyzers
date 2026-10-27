@@ -11,8 +11,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml/badge.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
 [![Coverage](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/raw/main/.github/badges/coverage.svg)](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-georgepwall1991.github.io-6b3fa0.svg)](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/)
+[![Scanner](https://img.shields.io/badge/scanner-di--scan-6b3fa0.svg)](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/)
 
-[Searchable docs site](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/) · [Rule index](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/rules/) · [Problem guides](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/problems/) · [NuGet package](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
+[Searchable docs site](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/) · [Rule index](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/rules/) · [Problem guides](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/problems/) · [Scanner](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/) · [NuGet package](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers)
 
 Stop shipping DI lifetime bugs that only show up as `ObjectDisposedException`, stale singletons, or production-only activation failures.
 
@@ -24,7 +26,7 @@ Code review and runtime helpers miss what static analysis can prove from registr
 
 ## What it catches
 
-DependencyInjection.Lifetime.Analyzers reports high-confidence DI lifetime and activation bugs:
+DependencyInjection.Lifetime.Analyzers ships **38 high-confidence rules** for DI lifetime and activation bugs:
 
 - **Captive dependencies** — singleton (or other long-lived) services capturing scoped or transient dependencies (`DI003`, `DI009`)
 - **Scope leaks and disposal** — undisposed `IServiceScope` / root providers, use-after-dispose, async scope misuse (`DI001`, `DI004`, `DI005`, `DI014`)
@@ -116,7 +118,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## 30-second path
 
-1. Reference the package with `PrivateAssets="all"` (version `3.7.0` above).
+1. Reference the package with `PrivateAssets="all"` (use the current version above).
 2. Keep your existing `Microsoft.Extensions.DependencyInjection` registrations — no runtime API changes required.
 3. Build in the IDE or with `dotnet build` (analyzers run in CI when enabled for your host).
 4. Fix any `DI00x` / `DI0xx` warnings (many have code fixes for disposal and lifetime corrections).
@@ -135,6 +137,15 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 | ASP.NET Core / host | Middleware, hosted services, `HttpClient`, fire-and-forget scope/`HttpContext` capture. |
 | Code fixes | Safe, unambiguous fixes for selected disposal and lifetime issues (see Rule Index). |
 | Signal quality | Stays quiet when the bug cannot be proven statically. |
+
+## Quality and proof
+
+- **38 shipped rules** with code fixes for the safe, unambiguous cases.
+- **3,128 tests** across analyzer behavior, code fixes, scanner behavior, packaging, and sample contracts.
+- **14 pinned public repositories** and **471 findings** in the scan regression corpus, including ASP.NET Core apps, framework libraries, workers, open generics, keyed services, and alternate containers.
+- **95.10% mutation score** on the shared test-code suppression helper, with an **80% break threshold**.
+- Precision fixes driven by real repositories, including MassTransit, Elsa, IdentityServer, Polly, and dotnet-podcasts.
+- The corpus and triage notes are in [docs/scan-regression.md](docs/scan-regression.md); the mutation gate is documented in [docs/mutation-testing.md](docs/mutation-testing.md).
 
 ## Compatibility
 
@@ -160,6 +171,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [See it work](#see-it-work)
 - [30-second path](#30-second-path)
 - [Feature snapshot](#feature-snapshot)
+- [Quality and proof](#quality-and-proof)
 - [Compatibility](#compatibility)
 - [Who this is for](#who-this-is-for)
 - [Rule Index](#rule-index)

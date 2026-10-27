@@ -111,7 +111,7 @@ foreach ($required in @(
     'profiles\*.editorconfig',
     'docs\rules\*.md',
     'DependencyInjection.Lifetime.Analyzers.dll',
-    'README.md'
+    'PACKAGE_README.md'
 )) {
     Assert-True ($packageProject.Contains($required, [StringComparison]::Ordinal)) "The package project does not include '$required'."
 }

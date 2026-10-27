@@ -67,7 +67,7 @@ foreach ($entry in @(
     'contentFiles/any/any/profiles/library-author.editorconfig',
     'docs/rules/DI003.md',
     'docs/rules/README.md',
-    'README.md',
+    'PACKAGE_README.md',
     'icon.png'
 )) {
     Assert-PackageContains $analyzerEntries $entry 'The analyzer package'

@@ -17,10 +17,10 @@
     <Version>3.9.0</Version>
     <Authors>George Wall</Authors>
     <Title>DependencyInjection.Lifetime.Analyzers — DI captive dependency and scope leak analyzer</Title>
-    <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
-    <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;roslyn;roslyn-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet</PackageTags>
+    <Description>38 compile-time Roslyn diagnostics for Microsoft.Extensions.DependencyInjection: dependency injection lifetime bugs including captive dependencies, DI scope leaks, BuildServiceProvider misuse, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime. No runtime dependency. Ships starter editorconfig profiles and the di-scan tool for scanning existing repositories.</Description>
+    <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;captive-dependencies;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;aspnet-core;worker-service;generic-host;roslyn;roslyn-analyzer;roslyn-diagnostics;dotnet-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet;di-scan;dotnet-tool;sarif;code-scanning</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Narrows DI001 and DI019 false positives found in real scope wrappers, expands the pinned scan corpus to 14 public repositories, and keeps the di-scan tool, profiles, per-rule docs, and test-code suppression from 3.8.0.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
@@ -55,7 +55,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\PACKAGE_README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
     <None Include="..\..\assets\**\*" Pack="true" PackagePath="assets\" />
   </ItemGroup>

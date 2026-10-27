@@ -33,7 +33,11 @@ public sealed class DiscoverabilityMetadataTests
         var readmeFile = Assert.Single(csproj.Descendants("PackageReadmeFile")).Value;
         var version = Assert.Single(csproj.Descendants("Version")).Value;
 
-        Assert.Equal("README.md", readmeFile);
+        Assert.Equal("PACKAGE_README.md", readmeFile);
+        Assert.True(
+            File.Exists(Path.Combine(RepositoryRoot, "PACKAGE_README.md")),
+            "The NuGet package README must exist."
+        );
         Assert.Contains("captive dependency", title, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("scope leak", title, StringComparison.OrdinalIgnoreCase);
 
@@ -72,6 +76,10 @@ public sealed class DiscoverabilityMetadataTests
                 "IServiceCollection",
                 "roslyn-analyzer",
                 "code-fix",
+                "di-scan",
+                "dotnet-tool",
+                "sarif",
+                "code-scanning",
             }
         )
         {

@@ -19,6 +19,21 @@ files are not changed.
 Use it to try the analyzers on a real codebase before adding the package, compare releases, and
 review suspected false positives with the surrounding source in the HTML report.
 
+## Proof
+
+The scanner and rules are regression-tested against **14 pinned public repositories** and
+**471 findings**, including ASP.NET Core apps, framework libraries, workers, open generics, keyed
+services, and alternate containers. The corpus has already driven precision fixes in DI001, DI006,
+DI015, and DI019. See the [scanner guide](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/)
+and [corpus triage notes](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md).
+
+## Why teams use it
+
+- Try the analyzer on a real repository before changing its project files.
+- Review suspected false positives with code context in the HTML report.
+- Fail CI only on new findings with SARIF or text baselines.
+- Compare analyzer releases on the same pinned public corpus.
+
 ## Options
 
 | Option | Meaning |

@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 
 const NOT_FOUND_PAGE_PATH = "/404.html";
+const SCANNER_PACKAGE_ID = "DependencyInjection.Lifetime.Analyzers.Scan";
 const SOCIAL_CARD_PATH = "/social-card.png";
 const SOCIAL_CARD_ALT =
   "DependencyInjection.Lifetime.Analyzers — catch captive dependencies and scope leaks at compile time";
@@ -772,6 +773,7 @@ async function generateSite(outputDir) {
   await writeOutput(outputDir, "index.html", renderIndexPage(site));
   await writeOutput(outputDir, "rules/index.html", renderRulesIndexPage(site));
   await writeOutput(outputDir, "problems/index.html", renderProblemsIndexPage(site));
+  await writeOutput(outputDir, "scanner/index.html", renderScannerPage(site));
   await writeOutput(outputDir, "compare/index.html", renderComparePage(site));
   await writeOutput(outputDir, "adoption/index.html", renderAdoptionPage(site));
   await writeOutput(outputDir, "releases/latest/index.html", renderLatestReleasePage(site));
@@ -844,6 +846,7 @@ async function verifyGeneratedSite(outputDir, site) {
   const pages = [
     "index.html",
     "404.html",
+    "scanner/index.html",
     "rules/index.html",
     ...site.rules.map((rule) => `rules/${rule.slug}/index.html`),
   ];
@@ -1016,6 +1019,7 @@ function buildSiteModel(metadata) {
       { label: "Home", path: "/" },
       { label: "Rules", path: "/rules/" },
       { label: "Problems", path: "/problems/" },
+      { label: "Scanner", path: "/scanner/" },
       { label: "Compare", path: "/compare/" },
       { label: "Adoption", path: "/adoption/" },
       { label: "Latest Release", path: "/releases/latest/" },
@@ -1342,6 +1346,7 @@ function renderIndexPage(site) {
   const problemsIndexHref = siteHref(site, "/problems/");
   const adoptionHref = siteHref(site, "/adoption/");
   const compareHref = siteHref(site, "/compare/");
+  const scannerHref = siteHref(site, "/scanner/");
   const latestReleaseHref = siteHref(site, "/releases/latest/");
   const latestReleaseItems = site.latestRelease.sections
     .flatMap((section) => section.items)
@@ -1388,6 +1393,7 @@ function renderIndexPage(site) {
           <a class="button" href="https://www.nuget.org/packages/${site.packageId}">Install from NuGet</a>
           <a class="button button-secondary" href="${rulesIndexHref}">Browse ${site.rules.length} rules</a>
           <a class="button button-secondary" href="${problemsIndexHref}">Solve a specific DI problem</a>
+          <a class="button button-secondary" href="${scannerHref}">Scan an existing repo</a>
         </div>
       </div>
       <aside class="callout">
@@ -1436,6 +1442,13 @@ function renderIndexPage(site) {
         <a class="text-link" href="${problemsIndexHref}">See all problem guides</a>
       </div>
       <div class="grid three-up">${problemCards}</div>
+    </section>
+
+    <section class="card card-contrast">
+      <p class="eyebrow">Try before you install</p>
+      <h2><a href="${scannerHref}">Scan a real repository with di-scan</a></h2>
+      <p>Build any .NET solution with the analyzers injected, without editing its project files. Get ruleId path:line:column, surrounding source, SARIF, Markdown, HTML, baselines, and CI gates.</p>
+      <pre><code>dnx ${SCANNER_PACKAGE_ID} -- MyApp.slnx</code></pre>
     </section>
 
     <section class="grid two-up">
@@ -1746,6 +1759,120 @@ function renderProblemPage(site, page) {
   });
 }
 
+function renderScannerPage(site) {
+  const scannerHref = siteHref(site, "/scanner/");
+  const rulesHref = siteHref(site, "/rules/");
+  const install = `dnx ${SCANNER_PACKAGE_ID} -- MyApp.slnx`;
+  const installTool = `dotnet tool install -g ${SCANNER_PACKAGE_ID} --version ${site.version}`;
+  const content = `
+    <section class="page-intro">
+      <p class="eyebrow">Scanner</p>
+      <h1>Scan a real .NET solution with <code>di-scan</code></h1>
+      <p class="lede">Build any solution with ${escapeHtml(site.packageId)} injected, without editing its project files. Get <code>ruleId path:line:column</code>, the surrounding source, SARIF, Markdown, and HTML reports, baselines, and CI-friendly severity gates.</p>
+      <div class="hero-actions">
+        <a class="button" href="https://www.nuget.org/packages/${SCANNER_PACKAGE_ID}">Install di-scan from NuGet</a>
+        <a class="button button-secondary" href="${rulesHref}">Browse ${site.rules.length} rules</a>
+      </div>
+    </section>
+
+    <section class="grid two-up">
+      <article class="card">
+        <p class="eyebrow">Install</p>
+        <h2>No project changes</h2>
+        <p>With the .NET 10 SDK, run it without installing:</p>
+        <pre><code>${escapeHtml(install)}</code></pre>
+        <p>With the .NET 8 or 9 SDK, install the tool:</p>
+        <pre><code>${escapeHtml(installTool)}</code></pre>
+        <pre><code>di-scan MyApp.slnx</code></pre>
+        <p class="meta">The scanner builds the target with the analyzer injected, then removes the injection. Your repository is not modified.</p>
+      </article>
+      <article class="card">
+        <p class="eyebrow">What it reports</p>
+        <h2>Actionable findings, not a wall of warnings</h2>
+        <ul class="stack-list">
+          <li>Rule ID, severity, title, and count for every rule that fired.</li>
+          <li><code>path:line:column</code>, the diagnostic message, and the surrounding source.</li>
+          <li>A direct link to the rule page under <code>docs/rules/</code>.</li>
+          <li>SARIF 2.1.0 for GitHub code scanning or any SARIF viewer.</li>
+          <li>Self-contained HTML and Markdown for triage and pull-request comments.</li>
+          <li>Suppressed diagnostics are omitted, just like a normal build.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="card table-card">
+      <p class="eyebrow">Outputs</p>
+      <h2>Choose the surface for the job</h2>
+      <table>
+        <thead><tr><th scope="col">Output</th><th scope="col">Use it for</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Terminal</th><td>Immediate review of the rules, locations, messages, and source lines.</td></tr>
+          <tr><th scope="row">SARIF</th><td>GitHub code scanning, IDE ingestion, and fingerprint-based baselines.</td></tr>
+          <tr><th scope="row">Markdown</th><td>Pull-request comments, job summaries, and release reports.</td></tr>
+          <tr><th scope="row">HTML</th><td>False-positive triage with search, severity filters, and code context.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="grid two-up">
+      <article class="card">
+        <p class="eyebrow">Baselines</p>
+        <h2>Fail only on new findings</h2>
+        <p>Generate a baseline once, commit it, and let CI fail only when a new finding appears. SARIF baselines match by fingerprint, so a finding that moves down a file stays known. Text baselines match by rule and exact location.</p>
+        <pre><code>di-scan ./MyApp.slnx --fail-on warning --sarif di.sarif
+di-scan ./MyApp.slnx --fail-on warning --baseline di.sarif --sarif di-new.sarif</code></pre>
+      </article>
+      <article class="card">
+        <p class="eyebrow">CI</p>
+        <h2>Review what the build would miss</h2>
+        <p>Use the scanner before adding the package, compare two analyzer releases, or keep a scheduled precision check on a pinned public corpus. In GitHub Actions it also writes the job summary and annotates the most severe findings.</p>
+        <pre><code>dnx ${SCANNER_PACKAGE_ID} -- ./MyApp.slnx \
+  --fail-on warning --sarif di.sarif --summary di.md</code></pre>
+      </article>
+    </section>
+
+    <section class="card card-contrast">
+      <p class="eyebrow">Proof</p>
+      <h2>Tested against real repositories</h2>
+      <p>The scanner and rules are regression-tested against <strong>14 pinned public repositories</strong> and <strong>471 findings</strong>, including ASP.NET Core apps, framework libraries, workers, open generics, keyed services, and alternate containers. The corpus has already driven precision fixes in DI001, DI006, DI015, and DI019.</p>
+      <div class="hero-actions">
+        <a class="button" href="${scannerHref}">Scanner guide</a>
+        <a class="button button-secondary" href="https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md">Corpus and triage notes</a>
+      </div>
+    </section>
+
+    <section class="card prose">
+      <p class="eyebrow">Keep going</p>
+      <h2>Install the analyzer after the scan</h2>
+      <p>The scanner is a try-before-you-install tool. When the results are clean enough for your policy, add the analyzer package so the same rules run in the editor and every build.</p>
+      <pre><code>dotnet add package ${escapeHtml(site.packageId)} --version ${escapeHtml(site.version)}</code></pre>
+    </section>
+  `;
+
+  return renderPage(site, {
+    pagePath: "/scanner/",
+    title: `di-scan — scan a .NET solution for DI lifetime problems | ${site.packageId}`,
+    description: "Build any .NET solution with DependencyInjection.Lifetime.Analyzers injected and report ruleId path:line:column with surrounding source. SARIF, Markdown, HTML, baselines, and CI severity gates.",
+    content,
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: "di-scan",
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Windows, macOS, Linux",
+      softwareVersion: site.version,
+      downloadUrl: `https://www.nuget.org/packages/${SCANNER_PACKAGE_ID}`,
+      description: "Scan a .NET solution for Microsoft.Extensions.DependencyInjection lifetime problems without editing its project files.",
+      offers: {
+        "@type": "Offer",
+        price: "0",
+        priceCurrency: "USD",
+      },
+    },
+    breadcrumbs: [{ label: "Scanner", path: "/scanner/" }],
+  });
+}
+
 function renderComparePage(site) {
   const rows = site.compareRows
     .map(
@@ -1868,6 +1995,7 @@ function renderNotFoundPage(site) {
         <article class="card"><h2><a href="${siteHref(site, "/")}">Home</a></h2><p>Overview, install links, and featured diagnostics.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/rules/")}">Rule index</a></h2><p>All rule landing pages.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/problems/")}">Problem guides</a></h2><p>Start from a real failure mode.</p></article>
+        <article class="card"><h2><a href="${siteHref(site, "/scanner/")}">di-scan</a></h2><p>Scan an existing repository without editing it.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/adoption/")}">Adoption guide</a></h2><p>Rollout and severity guidance.</p></article>
       </section>
     `,
@@ -1879,6 +2007,7 @@ function renderSitemap(site) {
     { path: "/", priority: "1.0" },
     { path: "/rules/", priority: "0.9" },
     { path: "/problems/", priority: "0.9" },
+    { path: "/scanner/", priority: "0.9" },
     { path: "/compare/", priority: "0.6" },
     { path: "/adoption/", priority: "0.7" },
     { path: "/releases/latest/", priority: "0.6" },
@@ -1927,7 +2056,7 @@ function buildSearchIndex(site) {
       kind: "Problem guide",
       description: toMetaDescription(page.description),
     })),
-    ...["/rules/", "/problems/", "/compare/", "/adoption/", "/releases/latest/"].map((pagePath) => ({
+    ...["/rules/", "/problems/", "/scanner/", "/compare/", "/adoption/", "/releases/latest/"].map((pagePath) => ({
       title: site.navigation.find((item) => item.path === pagePath)?.label ?? pagePath,
       path: pagePath,
       kind: "Guide",
@@ -1958,6 +2087,10 @@ function renderLlmsTxt(site) {
 
 Version ${site.version}. Install: \`dotnet add package ${site.packageId} --version ${site.version}\`
 (reference it with \`PrivateAssets="all"\`).
+
+## Scanner
+
+- [di-scan](${site.baseUrl}/scanner/): build any .NET solution with the analyzers injected and report ruleId path:line:column with surrounding source, SARIF, Markdown, HTML, baselines, and CI severity gates.
 
 ## Rules
 
@@ -2303,6 +2436,22 @@ function buildHomeStructuredData(site) {
         softwareVersion: site.version,
         downloadUrl: `https://www.nuget.org/packages/${site.packageId}`,
         description,
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "USD",
+        },
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${site.baseUrl}/#scanner`,
+        name: "di-scan",
+        applicationCategory: "DeveloperApplication",
+        operatingSystem: "Windows, macOS, Linux",
+        softwareVersion: site.version,
+        downloadUrl: `https://www.nuget.org/packages/${SCANNER_PACKAGE_ID}`,
+        description:
+          "Scan a .NET solution for Microsoft.Extensions.DependencyInjection lifetime problems without editing its project files.",
         offers: {
           "@type": "Offer",
           price: "0",

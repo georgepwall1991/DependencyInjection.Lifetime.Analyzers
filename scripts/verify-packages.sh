@@ -27,7 +27,7 @@ unzip -p "$scanner_package" tools/net8.0/any/DotnetToolSettings.xml | grep 'Comm
   exit 1
 }
 
-cmp README.md <(unzip -p "$analyzer_package" README.md)
+cmp PACKAGE_README.md <(unzip -p "$analyzer_package" PACKAGE_README.md)
 
 # Product-flow visuals referenced by PackageReadmeFile must ship inside the package.
 for asset in \
