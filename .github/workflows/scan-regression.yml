@@ -25,7 +25,7 @@ jobs:
             10.0.x
 
       - name: Cache pinned repositories
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: artifacts/scan-corpus/repos
           key: ${{ runner.os }}-scan-corpus-${{ hashFiles('tests/scan-corpus/corpus.json') }}
