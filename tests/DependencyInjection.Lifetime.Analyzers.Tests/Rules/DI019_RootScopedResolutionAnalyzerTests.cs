@@ -3780,4 +3780,73 @@ public class DI019_RootScopedResolutionAnalyzerTests
 
         await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
+
+    [Fact]
+    public async Task SingletonResolvingFromCustomScopeWrapperProperty_NoDiagnostic()
+    {
+        var source = Usings + """
+            public interface ITenantScope
+            {
+                IServiceProvider ServiceProvider { get; }
+            }
+
+            public interface IScopedService { }
+            public sealed class ScopedService : IScopedService { }
+
+            public sealed class SingletonService
+            {
+                public void Handle(ITenantScope tenantScope)
+                {
+                    tenantScope.ServiceProvider.GetRequiredService<IScopedService>();
+                }
+            }
+
+            public static class Startup
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task SingletonResolvingFromOwnProviderProperty_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public interface IScopedService { }
+            public sealed class ScopedService : IScopedService { }
+
+            public sealed class SingletonService
+            {
+                private IServiceProvider Provider { get; } = null!;
+
+                public void Handle()
+                {
+                    {|#0:Provider.GetRequiredService<IScopedService>()|};
+                }
+            }
+
+            public static class Startup
+            {
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddScoped<IScopedService, ScopedService>();
+                    services.AddSingleton<SingletonService>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>.VerifyDiagnosticsAsync(
+            source,
+            AnalyzerVerifier<DI019_RootScopedResolutionAnalyzer>
+                .Diagnostic(DiagnosticDescriptors.RootScopedResolution)
+                .WithLocation(0)
+                .WithArguments("IScopedService", "IScopedService")
+        );
+    }
 }

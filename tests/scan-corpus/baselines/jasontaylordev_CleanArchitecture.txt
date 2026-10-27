@@ -1,0 +1,11 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: jasontaylordev/CleanArchitecture
+# commit: 345e7fe7612fdaf0cb5da58826a7c57d42e1fdd8
+# target: CleanArchitecture.slnx
+# exit: 0
+DI005 src/Infrastructure/Data/ApplicationDbContextInitialiser.cs:16:27
+DI007 src/Infrastructure/Data/ApplicationDbContextInitialiser.cs:18:27
+DI012b src/Infrastructure/DependencyInjection.cs:21:9
+DI015 src/Infrastructure/DependencyInjection.cs:20:9
+DI015 src/Infrastructure/DependencyInjection.cs:21:9
+DI015 src/Infrastructure/DependencyInjection.cs:44:9

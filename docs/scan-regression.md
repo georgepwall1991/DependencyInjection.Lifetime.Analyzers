@@ -25,6 +25,8 @@ decide whether the move is correct before regenerating.
 | `MassTransit/MassTransit` | `src/MassTransit/MassTransit.csproj` | 90 | Generic `Bind<TBus, T>` wrappers stress open-generic and type-parameter handling |
 | `khellang/Scrutor` | `Scrutor.sln` | 0 | Clean baseline: a DI scanning library that does not trip the rules |
 | `Autofac/Autofac.Extensions.DependencyInjection` | `Autofac.Extensions.DependencyInjection.sln` | 2 | Alternate-container bridge; guards against treating Autofac APIs as MEDI evidence |
+| `jasontaylordev/CleanArchitecture` | `CleanArchitecture.slnx` | 6 | Full Web/Application/Infrastructure solution; cross-method composition and third-party helpers |
+| `elsa-workflows/elsa-core` | `core/src/modules/Elsa.Workflows.Runtime/Elsa.Workflows.Runtime.csproj` | 160 | Workflow runtime; exercises custom scope wrappers and feature-based registration |
 
 The manifest records per-repository excludes and their reason. Current excludes:
 
@@ -48,6 +50,8 @@ shape is intentional.
 | MassTransit scopes disposed through `if (scope is IAsyncDisposable …) … else scope.Dispose()` | DI001 now recognizes the canonical conditional async-dispose shape. |
 | MassTransit `FilterScopeProvider` field-owned scope | DI001 now recognizes a scope stored in a field and disposed by the owning type's `Dispose`/`DisposeAsync`. |
 | MassTransit stateless `new EmptyServiceProvider()` static field | DI006 now skips custom provider initializers with no instance state; stateful custom providers still report. |
+| Elsa `tenantScope.ServiceProvider` custom wrapper | DI019 now treats only the singleton's own/inherited provider properties, known host properties, and real scope providers as root evidence. |
+| Elsa `return new TenantScope(scope, …)` | DI001 now treats a scope wrapped in a directly returned object as caller-owned. |
 | Polly docs snippets and benchmarks, Ocelot benchmarks | Excluded from the production baseline; recorded in the manifest and baseline header. |
 
 Known intentional baseline noise:

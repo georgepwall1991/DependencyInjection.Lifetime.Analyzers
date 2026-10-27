@@ -1243,7 +1243,36 @@ public sealed class DI019_RootScopedResolutionAnalyzer : DiagnosticAnalyzer
         }
 
         var symbol = semanticModel.GetSymbolInfo(receiver).Symbol;
-        return symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or ILocalSymbol;
+        if (symbol is IFieldSymbol or IParameterSymbol or ILocalSymbol)
+        {
+            return true;
+        }
+
+        if (symbol is not IPropertySymbol property)
+        {
+            return false;
+        }
+
+        // A provider property on the singleton itself (or its base) is still the provider the
+        // singleton owns. A property on an arbitrary wrapper type (for example a custom
+        // ITenantScope.ServiceProvider) is not proof of the root provider.
+        var enclosingType = semanticModel.GetEnclosingSymbol(invocation.SpanStart)?.ContainingType;
+        return IsSameOrBaseType(property.ContainingType, enclosingType);
+    }
+
+    private static bool IsSameOrBaseType(
+        INamedTypeSymbol? candidate,
+        INamedTypeSymbol? type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsRootProviderExpression(

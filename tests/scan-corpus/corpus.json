@@ -113,6 +113,24 @@
       "target": "Autofac.Extensions.DependencyInjection.sln",
       "expectedExitCode": 0,
       "notes": "Alternate-container bridge. The analyzer must not treat Autofac's service-resolution APIs as Microsoft.Extensions.DependencyInjection evidence."
+    },
+    {
+      "name": "jasontaylordev_CleanArchitecture",
+      "repository": "jasontaylordev/CleanArchitecture",
+      "url": "https://github.com/jasontaylordev/CleanArchitecture.git",
+      "commit": "345e7fe7612fdaf0cb5da58826a7c57d42e1fdd8",
+      "target": "CleanArchitecture.slnx",
+      "expectedExitCode": 0,
+      "notes": "Full solution: Web, Application, Infrastructure, Aspire host, and tests. Exercises cross-method composition and third-party registration helpers."
+    },
+    {
+      "name": "elsa-workflows_elsa-core",
+      "repository": "elsa-workflows/elsa-core",
+      "url": "https://github.com/elsa-workflows/elsa-core.git",
+      "commit": "617a31d5f907b7dffd417df9a42037c2b5810031",
+      "target": "core/src/modules/Elsa.Workflows.Runtime/Elsa.Workflows.Runtime.csproj",
+      "expectedExitCode": 0,
+      "notes": "Targets the workflow runtime project. Features registered by referenced management/expressions projects are outside this compilation, so DI015 findings are baseline signal, not proof of a missing app registration."
     }
   ],
   "excluded": []

@@ -97,6 +97,12 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             return true;
         }
 
+        // Case 2b: Result is wrapped in an object that is returned from the method.
+        if (IsScopeWrappedInReturnedObject(invocation, semanticModel))
+        {
+            return true;
+        }
+
         // Case 3: Result is assigned to a variable that is later disposed
         // This is complex to track, so we simplify by checking if Dispose is called
         // on the same variable in the same method
@@ -237,12 +243,83 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                     current = binaryExpression;
                     continue;
 
+                // return new TenantScope(scope, ...); / return new(scope, ...);
+                // The wrapper is returned, so the scope's ownership moves to the caller with it.
+                case ArgumentSyntax argument
+                    when argument.Parent is ArgumentListSyntax
+                    {
+                        Parent: ObjectCreationExpressionSyntax objectCreation
+                    }:
+                    current = objectCreation;
+                    continue;
+
+                case ArgumentSyntax argument
+                    when argument.Parent is ArgumentListSyntax
+                    {
+                        Parent: ImplicitObjectCreationExpressionSyntax implicitCreation
+                    }:
+                    current = implicitCreation;
+                    continue;
+
                 case ReturnStatementSyntax:
                 case ArrowExpressionClauseSyntax:
                     return true;
 
                 default:
                     return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsScopeWrappedInReturnedObject(
+        IInvocationOperation invocation,
+        SemanticModel semanticModel)
+    {
+        var syntax = GetCreationExpression(invocation.Syntax);
+        ILocalSymbol? variableSymbol = null;
+
+        if (syntax.Parent is EqualsValueClauseSyntax equalsValue &&
+            equalsValue.Parent is VariableDeclaratorSyntax declarator &&
+            semanticModel.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol)
+        {
+            variableSymbol = localSymbol;
+        }
+        else if (syntax.Parent is AssignmentExpressionSyntax assignment &&
+                 assignment.Left is IdentifierNameSyntax identifierName &&
+                 semanticModel.GetSymbolInfo(identifierName).Symbol is ILocalSymbol assignedLocal)
+        {
+            variableSymbol = assignedLocal;
+        }
+
+        if (variableSymbol is null)
+        {
+            return false;
+        }
+
+        var searchRoot = GetExecutableBoundary(syntax) ?? GetContainingBlock(syntax);
+        if (searchRoot is null)
+        {
+            return false;
+        }
+
+        foreach (var identifier in searchRoot.DescendantNodes().OfType<IdentifierNameSyntax>())
+        {
+            if (identifier.SpanStart <= syntax.SpanStart ||
+                !SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(identifier).Symbol,
+                    variableSymbol) ||
+                identifier.Parent is not ArgumentSyntax argument ||
+                argument.Parent is not ArgumentListSyntax { Parent: var creation } ||
+                creation is not (ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax))
+            {
+                continue;
+            }
+
+            if (IsReturnedCreationExpression(creation))
+            {
+                return true;
             }
         }
 

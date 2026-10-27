@@ -2355,6 +2355,58 @@ public class DI001_ScopeDisposalAnalyzerTests
         await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task CreateScope_WrappedInReturnedObject_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner
+            {
+                public ScopeOwner(IServiceScope scope) { }
+            }
+
+            public sealed class Factory
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Factory(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public ScopeOwner Create()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    return new ScopeOwner(scope);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_WrappedInLocalObject_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner
+            {
+                public ScopeOwner(IServiceScope scope) { }
+            }
+
+            public sealed class Factory
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public Factory(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public void Create()
+                {
+                    var scope = [|_scopeFactory.CreateScope()|];
+                    var owner = new ScopeOwner(scope);
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     #endregion
 
     #endregion
