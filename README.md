@@ -81,6 +81,23 @@ dotnet_diagnostic.DI011.severity = suggestion
 
 By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`, while broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` to reduce noise. For a rollout checklist, see [docs/ADOPTION.md](docs/ADOPTION.md).
 
+## Scan before you install
+
+`di-scan` builds any .NET solution with these analyzers injected, without editing its project files:
+
+```bash
+dnx DependencyInjection.Lifetime.Analyzers.Scan -- MyApp.slnx --fail-on warning
+```
+
+It prints `ruleId path:line:column`, the surrounding source, severity, and a link to the rule page,
+and writes SARIF, Markdown, and HTML for triage. Use `--baseline` to fail only on new findings.
+See [docs/scanning.md](docs/scanning.md) for the full option set and CI examples.
+
+The package ships four starter profiles under `profiles/`: `default`, `brownfield-adoption`,
+`strict-ci`, and `library-author`. Every rule also has a standalone page under
+[docs/rules/](docs/rules/README.md) with the production failure, bad shape, safe shape, detection
+boundary, suppression, and references.
+
 ## See it work
 
 Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, `DI016`, and related diagnostics):
@@ -139,6 +156,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [The problem](#the-problem)
 - [What it catches](#what-it-catches)
 - [Install](#install)
+- [Scan before you install](#scan-before-you-install)
 - [See it work](#see-it-work)
 - [30-second path](#30-second-path)
 - [Feature snapshot](#feature-snapshot)
@@ -232,7 +250,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 
 ## DI001: Service Scope Not Disposed
 
-**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, or behind a switch section, loop, or catch block that does not also contain the creation, or after a branch exit that can bypass shared cleanup. Create-and-dispose within the same loop iteration, switch section, or catch clause — the per-message worker shape — stays quiet, but a `continue`/`break` that skips the dispose, or a `yield return`/`yield break` that can strand the scope in a never-resumed iterator, still reports. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, and it treats directly returned scopes as caller-owned even through simple casts or conditional return arms. Reassignment leaks and loop-created scopes that need per-iteration disposal still report.
+**What it catches:** `IServiceScope` instances created with `CreateScope()` or `CreateAsyncScope()` that are never disposed, including scopes whose only disposal call is hidden behind a conditional branch, or behind a switch section, loop, or catch block that does not also contain the creation, or after a branch exit that can bypass shared cleanup. A scope stored in a field and disposed by the owning type's `Dispose`/`DisposeAsync` is treated as owned, including the canonical `if (scope is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync(); else scope.Dispose();` shape. Create-and-dispose within the same loop iteration, switch section, or catch clause — the per-message worker shape — stays quiet, but a `continue`/`break` that skips the dispose, or a `yield return`/`yield break` that can strand the scope in a never-resumed iterator, still reports. DI001 recognizes predeclared nullable scope locals assigned conditionally when a later conditional-access, non-null-guarded, same-branch pre-exit, or `finally` disposal reliably closes ownership, and it treats directly returned scopes as caller-owned even through simple casts or conditional return arms. Reassignment leaks and loop-created scopes that need per-iteration disposal still report.
 
 **Why it matters:** undisposed scopes can retain scoped and transient disposable services longer than expected, causing memory and handle leaks.
 
@@ -457,7 +475,7 @@ public async Task RunAsync()
 
 ## DI006: Static `IServiceProvider` Cache
 
-**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), mutable/immutable/frozen dictionary value caches, recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>`, and simple holder types that only wrap a provider.
+**What it catches:** `IServiceProvider` / `IServiceScopeFactory` / keyed provider stored in static fields or properties, including common wrappers (`Lazy<T>`, `Task<T>`, `ValueTask<T>`, `Func<T>`, `AsyncLocal<T>`, `ThreadLocal<T>`), mutable/immutable/frozen dictionary value caches, recursive dictionary values such as `Dictionary<string, Lazy<IServiceProvider>>`, and simple holder types that only wrap a provider. Static fields initialized with a custom, stateless `IServiceProvider` implementation (no instance fields or properties) are null-object providers and stay quiet; framework providers and custom providers with any instance state still report.
 
 **Why it matters:** global provider state encourages service locator use and muddles lifetime boundaries.
 
@@ -750,6 +768,9 @@ other typed catches remain conservative. Alias candidates are indexed once per s
 - `TryAdd*` calls after an `Add*` already registered that service.
 - Duplicate `Add*` registrations where later entries override earlier ones.
 
+The duplicate-override tier is reported as `DI012b` so CI can baseline duplicate registrations
+separately from ignored `TryAdd*` calls. The two IDs share one analyzer and one rule page family.
+
 DI012 also follows the same `IServiceCollection` flow across local aliases and source-defined helper/local-function wrappers, while treating opaque helper boundaries conservatively instead of guessing at registration order. Common framework registration helpers such as `AddLogging()`, `AddOptions()`, `Configure<T>()`, `AddMemoryCache()`, `AddHttpClient()`, and `AddHttpContextAccessor()` are transparent rather than opaque barriers, so later user registrations remain visible. It stays quiet for intentional branch-dependent fallbacks such as guarded `Add*` plus unconditional `TryAdd*`, applies `TryAddEnumerable`'s service-and-implementation pair semantics, reports later `TryAdd*` calls when every reachable branch has already registered the service even through wrapped branch exits, and keeps mutually exclusive `if`/`else if`/`else` alternative registrations quiet.
 When a `Replace(...)` still leaves a duplicate descriptor behind, DI012 reports the active registration that survives the single-descriptor replacement, ignoring inactive `TryAdd*` calls when choosing the message location.
 
@@ -832,7 +853,7 @@ var service = provider.GetRequiredService<IMyService>();
 
 ## DI015: Unresolvable Dependency
 
-**What it catches:** registered services with direct or transitive constructor/factory dependencies that are not registered (including keyed and open-generic paths).
+**What it catches:** registered services with direct or transitive constructor/factory dependencies that are not registered (including keyed and open-generic paths). Type parameters and closed generics containing them are not reported as missing, because the closed type is unknown. A non-generic `DbContextOptions` dependency is satisfied by any registered `DbContextOptions<TContext>`.
 
 **Why it matters:** runtime activation fails when DI tries to create the service.
 

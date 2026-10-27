@@ -2180,6 +2180,181 @@ public class DI001_ScopeDisposalAnalyzerTests
         await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
     }
 
+    [Fact]
+    public async Task CreateScope_ConditionalAsyncDisposeInFinally_NoDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = _scopeFactory.CreateScope();
+                    try
+                    {
+                        var service = scope.ServiceProvider.GetService<object>();
+                        await Task.Yield();
+                    }
+                    finally
+                    {
+                        if (scope is IAsyncDisposable asyncDisposable)
+                            await asyncDisposable.DisposeAsync();
+                        else
+                            scope.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_ConditionalAsyncDisposeWithoutElse_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = [|_scopeFactory.CreateScope()|];
+                    try
+                    {
+                        await Task.Yield();
+                    }
+                    finally
+                    {
+                        if (scope is IAsyncDisposable asyncDisposable)
+                            await asyncDisposable.DisposeAsync();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_ConditionalAsyncDisposeWithWrongElseTarget_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public class MyService
+            {
+                private readonly IServiceScopeFactory _scopeFactory;
+
+                public MyService(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+                public async Task DoWorkAsync()
+                {
+                    var scope = [|_scopeFactory.CreateScope()|];
+                    var other = [|_scopeFactory.CreateScope()|];
+                    try
+                    {
+                        await Task.Yield();
+                    }
+                    finally
+                    {
+                        if (scope is IAsyncDisposable asyncDisposable)
+                            await asyncDisposable.DisposeAsync();
+                        else
+                            other.Dispose();
+                    }
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_StoredInFieldDisposedByOwner_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner : IDisposable
+            {
+                private readonly IServiceScope _scope;
+
+                public ScopeOwner(IServiceScopeFactory scopeFactory) => _scope = scopeFactory.CreateScope();
+
+                public void Dispose() => _scope.Dispose();
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_StoredInFieldDisposedByOwnerAsync_NoDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner : IAsyncDisposable
+            {
+                private readonly IServiceScope _scope;
+
+                public ScopeOwner(IServiceScopeFactory scopeFactory) => _scope = scopeFactory.CreateScope();
+
+                public ValueTask DisposeAsync()
+                {
+                    if (_scope is IAsyncDisposable asyncDisposable)
+                        return asyncDisposable.DisposeAsync();
+
+                    _scope.Dispose();
+                    return default;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_StoredInFieldWithoutDispose_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner
+            {
+                private readonly IServiceScope _scope;
+
+                public ScopeOwner(IServiceScopeFactory scopeFactory) => _scope = [|scopeFactory.CreateScope()|];
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task CreateScope_StoredInFieldDisposedConditionally_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public sealed class ScopeOwner : IDisposable
+            {
+                private readonly IServiceScope _scope;
+                private readonly bool _shouldDispose;
+
+                public ScopeOwner(IServiceScopeFactory scopeFactory, bool shouldDispose)
+                {
+                    _scope = [|scopeFactory.CreateScope()|];
+                    _shouldDispose = shouldDispose;
+                }
+
+                public void Dispose()
+                {
+                    if (_shouldDispose)
+                        _scope.Dispose();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI001_ScopeDisposalAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     #endregion
 
     #endregion

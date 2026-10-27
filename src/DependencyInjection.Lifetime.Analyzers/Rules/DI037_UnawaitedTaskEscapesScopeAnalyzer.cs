@@ -1463,9 +1463,9 @@ public sealed class DI037_UnawaitedTaskEscapesScopeAnalyzer : DiagnosticAnalyzer
 
 #pragma warning disable RS1030
         return compilation.GetSemanticModel(name.SyntaxTree).GetSymbolInfo(name).Symbol is
-            {
-                IsStatic: false
-            } symbol
+        {
+            IsStatic: false
+        } symbol
             && symbol.Kind
                 is SymbolKind.Field
                     or SymbolKind.Property

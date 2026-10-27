@@ -261,11 +261,11 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             // Foreign partial declarations need their own tree's model (same pattern as
             // DI001/DI019 cross-tree lookups).
-            #pragma warning disable RS1030
+#pragma warning disable RS1030
             var model = part.SyntaxTree == semanticModel.SyntaxTree
                 ? semanticModel
                 : semanticModel.Compilation.GetSemanticModel(part.SyntaxTree);
-            #pragma warning restore RS1030
+#pragma warning restore RS1030
             parts.Add((part, model));
         }
 
@@ -1493,7 +1493,7 @@ public sealed class DI024_HostedServiceScopePerIterationAnalyzer : DiagnosticAna
 
             // Each nested ! flips polarity back to the positive-condition classifier.
             case PrefixUnaryExpressionSyntax
-                { RawKind: (int)SyntaxKind.LogicalNotExpression } nestedNegation:
+            { RawKind: (int)SyntaxKind.LogicalNotExpression } nestedNegation:
                 return IsLongRunningCondition(nestedNegation.Operand, semanticModel);
 
             case ExpressionSyntax expression when IsCancellationRequestedAccess(expression, semanticModel):

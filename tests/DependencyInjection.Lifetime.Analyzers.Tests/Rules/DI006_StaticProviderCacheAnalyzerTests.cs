@@ -698,5 +698,85 @@ public class DI006_StaticProviderCacheAnalyzerTests
                 .WithArguments("IServiceProvider", "Provider"));
     }
 
+    [Fact]
+    public async Task StaticField_StatelessCustomProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class AppServices
+            {
+                public static readonly IServiceProvider Empty = new EmptyProvider();
+
+                private sealed class EmptyProvider : IServiceProvider
+                {
+                    public object? GetService(Type serviceType) => null;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticProperty_StatelessCustomProvider_NoDiagnostic()
+    {
+        var source = Usings + """
+            public static class AppServices
+            {
+                public static IServiceProvider Empty { get; } = new EmptyProvider();
+
+                private sealed class EmptyProvider : IServiceProvider
+                {
+                    public object? GetService(Type serviceType) => null;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticField_StatefulCustomProvider_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class AppServices
+            {
+                public static readonly IServiceProvider [|Cached|] = new StatefulProvider();
+
+                private sealed class StatefulProvider : IServiceProvider
+                {
+                    private readonly object _state = new();
+
+                    public object? GetService(Type serviceType) => _state;
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task StaticField_CustomProviderWithInheritedState_ReportsDiagnostic()
+    {
+        var source = Usings + """
+            public static class AppServices
+            {
+                public static readonly IServiceProvider [|Cached|] = new DerivedProvider();
+
+                private class BaseProvider : IServiceProvider
+                {
+                    private readonly object _state = new();
+
+                    public object? GetService(Type serviceType) => _state;
+                }
+
+                private sealed class DerivedProvider : BaseProvider
+                {
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI006_StaticProviderCacheAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
     #endregion
 }

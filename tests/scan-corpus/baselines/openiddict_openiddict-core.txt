@@ -1,0 +1,60 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: openiddict/openiddict-core
+# commit: 5fab56d4b39f94c14a21917f81ed4fcf18d5d072
+# target: src/OpenIddict.Client/OpenIddict.Client.csproj
+# exit: 0
+DI007 src/OpenIddict.Client/OpenIddictClientEvents.cs:71:26
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.Protection.cs:1141:31
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.Protection.cs:270:31
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.Protection.cs:567:31
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.Protection.cs:828:31
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.Protection.cs:953:31
+DI007 src/OpenIddict.Client/OpenIddictClientHandlers.cs:857:27
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1069:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1070:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1131:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1132:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:116:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1201:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1202:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1324:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1325:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1397:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1398:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:151:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1538:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1539:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1682:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1683:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1829:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1830:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1973:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:1974:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:2118:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:2119:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:2264:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:2265:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:263:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:264:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:335:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:336:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:419:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:420:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:48:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:512:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:513:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:607:34
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:608:31
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:720:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:721:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:79:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:801:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:802:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:891:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:892:23
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:981:26
+DI007 src/OpenIddict.Client/OpenIddictClientService.cs:982:23
+DI011 src/OpenIddict.Client/OpenIddictClientExtensions.cs:32:9
+DI011 src/OpenIddict.Client/OpenIddictClientExtensions.cs:84:9
+DI011 src/OpenIddict.Client/OpenIddictClientExtensions.cs:87:9
+DI031 src/OpenIddict.Client/OpenIddictClientExtensions.cs:87:9

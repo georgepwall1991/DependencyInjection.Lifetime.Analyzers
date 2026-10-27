@@ -1,0 +1,6 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: dapr/dotnet-sdk
+# commit: e08c18b6cdacc50fb70b52a3e81ec6d578b4db04
+# target: src/Dapr.Actors/Dapr.Actors.csproj
+# exit: 0
+DI007 src/Dapr.Common/Extensions/DaprClientBuilderExtensions.cs:76:33

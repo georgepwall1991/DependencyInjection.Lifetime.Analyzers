@@ -1038,9 +1038,9 @@ public sealed class DI003_CaptiveDependencyAnalyzer : DiagnosticAnalyzer
         Compilation compilation,
         ConcurrentDictionary<SyntaxTree, SemanticModel> semanticModelsByTree)
     {
-        #pragma warning disable RS1030
+#pragma warning disable RS1030
         return semanticModelsByTree.GetOrAdd(syntaxTree, tree => compilation.GetSemanticModel(tree));
-        #pragma warning restore RS1030
+#pragma warning restore RS1030
     }
 
     private static KeyedServiceHelpers.ServiceKeyRequest GetServiceKey(

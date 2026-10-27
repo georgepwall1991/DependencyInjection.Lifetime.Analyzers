@@ -1,0 +1,5 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: khellang/Scrutor
+# commit: 7f315dab5b0f7134a6be58941db1da8c904507e2
+# target: Scrutor.sln
+# exit: 0

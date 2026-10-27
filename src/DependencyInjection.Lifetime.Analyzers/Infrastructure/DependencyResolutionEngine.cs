@@ -313,6 +313,18 @@ internal sealed class DependencyResolutionEngine
             return ResolutionResult.Resolvable(ResolutionConfidence.High);
         }
 
+        // EF Core registers DbContextOptions<TContext>, but a context may take the non-generic
+        // DbContextOptions base type. Any registered closed options type satisfies that base
+        // dependency; without one, the missing registration is still reported.
+        if (
+            !request.IsKeyed
+            && IsNonGenericDbContextOptions(request.Type)
+            && _availableRegistrations.Any(registration =>
+                !registration.IsKeyed && IsDbContextOptionsOfT(registration.ServiceType)))
+        {
+            return ResolutionResult.Resolvable(ResolutionConfidence.High);
+        }
+
         var lookupKey = new ServiceLookupKey(request.Type, request.Key, request.IsKeyed);
         if (resolutionCache.TryGetValue(lookupKey, out var cachedResult))
         {
@@ -576,8 +588,39 @@ internal sealed class DependencyResolutionEngine
             return true;
         }
 
+        // A type parameter, or a closed generic that still contains one, has no concrete
+        // registration the analyzer can prove. Reporting it as missing is a guess about the
+        // closed type the caller will use, not a provable activation failure.
+        if (ContainsTypeParameter(dependencyType))
+        {
+            return true;
+        }
+
         return assumeFrameworkServicesRegistered && IsFrameworkProvidedDependency(dependencyType, isKeyed);
     }
+
+    private static bool IsNonGenericDbContextOptions(ITypeSymbol type) =>
+        type is INamedTypeSymbol namedType
+        && !namedType.IsGenericType
+        && namedType.Name == "DbContextOptions"
+        && namedType.ContainingNamespace.ToDisplayString() == "Microsoft.EntityFrameworkCore";
+
+    private static bool IsDbContextOptionsOfT(INamedTypeSymbol type) =>
+        type.IsGenericType
+        && type.Name == "DbContextOptions"
+        && type.ContainingNamespace.ToDisplayString() == "Microsoft.EntityFrameworkCore";
+
+    private static bool ContainsTypeParameter(ITypeSymbol type) =>
+        type switch
+        {
+            ITypeParameterSymbol => true,
+            IArrayTypeSymbol array => ContainsTypeParameter(array.ElementType),
+            IPointerTypeSymbol pointer => ContainsTypeParameter(pointer.PointedAtType),
+            INamedTypeSymbol named =>
+                (named.IsGenericType && named.TypeArguments.Any(ContainsTypeParameter))
+                || (named.ContainingType is not null && ContainsTypeParameter(named.ContainingType)),
+            _ => false,
+        };
 
     private static bool IsContainerProvidedDependency(ITypeSymbol dependencyType)
     {

@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <NoWarn>$(NoWarn);CS0618;RS1026;RS1036;RS1038;RS1041</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DependencyInjection.Lifetime.Analyzers\DependencyInjection.Lifetime.Analyzers.csproj" />
+    <ProjectReference Include="..\..\src\DependencyInjection.Lifetime.Analyzers.Scan\DependencyInjection.Lifetime.Analyzers.Scan.csproj" />
   </ItemGroup>
 
 </Project>

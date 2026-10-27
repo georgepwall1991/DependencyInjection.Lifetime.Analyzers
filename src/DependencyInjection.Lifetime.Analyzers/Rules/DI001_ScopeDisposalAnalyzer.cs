@@ -59,9 +59,9 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        #pragma warning disable RS1030
+#pragma warning disable RS1030
         var semanticModel = context.Compilation.GetSemanticModel(invocation.Syntax.SyntaxTree);
-        #pragma warning restore RS1030
+#pragma warning restore RS1030
 
         // Check if the result is properly handled
         if (IsProperlyDisposed(invocation, semanticModel))
@@ -101,6 +101,13 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         // This is complex to track, so we simplify by checking if Dispose is called
         // on the same variable in the same method
         if (IsExplicitlyDisposed(invocation, semanticModel))
+        {
+            return true;
+        }
+
+        // Case 4: Result is stored in a field and the owning type disposes that field in its
+        // Dispose/DisposeAsync method. Ownership moved from the local to the object.
+        if (IsFieldOwnedScopeDisposed(invocation, semanticModel))
         {
             return true;
         }
@@ -329,13 +336,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            var targetSymbol = GetDisposeTargetSymbol(invocationSyntax, semanticModel);
-            if (targetSymbol is null)
-            {
-                continue;
-            }
-
-            if (!SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+            if (!IsDisposeTargetForSymbol(invocationSyntax, variableSymbol, semanticModel))
             {
                 continue;
             }
@@ -745,7 +746,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
     private static bool IsReliableDisposeProof(
         InvocationExpressionSyntax disposeSyntax,
         SyntaxNode creationSyntax,
-        ILocalSymbol variableSymbol,
+        ISymbol variableSymbol,
         SemanticModel semanticModel)
     {
         var boundary = GetExecutableBoundary(creationSyntax);
@@ -760,6 +761,12 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
+                if (IsConditionalAsyncDispose(ifStatement, variableSymbol, semanticModel))
+                {
+                    current = current.Parent;
+                    continue;
+                }
+
                 if (!IsNonNullGuardForTarget(ifStatement.Condition, variableSymbol, semanticModel))
                 {
                     return false;
@@ -768,7 +775,8 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
             else if (current is ElseClauseSyntax elseClause)
             {
                 if (elseClause.Parent is IfStatementSyntax parentIf &&
-                    AreInSameIfBranch(creationSyntax, disposeSyntax, parentIf))
+                    (AreInSameIfBranch(creationSyntax, disposeSyntax, parentIf) ||
+                     IsConditionalAsyncDispose(parentIf, variableSymbol, semanticModel)))
                 {
                     current = current.Parent;
                     continue;
@@ -803,6 +811,108 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Recognizes the canonical async-disposal shape:
+    /// <c>if (scope is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync();
+    /// else scope.Dispose();</c>. Both branches dispose the same scope, so the if/else is as
+    /// reliable as a single unconditional dispose. The pattern variable is an alias for the scope,
+    /// not a different resource.
+    /// </summary>
+    private static bool IsConditionalAsyncDispose(
+        IfStatementSyntax ifStatement,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        if (ifStatement.Condition is not IsPatternExpressionSyntax isPattern ||
+            !SymbolEqualityComparer.Default.Equals(
+                semanticModel.GetSymbolInfo(isPattern.Expression).Symbol,
+                variableSymbol) ||
+            isPattern.Pattern is not DeclarationPatternSyntax declaration ||
+            !IsAsyncDisposableType(semanticModel.GetTypeInfo(declaration.Type).Type))
+        {
+            return false;
+        }
+
+        return ContainsDispose(ifStatement.Statement, variableSymbol, semanticModel, async: true) &&
+               ifStatement.Else is not null &&
+               ContainsDispose(ifStatement.Else.Statement, variableSymbol, semanticModel, async: false);
+    }
+
+    private static bool ContainsDispose(
+        SyntaxNode node,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel,
+        bool async)
+    {
+        foreach (var invocation in node.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (!IsDisposeInvocation(invocation) ||
+                IsAsyncDisposeInvocation(invocation) != async ||
+                !IsDisposeTargetForSymbol(invocation, variableSymbol, semanticModel))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsAsyncDisposableType(ITypeSymbol? type) =>
+        type is INamedTypeSymbol namedType &&
+        namedType.Name == "IAsyncDisposable" &&
+        namedType.ContainingNamespace.ToDisplayString() == "System";
+
+    private static bool IsAsyncDisposeInvocation(InvocationExpressionSyntax invocationSyntax) =>
+        invocationSyntax.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess =>
+                memberAccess.Name.Identifier.Text == "DisposeAsync",
+            MemberBindingExpressionSyntax memberBinding =>
+                memberBinding.Name.Identifier.Text == "DisposeAsync",
+            _ => false,
+        };
+
+    private static bool IsDisposeTargetForSymbol(
+        InvocationExpressionSyntax invocationSyntax,
+        ISymbol variableSymbol,
+        SemanticModel semanticModel)
+    {
+        var targetSymbol = GetDisposeTargetSymbol(invocationSyntax, semanticModel);
+        if (targetSymbol is null)
+        {
+            return false;
+        }
+
+        if (SymbolEqualityComparer.Default.Equals(targetSymbol, variableSymbol))
+        {
+            return true;
+        }
+
+        if (targetSymbol is not ILocalSymbol local)
+        {
+            return false;
+        }
+
+        foreach (var reference in local.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is SingleVariableDesignationSyntax designation &&
+                designation.Parent is DeclarationPatternSyntax
+                {
+                    Parent: IsPatternExpressionSyntax pattern
+                } &&
+                SymbolEqualityComparer.Default.Equals(
+                    semanticModel.GetSymbolInfo(pattern.Expression).Symbol,
+                    variableSymbol))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool AreInSameIfBranch(
@@ -1158,7 +1268,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool IsNullGuardForTarget(
         ExpressionSyntax condition,
-        ILocalSymbol variableSymbol,
+        ISymbol variableSymbol,
         SemanticModel semanticModel)
     {
         condition = UnwrapParentheses(condition);
@@ -1183,7 +1293,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool IsNonNullGuardForTarget(
         ExpressionSyntax condition,
-        ILocalSymbol variableSymbol,
+        ISymbol variableSymbol,
         SemanticModel semanticModel)
     {
         condition = UnwrapParentheses(condition);
@@ -1209,7 +1319,7 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
 
     private static bool ExpressionTargetsSymbol(
         ExpressionSyntax expression,
-        ILocalSymbol variableSymbol,
+        ISymbol variableSymbol,
         SemanticModel semanticModel)
     {
         expression = UnwrapParentheses(expression);
@@ -1230,6 +1340,84 @@ public sealed class DI001_ScopeDisposalAnalyzer : DiagnosticAnalyzer
         }
 
         return expression;
+    }
+
+    private static bool IsFieldOwnedScopeDisposed(
+        IInvocationOperation invocation,
+        SemanticModel semanticModel)
+    {
+        var creation = invocation.Syntax;
+        ISymbol? field = null;
+        SyntaxNode? creationContext = null;
+
+        var assignment = creation.FirstAncestorOrSelf<AssignmentExpressionSyntax>();
+        if (assignment is not null && assignment.Right.Span.Contains(creation.Span))
+        {
+            field = semanticModel.GetSymbolInfo(assignment.Left).Symbol as IFieldSymbol;
+            creationContext = assignment;
+        }
+        else if (
+            creation.FirstAncestorOrSelf<VariableDeclaratorSyntax>() is { } declarator
+            && semanticModel.GetDeclaredSymbol(declarator) is IFieldSymbol fieldSymbol
+        )
+        {
+            field = fieldSymbol;
+            creationContext = declarator;
+        }
+
+        if (field is null || creationContext is null)
+        {
+            return false;
+        }
+
+        var ownerType = field.ContainingType;
+        if (
+            ownerType is null
+            || !ownerType.AllInterfaces.Any(@interface =>
+                @interface.ContainingNamespace.ToDisplayString() == "System"
+                && @interface.Name is "IDisposable" or "IAsyncDisposable")
+        )
+        {
+            return false;
+        }
+
+        foreach (var method in ownerType.GetMembers().OfType<IMethodSymbol>())
+        {
+            if (method.MethodKind != MethodKind.Ordinary
+                || (method.Name is not ("Dispose" or "DisposeAsync")
+                    && !method.ExplicitInterfaceImplementations.Any()))
+            {
+                continue;
+            }
+
+            foreach (var reference in method.DeclaringSyntaxReferences)
+            {
+                var methodSyntax = reference.GetSyntax();
+                SemanticModel methodModel;
+                if (methodSyntax.SyntaxTree == semanticModel.SyntaxTree)
+                {
+                    methodModel = semanticModel;
+                }
+                else
+                {
+#pragma warning disable RS1030
+                    methodModel = semanticModel.Compilation.GetSemanticModel(methodSyntax.SyntaxTree);
+#pragma warning restore RS1030
+                }
+
+                foreach (var dispose in methodSyntax.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (IsDisposeInvocation(dispose)
+                        && IsDisposeTargetForSymbol(dispose, field, methodModel)
+                        && IsReliableDisposeProof(dispose, creationContext, field, methodModel))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool IsDisposeInvocation(InvocationExpressionSyntax invocationSyntax)

@@ -1,0 +1,12 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: dotnet-architecture/eShopOnWeb
+# commit: 4da8212117e87d808d4bbc7da6286fd2147ce606
+# target: eShopOnWeb.sln
+# exit: 0
+DI005 src/PublicApi/Program.cs:131:20
+DI005 src/Web/Program.cs:122:20
+DI010 src/Web/Configuration/ConfigureWebServices.cs:14:9
+DI014 src/BlazorAdmin/Program.cs:44:14
+DI016 src/BlazorAdmin/Program.cs:44:23
+DI031 src/PublicApi/Program.cs:41:1
+DI031 src/Web/Configuration/ConfigureCoreServices.cs:16:9

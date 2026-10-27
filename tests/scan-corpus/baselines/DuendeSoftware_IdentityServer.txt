@@ -1,0 +1,42 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: DuendeSoftware/IdentityServer
+# commit: 222118c7a0563a3cb4727fae5233f7ee98676e40
+# target: bff/src/Bff/Bff.csproj
+# exit: 0
+DI003 bff/src/Bff/BffBuilderExtensions.cs:117:13
+DI003 bff/src/Bff/BffBuilderExtensions.cs:176:9
+DI003 bff/src/Bff/BffBuilderExtensions.cs:222:13
+DI003 bff/src/Bff/BffBuilderExtensions.cs:224:13
+DI005 bff/src/Bff/SessionManagement/SessionStore/SessionCleanupHost.cs:77:38
+DI007 bff/src/Bff/BffApplicationBuilderExtensions.cs:69:26
+DI007 bff/src/Bff/BffBuilderExtensions.cs:195:32
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:117:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:139:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:160:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:180:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:203:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:29:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:40:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:41:22
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:67:23
+DI007 bff/src/Bff/BffEndpointRouteBuilderExtensions.cs:90:23
+DI007 bff/src/Bff/DynamicFrontends/Internal/ConfigureBffStartupFilter.cs:17:30
+DI007 bff/src/Bff/SessionManagement/SessionStore/SessionCleanupHost.cs:77:38
+DI007 bff/src/Bff/SessionManagement/SessionStore/SessionCleanupHost.cs:78:39
+DI007 bff/src/Bff/SessionManagement/SessionStore/SessionCleanupHost.cs:93:25
+DI007 bff/src/Bff/SessionManagement/TicketStore/TicketStoreShim.cs:23:41
+DI012b bff/src/Bff/BffBuilderExtensions.cs:103:13
+DI012b bff/src/Bff/BffBuilderExtensions.cs:129:13
+DI012b bff/src/Bff/BffBuilderExtensions.cs:130:13
+DI012b bff/src/Bff/BffBuilderExtensions.cs:224:13
+DI012b bff/src/Bff/BffBuilderExtensions.cs:93:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:123:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:128:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:133:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:135:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:225:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:228:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:229:13
+DI015 bff/src/Bff/BffBuilderExtensions.cs:58:9
+DI030 bff/src/Bff/SessionManagement/SessionStore/InMemoryUserSessionStore.cs:46:25
+DI032 bff/src/Bff/BffBuilderExtensions.cs:176:9

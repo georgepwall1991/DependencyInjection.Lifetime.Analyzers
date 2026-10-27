@@ -37,8 +37,8 @@ public class Startup
         var expected = VerifyCS.Diagnostic(DiagnosticDescriptors.CaptiveDependency)
              .WithLocation(15, 9)
              .WithArguments("SingletonService", "IScopedService", "Singleton", "Scoped"); // Note: ScopedService is treated as "Unknown" lifetime unless registered? 
-                                                                                         // Wait, standard collector doesn't know about ScopedService unless I register it.
-                                                                                         // I need to register ScopedService too.
+                                                                                          // Wait, standard collector doesn't know about ScopedService unless I register it.
+                                                                                          // I need to register ScopedService too.
 
         // Fix test to include ScopedService registration
         test = @"
@@ -66,7 +66,7 @@ public class Startup
 }";
         // Location will shift
         expected = VerifyCS.Diagnostic(DiagnosticDescriptors.CaptiveDependency)
-             .WithLocation(17, 9) 
+             .WithLocation(17, 9)
              .WithArguments("SingletonService", "scoped", "IScopedService");
 
         await VerifyCS.VerifyDiagnosticsAsync(test, expected);
@@ -142,7 +142,7 @@ public class Startup
     [Fact]
     public async Task TryAdd_With_ServiceDescriptor_Detected()
     {
-         var test = @"
+        var test = @"
 using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

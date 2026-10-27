@@ -1,0 +1,8 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: App-vNext/Polly
+# commit: 4c58a76cbcae3d43d2cf2198246335d8c4313c7e
+# target: Polly.slnx
+# excludes: Snippets,bench
+# exit: 0
+DI007 src/Polly.Extensions/DependencyInjection/AddResiliencePipelineContext.cs:50:37
+DI007 src/Polly.Extensions/DependencyInjection/AddResiliencePipelineContext.cs:84:23

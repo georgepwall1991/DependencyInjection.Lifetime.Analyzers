@@ -52,9 +52,9 @@ public sealed class DI014_RootProviderNotDisposedAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        #pragma warning disable RS1030
+#pragma warning disable RS1030
         var semanticModel = context.Compilation.GetSemanticModel(invocation.Syntax.SyntaxTree);
-        #pragma warning restore RS1030
+#pragma warning restore RS1030
 
         // Check if the result is properly handled
         if (IsProperlyDisposed(invocation, semanticModel))

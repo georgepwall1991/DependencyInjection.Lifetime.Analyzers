@@ -1,0 +1,119 @@
+{
+  "description": "Pinned public repositories scanned by scripts/Invoke-ScanRegression.ps1. Every entry is checked out at an exact commit so analyzer changes, not upstream drift, move the baseline. Regenerate a baseline with -UpdateBaselines and review the diff.",
+  "repositories": [
+    {
+      "name": "dotnet-architecture_eShopOnWeb",
+      "repository": "dotnet-architecture/eShopOnWeb",
+      "url": "https://github.com/dotnet-architecture/eShopOnWeb.git",
+      "commit": "4da8212117e87d808d4bbc7da6286fd2147ce606",
+      "target": "eShopOnWeb.sln",
+      "expectedExitCode": 0
+    },
+    {
+      "name": "App-vNext_Polly",
+      "repository": "App-vNext/Polly",
+      "url": "https://github.com/App-vNext/Polly.git",
+      "commit": "4c58a76cbcae3d43d2cf2198246335d8c4313c7e",
+      "target": "Polly.slnx",
+      "expectedExitCode": 0,
+      "excludes": [
+        "Snippets",
+        "bench"
+      ],
+      "notes": "Excludes documentation snippets and benchmark-only composition; both are scanned in the package tests but are not a production composition root."
+    },
+    {
+      "name": "DuendeSoftware_IdentityServer",
+      "repository": "DuendeSoftware/IdentityServer",
+      "url": "https://github.com/DuendeSoftware/IdentityServer.git",
+      "commit": "222118c7a0563a3cb4727fae5233f7ee98676e40",
+      "target": "bff/src/Bff/Bff.csproj",
+      "expectedExitCode": 0,
+      "notes": "The BFF project is a partial composition root: services registered by referenced IdentityServer projects are not in this compilation, so DI015 findings here are baseline signal, not proof of a missing app registration."
+    },
+    {
+      "name": "Xabaril_AspNetCore.Diagnostics.HealthChecks",
+      "repository": "Xabaril/AspNetCore.Diagnostics.HealthChecks",
+      "url": "https://github.com/Xabaril/AspNetCore.Diagnostics.HealthChecks.git",
+      "commit": "3b6abbd374a5d7bc8d209ff48bc38df947266054",
+      "target": "AspNetCore.Diagnostics.HealthChecks.sln",
+      "expectedExitCode": 0
+    },
+    {
+      "name": "dapr_dotnet-sdk",
+      "repository": "dapr/dotnet-sdk",
+      "url": "https://github.com/dapr/dotnet-sdk.git",
+      "commit": "e08c18b6cdacc50fb70b52a3e81ec6d578b4db04",
+      "target": "src/Dapr.Actors/Dapr.Actors.csproj",
+      "expectedExitCode": 0,
+      "notes": "Targets the actor project so the solution's test projects stay out of the baseline. The project graph also covers Dapr.Client and Dapr.Common."
+    },
+    {
+      "name": "microsoft_dotnet-podcasts",
+      "repository": "microsoft/dotnet-podcasts",
+      "url": "https://github.com/microsoft/dotnet-podcasts.git",
+      "commit": "5ee8be2990b81eb681bbd100875c263aaa5ab68a",
+      "target": "NetPodcast.Services.sln",
+      "expectedExitCode": 0,
+      "notes": "Services solution: APIs, workers, and shared service defaults. The client projects are intentionally out of scope."
+    },
+    {
+      "name": "openiddict_openiddict-core",
+      "repository": "openiddict/openiddict-core",
+      "url": "https://github.com/openiddict/openiddict-core.git",
+      "commit": "5fab56d4b39f94c14a21917f81ed4fcf18d5d072",
+      "target": "src/OpenIddict.Client/OpenIddict.Client.csproj",
+      "framework": "net10.0",
+      "expectedExitCode": 0,
+      "notes": "Targets the client project because the full solution contains every provider and integration package, which is unnecessary for a DI regression signal."
+    },
+    {
+      "name": "ThreeMammals_Ocelot",
+      "repository": "ThreeMammals/Ocelot",
+      "url": "https://github.com/ThreeMammals/Ocelot.git",
+      "commit": "80268bc9a950cd4544e70d9582374ca55fc6029f",
+      "target": "Ocelot.slnx",
+      "expectedExitCode": 0,
+      "excludes": [
+        "benchmark"
+      ],
+      "notes": "Excludes benchmark-only composition; the production gateway solution remains in scope."
+    },
+    {
+      "name": "ardalis_CleanArchitecture",
+      "repository": "ardalis/CleanArchitecture",
+      "url": "https://github.com/ardalis/CleanArchitecture.git",
+      "commit": "e7c79be54ba0b001a5b332c1efe935f520b9db4b",
+      "target": "Clean.Architecture.slnx",
+      "expectedExitCode": 0
+    },
+    {
+      "name": "MassTransit_MassTransit",
+      "repository": "MassTransit/MassTransit",
+      "url": "https://github.com/MassTransit/MassTransit.git",
+      "commit": "d9f61f764c802785cc9a4be92547d8f5b63018d4",
+      "target": "src/MassTransit/MassTransit.csproj",
+      "expectedExitCode": 0,
+      "notes": "Targets the core library project, not the full solution. MassTransit's generic Bind<TBus, T> wrappers are a deliberate stress test for open-generic and type-parameter handling."
+    },
+    {
+      "name": "khellang_Scrutor",
+      "repository": "khellang/Scrutor",
+      "url": "https://github.com/khellang/Scrutor.git",
+      "commit": "7f315dab5b0f7134a6be58941db1da8c904507e2",
+      "target": "Scrutor.sln",
+      "expectedExitCode": 0,
+      "notes": "A clean baseline: a dependency-injection scanning library that does not itself trip the lifetime rules."
+    },
+    {
+      "name": "Autofac_Autofac.Extensions.DependencyInjection",
+      "repository": "Autofac/Autofac.Extensions.DependencyInjection",
+      "url": "https://github.com/Autofac/Autofac.Extensions.DependencyInjection.git",
+      "commit": "206de12cc40baa58cc6f807e005f99d2e44c1ae4",
+      "target": "Autofac.Extensions.DependencyInjection.sln",
+      "expectedExitCode": 0,
+      "notes": "Alternate-container bridge. The analyzer must not treat Autofac's service-resolution APIs as Microsoft.Extensions.DependencyInjection evidence."
+    }
+  ],
+  "excluded": []
+}

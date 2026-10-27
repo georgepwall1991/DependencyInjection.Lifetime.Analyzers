@@ -208,7 +208,7 @@ public class Program
 
         await AnalyzerVerifier<DI014_RootProviderNotDisposedAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
-    
+
     [Fact]
     public async Task BuildServiceProvider_ExplicitDispose_NoDiagnostic()
     {

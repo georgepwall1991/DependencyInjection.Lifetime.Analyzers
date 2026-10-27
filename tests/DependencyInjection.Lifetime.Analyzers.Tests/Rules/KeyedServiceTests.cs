@@ -94,7 +94,7 @@ public class KeyedServiceTests
 
         await AnalyzerVerifier<DI003_CaptiveDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
-    
+
     [Fact]
     public async Task SingletonCapturingKeyedScoped_WithDifferentKeys_NoDiagnostic()
     {
@@ -147,7 +147,7 @@ public class KeyedServiceTests
                 .WithSpan(36, 47, 36, 88)
                 .WithArguments("IService", "scoped", "IService"));
     }
-    
+
     [Fact]
     public async Task SingletonCapturingKeyedScoped_ViaFactory_WithKeyMismatch_NoDiagnostic()
     {

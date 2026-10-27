@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Linq;
 using DependencyInjection.Lifetime.Analyzers.Infrastructure;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace DependencyInjection.Lifetime.Analyzers.Rules;
@@ -61,6 +63,11 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (IsProvablyStatelessCustomProvider(field, context.Compilation))
+        {
+            return;
+        }
+
         var diagnostic = Diagnostic.Create(
             DiagnosticDescriptors.StaticProviderCache,
             field.Locations[0],
@@ -88,6 +95,11 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (IsProvablyStatelessCustomProvider(property, context.Compilation))
+        {
+            return;
+        }
+
         var diagnostic = Diagnostic.Create(
             DiagnosticDescriptors.StaticProviderCache,
             property.Locations[0],
@@ -95,6 +107,51 @@ public sealed class DI006_StaticProviderCacheAnalyzer : DiagnosticAnalyzer
             property.Name);
 
         context.ReportDiagnostic(diagnostic);
+    }
+
+    /// <summary>
+    /// A static field that holds a custom, stateless <see cref="IServiceProvider"/> implementation
+    /// (the null-object pattern) has no scopes or services to leak. Framework providers and custom
+    /// providers with any instance state still report: the analyzer cannot prove those are safe.
+    /// </summary>
+    private static bool IsProvablyStatelessCustomProvider(ISymbol symbol, Compilation compilation)
+    {
+        var syntax = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        var initializer = syntax switch
+        {
+            VariableDeclaratorSyntax variable => variable.Initializer?.Value,
+            PropertyDeclarationSyntax property => property.Initializer?.Value,
+            _ => null,
+        };
+
+        if (initializer is not (ObjectCreationExpressionSyntax or ImplicitObjectCreationExpressionSyntax))
+        {
+            return false;
+        }
+
+#pragma warning disable RS1030
+        var semanticModel = compilation.GetSemanticModel(initializer.SyntaxTree);
+#pragma warning restore RS1030
+        if (semanticModel.GetTypeInfo(initializer).Type is not INamedTypeSymbol providerType ||
+            IsFrameworkType(providerType))
+        {
+            return false;
+        }
+
+        for (var current = providerType;
+             current is not null && current.SpecialType != SpecialType.System_Object;
+             current = current.BaseType)
+        {
+            if (current.GetMembers().OfType<IFieldSymbol>().Any(field =>
+                    !field.IsStatic && !field.IsImplicitlyDeclared) ||
+                current.GetMembers().OfType<IPropertySymbol>().Any(property =>
+                    !property.IsStatic && !property.IsImplicitlyDeclared))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool TryGetStaticCacheTypeName(

@@ -1,0 +1,43 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: ThreeMammals/Ocelot
+# commit: 80268bc9a950cd4544e70d9582374ca55fc6029f
+# target: Ocelot.slnx
+# excludes: benchmark
+# exit: 0
+DI007 src/Configuration/Creator/ConfigurationCreator.cs:34:22
+DI007 src/Configuration/Creator/HttpHandlerOptionsCreator.cs:11:22
+DI007 src/Configuration/Validator/FileConfigurationFluentValidator.cs:19:44
+DI007 src/Configuration/Validator/FileQoSOptionsFluentValidator.cs:28:28
+DI007 src/DependencyInjection/ServiceCollectionExtensions.cs:87:29
+DI007 src/DownstreamRouteFinder/Finder/DownstreamRouteProviderFactory.cs:15:22
+DI007 src/Logging/OcelotDiagnosticListener.cs:15:19
+DI007 src/Logging/TracingHandlerFactory.cs:16:19
+DI007 src/Middleware/OcelotMiddlewareExtensions.cs:128:13
+DI007 src/Middleware/OcelotMiddlewareExtensions.cs:129:24
+DI007 src/Middleware/OcelotMiddlewareExtensions.cs:130:34
+DI007 src/Multiplexer/ServiceLocatorDefinedAggregatorProvider.cs:13:24
+DI007 src/QualityOfService/QualityOfServiceFactory.cs:31:22
+DI007 src/Requester/DelegatingHandlerFactory.cs:29:40
+DI007 src/Requester/DelegatingHandlerFactory.cs:31:37
+DI007 src/Requester/HttpExceptionToErrorMapper.cs:15:20
+DI007 src/ServiceDiscovery/ServiceDiscoveryProviderFactory.cs:20:22
+DI008 src/DependencyInjection/OcelotBuilder.cs:292:13
+DI010 src/DependencyInjection/OcelotBuilder.cs:65:9
+DI010 src/DependencyInjection/OcelotBuilder.cs:66:9
+DI010 src/DependencyInjection/OcelotBuilder.cs:69:9
+DI011 src/DependencyInjection/Features.cs:40:108
+DI011 src/DependencyInjection/Features.cs:96:92
+DI011 src/DependencyInjection/OcelotBuilder.cs:102:9
+DI011 src/DependencyInjection/OcelotBuilder.cs:117:9
+DI011 src/DependencyInjection/OcelotBuilder.cs:120:9
+DI011 src/DependencyInjection/OcelotBuilder.cs:69:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:216:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:310:13
+DI012b src/DependencyInjection/OcelotBuilder.cs:318:13
+DI012b src/DependencyInjection/OcelotBuilder.cs:373:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:81:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:82:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:83:9
+DI012b src/DependencyInjection/OcelotBuilder.cs:97:9
+DI014 src/DependencyInjection/ServiceCollectionExtensions.cs:86:24
+DI016 src/DependencyInjection/ServiceCollectionExtensions.cs:86:64

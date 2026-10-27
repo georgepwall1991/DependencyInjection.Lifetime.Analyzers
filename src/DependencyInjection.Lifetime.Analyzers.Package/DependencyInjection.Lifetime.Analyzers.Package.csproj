@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The analyzer project's version is the single source of truth. This pack project adds the
+       profiles and rule docs to the analyzer assembly without a second number to bump. -->
+  <PropertyGroup>
+    <_DiAnalyzerProject>$(MSBuildThisFileDirectory)..\DependencyInjection.Lifetime.Analyzers\DependencyInjection.Lifetime.Analyzers.csproj</_DiAnalyzerProject>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_DiAnalyzerProject)')), '(?&lt;=&lt;Version&gt;)[^&lt;]+').Value)</Version>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>DependencyInjection.Lifetime.Analyzers</PackageId>
+    <Title>DependencyInjection Lifetime Analyzers — captive dependency and scope leak analyzer</Title>
+    <Authors>George Wall</Authors>
+    <Copyright>Copyright (c) 2024-2026 George Wall</Copyright>
+    <Description>Compile-time dependency injection lifetime analyzer for Microsoft.Extensions.DependencyInjection: Roslyn diagnostics for captive dependencies, DI scope leaks, BuildServiceProvider misuse, service locator usage, circular dependencies, and unresolvable services in ASP.NET Core and .NET apps—before runtime.</Description>
+    <PackageTags>dependency-injection;di;ioc;lifetime;service-lifetime;singleton;scoped;transient;captive-dependency;scope-leak;CreateScope;CreateAsyncScope;BuildServiceProvider;IServiceCollection;IServiceProvider;IServiceScope;service-locator;ActivatorUtilities;microsoft-extensions-dependencyinjection;aspnetcore;roslyn;roslyn-analyzer;analyzers;static-analysis;code-fix;compile-time;csharp;dotnet</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Adds the di-scan tool, starter .editorconfig profiles, per-rule docs, a 12-repository pinned scan corpus, and test-code suppression. Narrows DI001, DI006, and DI015 false positives found on real repositories.</PackageReleaseNotes>
+    <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DependencyInjection.Lifetime.Analyzers\DependencyInjection.Lifetime.Analyzers.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\..\icon.png" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\**\*" Pack="true" PackagePath="assets\" />
+    <None Include="..\..\profiles\*.editorconfig" Pack="true" PackagePath="contentFiles/any/any/profiles" />
+    <None Include="..\..\docs\rules\*.md" Pack="true" PackagePath="docs/rules\" />
+    <None Include="..\DependencyInjection.Lifetime.Analyzers\bin\$(Configuration)\netstandard2.0\DependencyInjection.Lifetime.Analyzers.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+</Project>

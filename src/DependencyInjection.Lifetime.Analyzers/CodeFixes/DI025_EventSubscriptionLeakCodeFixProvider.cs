@@ -152,67 +152,67 @@ public sealed class DI025_EventSubscriptionLeakCodeFixProvider : CodeFixProvider
         switch (equivalenceKey)
         {
             case AddUnsubscribeEquivalenceKey:
-            {
-                var usable = FindUsableExistingDispose(containingType, semanticModel, cancellationToken);
-                return usable is not null ? (FixStrategy.InsertIntoExisting, usable) : (FixStrategy.None, null);
-            }
+                {
+                    var usable = FindUsableExistingDispose(containingType, semanticModel, cancellationToken);
+                    return usable is not null ? (FixStrategy.InsertIntoExisting, usable) : (FixStrategy.None, null);
+                }
 
             case AddDisposeEquivalenceKey:
-            {
-                // The container disposes the service through IDisposable.Dispose(); a base with
-                // the Dispose()/Dispose(bool) shape but no IDisposable contract is never disposed,
-                // so overriding the hook would be a fake repair. The dispatch proof also has to
-                // bind to THIS hook, not some other Dispose(bool) the pattern never reaches.
-                if (!ImplementsInterface(typeSymbol, "System.IDisposable") ||
-                    FindOverridableBaseDisposeBool(typeSymbol) is not { } hook ||
-                    !BaseDisposeDispatchesToBoolHook(typeSymbol, hook, semanticModel.Compilation, cancellationToken))
                 {
-                    return (FixStrategy.None, null);
-                }
+                    // The container disposes the service through IDisposable.Dispose(); a base with
+                    // the Dispose()/Dispose(bool) shape but no IDisposable contract is never disposed,
+                    // so overriding the hook would be a fake repair. The dispatch proof also has to
+                    // bind to THIS hook, not some other Dispose(bool) the pattern never reaches.
+                    if (!ImplementsInterface(typeSymbol, "System.IDisposable") ||
+                        FindOverridableBaseDisposeBool(typeSymbol) is not { } hook ||
+                        !BaseDisposeDispatchesToBoolHook(typeSymbol, hook, semanticModel.Compilation, cancellationToken))
+                    {
+                        return (FixStrategy.None, null);
+                    }
 
-                var ownOverride = FindOwnDisposeBoolOverride(containingType);
-                if (ownOverride is not null)
-                {
-                    return (FixStrategy.InsertIntoDisposeBoolOverride, ownOverride);
-                }
+                    var ownOverride = FindOwnDisposeBoolOverride(containingType);
+                    if (ownOverride is not null)
+                    {
+                        return (FixStrategy.InsertIntoDisposeBoolOverride, ownOverride);
+                    }
 
-                // Do not add a second dispose-shaped member if the type already declares one we
-                // could not use here (a different partial, an expression body).
-                return DeclaresOwnDisposeMember(typeSymbol)
-                    ? (FixStrategy.None, null)
-                    : (FixStrategy.CreateDisposeBoolOverride, null);
-            }
-
-            case ImplementIDisposableEquivalenceKey:
-            {
-                // Introducing IDisposable is safe only for a scoped subscriber; a transient that
-                // becomes IDisposable is the DI008 disposable-transient-capture shape.
-                if (subscriberLifetime != "Scoped")
-                {
-                    return (FixStrategy.None, null);
-                }
-
-                var implementsIDisposable = ImplementsInterface(typeSymbol, "System.IDisposable");
-                var implementsIAsyncDisposable = ImplementsInterface(typeSymbol, "System.IAsyncDisposable");
-
-                if (!implementsIDisposable && !implementsIAsyncDisposable)
-                {
+                    // Do not add a second dispose-shaped member if the type already declares one we
+                    // could not use here (a different partial, an expression body).
                     return DeclaresOwnDisposeMember(typeSymbol)
                         ? (FixStrategy.None, null)
-                        : (FixStrategy.ImplementInterface, null);
+                        : (FixStrategy.CreateDisposeBoolOverride, null);
                 }
 
-                // Continuation: a prior fix-all iteration already added IDisposable to THIS
-                // declaration (not inherited from a base) plus a parameterless Dispose — merge
-                // into it rather than trying to add the interface again.
-                if (implementsIDisposable && !InheritsDisposalContract(typeSymbol) &&
-                    FindOwnParameterlessDispose(containingType) is { } ownDispose)
+            case ImplementIDisposableEquivalenceKey:
                 {
-                    return (FixStrategy.InsertIntoImplementedDispose, ownDispose);
-                }
+                    // Introducing IDisposable is safe only for a scoped subscriber; a transient that
+                    // becomes IDisposable is the DI008 disposable-transient-capture shape.
+                    if (subscriberLifetime != "Scoped")
+                    {
+                        return (FixStrategy.None, null);
+                    }
 
-                return (FixStrategy.None, null);
-            }
+                    var implementsIDisposable = ImplementsInterface(typeSymbol, "System.IDisposable");
+                    var implementsIAsyncDisposable = ImplementsInterface(typeSymbol, "System.IAsyncDisposable");
+
+                    if (!implementsIDisposable && !implementsIAsyncDisposable)
+                    {
+                        return DeclaresOwnDisposeMember(typeSymbol)
+                            ? (FixStrategy.None, null)
+                            : (FixStrategy.ImplementInterface, null);
+                    }
+
+                    // Continuation: a prior fix-all iteration already added IDisposable to THIS
+                    // declaration (not inherited from a base) plus a parameterless Dispose — merge
+                    // into it rather than trying to add the interface again.
+                    if (implementsIDisposable && !InheritsDisposalContract(typeSymbol) &&
+                        FindOwnParameterlessDispose(containingType) is { } ownDispose)
+                    {
+                        return (FixStrategy.InsertIntoImplementedDispose, ownDispose);
+                    }
+
+                    return (FixStrategy.None, null);
+                }
 
             default:
                 return (FixStrategy.None, null);

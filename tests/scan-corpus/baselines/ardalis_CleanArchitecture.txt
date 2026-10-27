@@ -1,0 +1,12 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: ardalis/CleanArchitecture
+# commit: e7c79be54ba0b001a5b332c1efe935f520b9db4b
+# target: Clean.Architecture.slnx
+# exit: 0
+DI005 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:60:23
+DI005 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:91:23
+DI007 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:62:18
+DI007 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:67:21
+DI007 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:93:18
+DI007 src/Clean.Architecture.Web/Configurations/MiddlewareConfig.cs:98:21
+DI031 src/Clean.Architecture.Infrastructure/InfrastructureServiceExtensions.cs:48:5

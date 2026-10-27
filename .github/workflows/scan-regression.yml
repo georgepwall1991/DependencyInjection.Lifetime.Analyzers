@@ -1,0 +1,44 @@
+name: Scan regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Cache pinned repositories
+        uses: actions/cache@v4
+        with:
+          path: artifacts/scan-corpus/repos
+          key: ${{ runner.os }}-scan-corpus-${{ hashFiles('tests/scan-corpus/corpus.json') }}
+          restore-keys: |
+            ${{ runner.os }}-scan-corpus-
+
+      - name: Scan the pinned corpus
+        run: pwsh ./scripts/Invoke-ScanRegression.ps1
+
+      - name: Upload scan artifacts on drift
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-regression-artifacts
+          path: artifacts/scan-corpus
+          retention-days: 7

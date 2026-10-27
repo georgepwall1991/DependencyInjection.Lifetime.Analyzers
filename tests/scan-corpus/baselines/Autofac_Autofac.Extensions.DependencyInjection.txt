@@ -1,0 +1,7 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: Autofac/Autofac.Extensions.DependencyInjection
+# commit: 206de12cc40baa58cc6f807e005f99d2e44c1ae4
+# target: Autofac.Extensions.DependencyInjection.sln
+# exit: 0
+DI007 bench/Autofac.Extensions.DependencyInjection.Bench/KeyedResolutionBenchmark.cs:52:16
+DI007 bench/Autofac.Extensions.DependencyInjection.Bench/KeyedResolutionBenchmark.cs:70:16

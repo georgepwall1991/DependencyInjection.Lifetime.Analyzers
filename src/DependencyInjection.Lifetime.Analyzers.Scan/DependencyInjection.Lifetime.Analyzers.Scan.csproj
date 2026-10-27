@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The analyzer package's version is the single source of truth, so the scanner ships under
+       the same version without a second number to bump. -->
+  <PropertyGroup>
+    <_DiAnalyzerProject>$(MSBuildThisFileDirectory)..\DependencyInjection.Lifetime.Analyzers\DependencyInjection.Lifetime.Analyzers.csproj</_DiAnalyzerProject>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_DiAnalyzerProject)')), '(?&lt;=&lt;Version&gt;)[^&lt;]+').Value)</Version>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>di-scan</ToolCommandName>
+    <PackageId>DependencyInjection.Lifetime.Analyzers.Scan</PackageId>
+    <Title>DI Scan — scan a .NET solution for dependency injection lifetime problems</Title>
+    <Authors>George Wall</Authors>
+    <Copyright>Copyright (c) George Wall and contributors 2026</Copyright>
+    <Description>Scan any .NET solution for Microsoft.Extensions.DependencyInjection lifetime problems without changing its project files. DI Scan builds the solution with the DependencyInjection.Lifetime.Analyzers analyzers injected, then reports the rules that fired, where they fired, and the surrounding source, with SARIF, HTML, and Markdown output for false-positive triage and CI.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>
+    <PackageTags>dependency-injection;di;ioc;lifetime;singleton;scoped;transient;captive-dependency;roslyn;analyzer;dotnet-tool;sarif;code-scanning;static-analysis;false-positives</PackageTags>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Initial di-scan release: scan any .NET solution with DependencyInjection.Lifetime.Analyzers injected, with SARIF, Markdown, and HTML output, SARIF/text baselines, and CI-friendly severity gates.</PackageReleaseNotes>
+
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugType>embedded</DebugType>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\icon.png" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="DependencyInjection.Lifetime.Analyzers.Tests" />
+  </ItemGroup>
+
+  <!-- Build the analyzer first and ship its assembly inside the tool, so a scan needs no package
+       restore and always runs the analyzers this tool version was released with. -->
+  <ItemGroup>
+    <ProjectReference Include="..\DependencyInjection.Lifetime.Analyzers\DependencyInjection.Lifetime.Analyzers.csproj" ReferenceOutputAssembly="false" OutputItemType="_DiAnalyzerAssembly" />
+  </ItemGroup>
+
+  <Target Name="_IncludeDiAnalyzer" AfterTargets="ResolveProjectReferences" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <None Include="@(_DiAnalyzerAssembly)" Link="analyzer\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>

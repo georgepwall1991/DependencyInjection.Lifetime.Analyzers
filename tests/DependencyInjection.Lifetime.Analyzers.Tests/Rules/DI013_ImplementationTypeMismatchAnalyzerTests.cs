@@ -65,7 +65,7 @@ public class Startup
         services.AddSingleton(typeof(IService), typeof(string));
     }
 }";
-        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source, 
+        await AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>.VerifyDiagnosticsAsync(source,
             AnalyzerVerifier<DI013_ImplementationTypeMismatchAnalyzer>
                 .Diagnostic(DiagnosticDescriptors.ImplementationTypeMismatch)
                 .WithLocation(13, 9)
@@ -117,7 +117,7 @@ public class Startup
                 .WithLocation(13, 9)
                 .WithArguments("List", "IRepo"));
     }
-    
+
     [Fact]
     public async Task InvalidMixedOpenClosed_ReportsDiagnostic()
     {

@@ -596,61 +596,61 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
         switch (access.Parent)
         {
             case MemberAccessExpressionSyntax memberAccess when memberAccess.Expression == access:
-            {
-                var memberName = memberAccess.Name.Identifier.ValueText;
-
-                // A Count or Length read is how a hand-rolled cap is written, so it proves the
-                // store may be bounded. Silencing metric reads with it is an accepted trade.
-                if (memberName is "Count" or "Length")
                 {
+                    var memberName = memberAccess.Name.Identifier.ValueText;
+
+                    // A Count or Length read is how a hand-rolled cap is written, so it proves the
+                    // store may be bounded. Silencing metric reads with it is an accepted trade.
+                    if (memberName is "Count" or "Length")
+                    {
+                        return FieldReferenceKind.Disqualifying;
+                    }
+
+                    if (PureReadNames.Contains(memberName))
+                    {
+                        return FieldReferenceKind.PureRead;
+                    }
+
+                    if (
+                        GrowthMethodNames.Contains(memberName)
+                        && memberAccess.Parent is InvocationExpressionSyntax invocation
+                    )
+                    {
+                        keyExpression = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+                        if (keyExpression is null)
+                        {
+                            return FieldReferenceKind.Disqualifying;
+                        }
+
+                        // The whole call rather than just the member access: the diagnostic should span
+                        // the key that makes the growth unbounded.
+                        reportNode = invocation;
+                        return FieldReferenceKind.Growth;
+                    }
+
                     return FieldReferenceKind.Disqualifying;
                 }
 
-                if (PureReadNames.Contains(memberName))
+            case ElementAccessExpressionSyntax elementAccess
+                when elementAccess.Expression == access:
                 {
-                    return FieldReferenceKind.PureRead;
-                }
+                    var isWrite =
+                        elementAccess.Parent is AssignmentExpressionSyntax assignment
+                        && assignment.Left == elementAccess;
+                    if (!isWrite)
+                    {
+                        return FieldReferenceKind.PureRead;
+                    }
 
-                if (
-                    GrowthMethodNames.Contains(memberName)
-                    && memberAccess.Parent is InvocationExpressionSyntax invocation
-                )
-                {
-                    keyExpression = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+                    keyExpression = elementAccess.ArgumentList.Arguments.FirstOrDefault()?.Expression;
                     if (keyExpression is null)
                     {
                         return FieldReferenceKind.Disqualifying;
                     }
 
-                    // The whole call rather than just the member access: the diagnostic should span
-                    // the key that makes the growth unbounded.
-                    reportNode = invocation;
+                    reportNode = elementAccess.Parent;
                     return FieldReferenceKind.Growth;
                 }
-
-                return FieldReferenceKind.Disqualifying;
-            }
-
-            case ElementAccessExpressionSyntax elementAccess
-                when elementAccess.Expression == access:
-            {
-                var isWrite =
-                    elementAccess.Parent is AssignmentExpressionSyntax assignment
-                    && assignment.Left == elementAccess;
-                if (!isWrite)
-                {
-                    return FieldReferenceKind.PureRead;
-                }
-
-                keyExpression = elementAccess.ArgumentList.Arguments.FirstOrDefault()?.Expression;
-                if (keyExpression is null)
-                {
-                    return FieldReferenceKind.Disqualifying;
-                }
-
-                reportNode = elementAccess.Parent;
-                return FieldReferenceKind.Growth;
-            }
 
             default:
                 _ = model;
@@ -946,30 +946,30 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             switch (node)
             {
                 case IdentifierNameSyntax identifier:
-                {
-                    var symbol = model.GetSymbolInfo(identifier, cancellationToken).Symbol;
-                    if (symbol is IParameterSymbol { IsThis: false } parameter)
                     {
-                        keyDescription = $"the '{parameter.Name}' parameter";
-                        return true;
-                    }
+                        var symbol = model.GetSymbolInfo(identifier, cancellationToken).Symbol;
+                        if (symbol is IParameterSymbol { IsThis: false } parameter)
+                        {
+                            keyDescription = $"the '{parameter.Name}' parameter";
+                            return true;
+                        }
 
-                    continue;
-                }
+                        continue;
+                    }
 
                 // Guid.NewGuid() and DateTime.UtcNow have no parameter root but are provably distinct
                 // on every call, so they grow the store exactly like caller input does.
                 case MemberAccessExpressionSyntax memberAccess:
-                {
-                    var name = memberAccess.Name.Identifier.ValueText;
-                    if (name is "NewGuid" or "UtcNow" or "Now")
                     {
-                        keyDescription = $"'{memberAccess}'";
-                        return true;
-                    }
+                        var name = memberAccess.Name.Identifier.ValueText;
+                        if (name is "NewGuid" or "UtcNow" or "Now")
+                        {
+                            keyDescription = $"'{memberAccess}'";
+                            return true;
+                        }
 
-                    continue;
-                }
+                        continue;
+                    }
             }
         }
 
@@ -1006,20 +1006,20 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             // options.SizeLimit = 1024;
             case MemberAccessExpressionSyntax memberAccess
                 when memberAccess.Name.Identifier.ValueText == "SizeLimit":
-            {
-                var ownerType = context
-                    .SemanticModel.GetTypeInfo(memberAccess.Expression, context.CancellationToken)
-                    .Type;
-                if (
-                    wellKnownTypes.IsMemoryCacheOptions(ownerType)
-                    && AssignsNonNullLimit(assignment.Right, context)
-                )
                 {
-                    cacheHasGlobalSizeLimit.Value = true;
-                }
+                    var ownerType = context
+                        .SemanticModel.GetTypeInfo(memberAccess.Expression, context.CancellationToken)
+                        .Type;
+                    if (
+                        wellKnownTypes.IsMemoryCacheOptions(ownerType)
+                        && AssignsNonNullLimit(assignment.Right, context)
+                    )
+                    {
+                        cacheHasGlobalSizeLimit.Value = true;
+                    }
 
-                return;
-            }
+                    return;
+                }
 
         }
     }
@@ -1326,47 +1326,47 @@ public sealed class DI030_UnboundedSingletonCacheAnalyzer : DiagnosticAnalyzer
             switch (node)
             {
                 case AssignmentExpressionSyntax assignment:
-                {
-                    if (assignment.Right.IsKind(SyntaxKind.NullLiteralExpression))
                     {
-                        continue;
-                    }
+                        if (assignment.Right.IsKind(SyntaxKind.NullLiteralExpression))
+                        {
+                            continue;
+                        }
 
-                    var (target, receiver) = assignment.Left switch
-                    {
-                        // Object-initializer form: the receiver is the object being constructed.
-                        IdentifierNameSyntax identifier when
-                            assignment.Parent is InitializerExpressionSyntax =>
-                            (identifier.Identifier.ValueText, (string?)null),
-                        MemberAccessExpressionSyntax memberAccess => (
-                            memberAccess.Name.Identifier.ValueText,
-                            (memberAccess.Expression as IdentifierNameSyntax)?.Identifier.ValueText
-                        ),
-                        _ => (null, null),
-                    };
+                        var (target, receiver) = assignment.Left switch
+                        {
+                            // Object-initializer form: the receiver is the object being constructed.
+                            IdentifierNameSyntax identifier when
+                                assignment.Parent is InitializerExpressionSyntax =>
+                                (identifier.Identifier.ValueText, (string?)null),
+                            MemberAccessExpressionSyntax memberAccess => (
+                                memberAccess.Name.Identifier.ValueText,
+                                (memberAccess.Expression as IdentifierNameSyntax)?.Identifier.ValueText
+                            ),
+                            _ => (null, null),
+                        };
 
-                    if (
-                        target
-                        is not (
-                            "AbsoluteExpiration"
-                            or "AbsoluteExpirationRelativeToNow"
-                            or "SlidingExpiration"
-                            or "Size"
+                        if (
+                            target
+                            is not (
+                                "AbsoluteExpiration"
+                                or "AbsoluteExpirationRelativeToNow"
+                                or "SlidingExpiration"
+                                or "Size"
+                            )
                         )
-                    )
-                    {
+                        {
+                            continue;
+                        }
+
+                        // Inside a factory the receiver must be the entry parameter; in an initializer
+                        // there is no receiver to check.
+                        if (entryParameterName is null || receiver == entryParameterName)
+                        {
+                            return true;
+                        }
+
                         continue;
                     }
-
-                    // Inside a factory the receiver must be the entry parameter; in an initializer
-                    // there is no receiver to check.
-                    if (entryParameterName is null || receiver == entryParameterName)
-                    {
-                        return true;
-                    }
-
-                    continue;
-                }
 
                 case InvocationExpressionSyntax invocation
                     when invocation.Expression is MemberAccessExpressionSyntax call

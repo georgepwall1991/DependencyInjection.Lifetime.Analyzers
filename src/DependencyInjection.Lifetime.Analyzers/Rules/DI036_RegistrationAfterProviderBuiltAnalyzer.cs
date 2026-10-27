@@ -642,7 +642,9 @@ public sealed class DI036_RegistrationAfterProviderBuiltAnalyzer : DiagnosticAna
             return false;
         }
 
+#pragma warning disable RS1030
         var nestedModel = compilation.GetSemanticModel(invocation.SyntaxTree);
+#pragma warning restore RS1030
 
         if (nestedModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol nestedMethod)
         {

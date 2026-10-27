@@ -126,7 +126,8 @@ public class DI015_UnresolvableDependencyAnalyzerTests
         namespace Microsoft.EntityFrameworkCore
         {
             public class DbContext { }
-            public class DbContextOptions<TContext> where TContext : DbContext { }
+            public class DbContextOptions { }
+            public class DbContextOptions<TContext> : DbContextOptions where TContext : DbContext { }
             public class DbContextOptionsBuilder { }
             public interface IDbContextFactory<TContext> where TContext : DbContext
             {
@@ -3903,6 +3904,48 @@ public class DI015_UnresolvableDependencyAnalyzerTests
     }
 
     [Fact]
+    public async Task RegisteredService_WithAddDbContextAndNonGenericOptionsBase_NoDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public sealed class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions options) { }
+            }
+
+            public static class Registration
+            {
+                public static void Register(IServiceCollection services)
+                {
+                    services.AddDbContext<MyDbContext>();
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
+    }
+
+    [Fact]
+    public async Task RegisteredService_WithNonGenericOptionsAndNoDbContextRegistration_ReportsDiagnostic()
+    {
+        var source = Usings + EfCoreStubs + """
+            public sealed class MyDbContext : Microsoft.EntityFrameworkCore.DbContext
+            {
+                public MyDbContext(Microsoft.EntityFrameworkCore.DbContextOptions options) { }
+            }
+
+            public static class Registration
+            {
+                public static void Register(IServiceCollection services)
+                {
+                    [|services.AddSingleton<MyDbContext>()|];
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyDiagnosticsAsync(source);
+    }
+
+    [Fact]
     public async Task RegisteredService_WithAddDbContextFactoryDependencies_NoDiagnostic()
     {
         var source = Usings + EfCoreStubs + """
@@ -5076,6 +5119,27 @@ public class DI015_UnresolvableDependencyAnalyzerTests
 
         stream.Position = 0;
         return MetadataReference.CreateFromStream(stream);
+    }
+
+    [Fact]
+    public async Task DoesNotReportTypeParameterDependencies()
+    {
+        var source = Usings + """
+            public sealed class Wrapper<TBus> where TBus : class
+            {
+                public Wrapper(TBus bus) { }
+            }
+
+            public static class Registration
+            {
+                public static void Register(IServiceCollection services)
+                {
+                    services.AddSingleton(typeof(Wrapper<>), typeof(Wrapper<>));
+                }
+            }
+            """;
+
+        await AnalyzerVerifier<DI015_UnresolvableDependencyAnalyzer>.VerifyNoDiagnosticsAsync(source);
     }
 
     private static CSharpCompilation CreateCompilation(string source, params MetadataReference[] additionalReferences)

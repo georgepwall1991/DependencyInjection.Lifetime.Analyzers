@@ -63,9 +63,9 @@ internal static class FactoryAnalysis
             return null;
         }
 
-        #pragma warning disable RS1030
+#pragma warning disable RS1030
         return compilation.GetSemanticModel(node.SyntaxTree);
-        #pragma warning restore RS1030
+#pragma warning restore RS1030
     }
 
     public static bool TryGetActivatorUtilitiesImplementationType(

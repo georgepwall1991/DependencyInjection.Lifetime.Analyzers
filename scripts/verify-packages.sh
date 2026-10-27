@@ -5,11 +5,27 @@ package_dir="${1:-artifacts/packages}"
 release_notes_file="${2:-}"
 analyzer_version="$(dotnet msbuild src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj -getProperty:Version -nologo | tr -d '[:space:]')"
 analyzer_package="$package_dir/DependencyInjection.Lifetime.Analyzers.$analyzer_version.nupkg"
+scanner_package="$package_dir/DependencyInjection.Lifetime.Analyzers.Scan.$analyzer_version.nupkg"
 
 if [[ ! -f "$analyzer_package" ]]; then
   echo "Missing analyzer package: $analyzer_package" >&2
   exit 1
 fi
+
+if [[ ! -f "$scanner_package" ]]; then
+  echo "Missing scanner package: $scanner_package" >&2
+  exit 1
+fi
+
+# The scanner tool must carry the analyzer it was built against and expose di-scan.
+unzip -l "$scanner_package" | grep "tools/net8.0/any/analyzer/DependencyInjection.Lifetime.Analyzers.dll" > /dev/null || {
+  echo "Scanner package is missing the embedded analyzer." >&2
+  exit 1
+}
+unzip -p "$scanner_package" tools/net8.0/any/DotnetToolSettings.xml | grep 'Command Name="di-scan"' > /dev/null || {
+  echo "Scanner package does not expose the di-scan command." >&2
+  exit 1
+}
 
 cmp README.md <(unzip -p "$analyzer_package" README.md)
 
@@ -23,7 +39,7 @@ do
 done
 
 # Docs-site-only assets must not ride along in the package consumers download.
-if unzip -l "$analyzer_package" | grep -q "social-card"; then
+if unzip -l "$analyzer_package" | grep "social-card" > /dev/null; then
   echo "Analyzer package contains docs-site-only social card assets; keep them in site-assets/." >&2
   exit 1
 fi

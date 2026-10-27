@@ -66,6 +66,7 @@ $RECYCLE.BIN/
 
 # Test results
 TestResults/
+StrykerOutput/
 coverage/
 *.coverage
 *.coveragexml

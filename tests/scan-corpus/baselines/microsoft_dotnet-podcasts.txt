@@ -1,0 +1,9 @@
+# DI scan regression baseline. Regenerate with scripts/Invoke-ScanRegression.ps1 -UpdateBaselines.
+# repository: microsoft/dotnet-podcasts
+# commit: 5ee8be2990b81eb681bbd100875c263aaa5ab68a
+# target: NetPodcast.Services.sln
+# exit: 0
+DI005 src/Services/ListenTogether/ListenTogether.Hub/Program.cs:26:26
+DI005 src/Services/Podcasts/Podcast.API/Program.cs:191:26
+DI005 src/Services/Podcasts/Podcast.Ingestion.Worker/Worker.cs:26:35
+DI005 src/Services/Podcasts/Podcast.Updater.Worker/Worker.cs:21:32

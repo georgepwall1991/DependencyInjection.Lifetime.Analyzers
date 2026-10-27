@@ -48,14 +48,35 @@ jobs:
       - name: Verify version-synced README install snippets
         run: node tools/generate-growth-assets.mjs sync-readme --check
 
+      - name: Verify generated rule docs and profiles
+        run: node tools/generate-rule-assets.mjs --check
+
       - name: Restore dependencies
         run: dotnet restore
 
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
+      - name: Verify formatting
+        run: dotnet format DependencyInjection.Lifetime.Analyzers.sln --verify-no-changes --exclude samples
+
+      - name: Validate repository invariants
+        run: pwsh ./scripts/Validate-Repository.ps1
+
       - name: Test with coverage
         run: dotnet test --no-build --configuration Release --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+      - name: Validate sample diagnostics
+        run: pwsh ./scripts/Validate-SampleDiagnostics.ps1 -NoRestore
+
+      - name: Validate package contents
+        run: pwsh ./scripts/Validate-Package.ps1
+
+      - name: Validate analyzer package consumption
+        run: pwsh ./scripts/Validate-AnalyzerConsumption.ps1
+
+      - name: Validate scanner tool consumption
+        run: pwsh ./scripts/Validate-ScannerConsumption.ps1
 
       - name: Generate coverage report
         uses: danielpalme/ReportGenerator-GitHub-Action@5
@@ -117,15 +138,22 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: node tools/generate-growth-assets.mjs release-notes --version "${GITHUB_REF_NAME#v}" --output-dir ./artifacts/release-notes
 
-      - name: Pack branch package
+      - name: Pack branch packages
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: dotnet pack --no-build --configuration Release --output ./artifacts
+        run: |
+          dotnet pack src/DependencyInjection.Lifetime.Analyzers.Package/DependencyInjection.Lifetime.Analyzers.Package.csproj --no-build --configuration Release --output ./artifacts
+          dotnet pack src/DependencyInjection.Lifetime.Analyzers.Scan/DependencyInjection.Lifetime.Analyzers.Scan.csproj --no-build --configuration Release --output ./artifacts
 
-      - name: Pack release candidate package
+      - name: Pack release candidate packages
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           node tools/pack-package-with-release-notes.mjs \
-            --project src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj \
+            --project src/DependencyInjection.Lifetime.Analyzers.Package/DependencyInjection.Lifetime.Analyzers.Package.csproj \
+            --configuration Release \
+            --output ./artifacts \
+            --release-notes-file ./artifacts/release-notes/package-release-notes.txt
+          node tools/pack-package-with-release-notes.mjs \
+            --project src/DependencyInjection.Lifetime.Analyzers.Scan/DependencyInjection.Lifetime.Analyzers.Scan.csproj \
             --configuration Release \
             --output ./artifacts \
             --release-notes-file ./artifacts/release-notes/package-release-notes.txt
