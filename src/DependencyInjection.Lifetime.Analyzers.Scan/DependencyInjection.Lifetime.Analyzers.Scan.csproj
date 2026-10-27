@@ -31,7 +31,7 @@
     <PackageTags>dependency-injection;di;scanner;dependency-injection-scanner;dotnet-scan;ioc;lifetime;singleton;scoped;transient;captive-dependency;scope-leak;roslyn;roslyn-analyzer;analyzer;dotnet-tool;di-scan;sarif;code-scanning;static-analysis;false-positives;ci;github-actions;microsoft-extensions-dependencyinjection;aspnetcore;worker-service</PackageTags>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">NuGet discovery polish: adds scanner/dependency-injection-scanner/dotnet-scan tags and fixes the scanner page install CTA. No behavior changes.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Adds --fix to apply safe code fixes with dotnet format and --update-baseline to write a reusable text baseline. No analyzer behavior changes.</PackageReleaseNotes>
 
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>

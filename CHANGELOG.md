@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-10-27
+
+### Added
+
+- `di-scan --fix` applies the rules' safe code fixes with `dotnet format` before scanning.
+- `di-scan --update-baseline <file>` writes the current findings as a text baseline; `--baseline` reads it back.
+- A Windows/macOS CI matrix exercises scanner path handling, package contents, and tool consumption.
+- Dedicated false-positive and false-negative issue forms, Dependabot updates, and CODEOWNERS.
+- Dedicated scanner, engineering-note, and upgrading pages on the docs site, plus a real HTML-report screenshot.
+
+### Changed
+
+- The mutation gate is split into a suppressor shard and a shared-resolution-helper shard, both at the 80% break threshold.
+- Cross-project composition is documented as a known boundary with concrete mitigations.
+
 ## [3.9.3] - 2026-10-27
 
 ### Changed
