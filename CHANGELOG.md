@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Strengthened the shared-resolution-helper mutation gate from 80.00% to 94.92% with direct tests for assignability, constructor selection, and keyed-service extraction. The nullable assignability check is now expressed as explicit guards; no analyzer behavior changes.
+
 ## [3.10.0] - 2026-10-27
 
 ### Added
