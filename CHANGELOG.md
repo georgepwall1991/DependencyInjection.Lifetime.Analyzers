@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-10-27
+
+### Changed
+
+- The NuGet package README is now a concise, scanner-focused page instead of the full 146 KB GitHub README. The complete rule reference remains on the docs site and in the repository.
+- The docs site adds a dedicated `di-scan` scanner page, with sitemap, search-index, `llms.txt`, and SoftwareApplication structured data.
+- The scanner package README now includes the 14-repository / 471-finding proof and the scanner guide.
+- GitHub repository description, homepage, and topics now surface `di-scan`, code scanning, and the docs site.
+
 ## [3.9.0] - 2026-10-27
 
 ### Fixed

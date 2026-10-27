@@ -20,7 +20,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Narrows DI001 and DI019 false positives found in real scope wrappers, expands the pinned scan corpus to 14 public repositories, and keeps the di-scan tool, profiles, per-rule docs, and test-code suppression from 3.8.0.</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(PackageReleaseNotes)' == ''">Packaging and documentation release: the NuGet README is now concise and scanner-focused, the docs site has a dedicated di-scan page with search/sitemap/structured data, and GitHub metadata now surfaces the scanner. No analyzer behavior changes.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/</PackageProjectUrl>
