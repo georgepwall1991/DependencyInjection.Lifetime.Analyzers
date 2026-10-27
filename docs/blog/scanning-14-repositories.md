@@ -78,10 +78,10 @@ analysis cannot prove that a future edit will keep it stateless.
 ## The numbers
 
 - 38 shipped rules
-- 3,133 tests
+- 3,164 tests
 - 14 pinned public repositories
 - 471 baseline findings
-- Mutation gates at 80% for the test-code suppressor (95.10%) and shared resolution helpers (80.00%)
+- Mutation gates at 80% for the test-code suppressor (95.10%) and shared resolution helpers (94.92%)
 
 The corpus, triage policy, and every baseline are in
 [docs/scan-regression.md](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md).

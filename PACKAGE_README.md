@@ -96,9 +96,9 @@ The package ships four `.editorconfig` profiles under `profiles/`:
 
 ## Proof, not just a rule list
 
-- **3,133 tests**
+- **3,164 tests**
 - **14 pinned public repositories** and **471 findings** in the scan regression corpus
-- **Mutation gates at 80%** for the test-code suppressor (95.10%) and shared resolution helpers (80.00%)
+- **Mutation gates at 80%** for the test-code suppressor (95.10%) and shared resolution helpers (94.92%)
 - Precision fixes driven by real repositories, including MassTransit, Elsa, IdentityServer, Polly, and dotnet-podcasts
 
 The corpus and triage notes are in [docs/scan-regression.md](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md).

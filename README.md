@@ -153,9 +153,9 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 ## Quality and proof
 
 - **38 shipped rules** with code fixes for the safe, unambiguous cases.
-- **3,133 tests** across analyzer behavior, code fixes, scanner behavior, packaging, and sample contracts.
+- **3,164 tests** across analyzer behavior, code fixes, scanner behavior, packaging, and sample contracts.
 - **14 pinned public repositories** and **471 findings** in the scan regression corpus, including ASP.NET Core apps, framework libraries, workers, open generics, keyed services, and alternate containers.
-- **Mutation gates at 80%** for the test-code suppressor (95.10%) and the shared resolution helpers (80.00%).
+- **Mutation gates at 80%** for the test-code suppressor (95.10%) and the shared resolution helpers (94.92%).
 - Precision fixes driven by real repositories, including MassTransit, Elsa, IdentityServer, Polly, and dotnet-podcasts.
 - The corpus and triage notes are in [docs/scan-regression.md](docs/scan-regression.md); the mutation gate is documented in [docs/mutation-testing.md](docs/mutation-testing.md).
 - Read [How we found 471 DI lifetime findings across 14 public repositories](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/blog/) for the validation loop and the shapes it changed.

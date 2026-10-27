@@ -5,7 +5,9 @@
       "tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj"
     ],
     "mutate": [
-      "**/Infrastructure/ImplementationAssignability.cs"
+      "**/Infrastructure/ImplementationAssignability.cs",
+      "**/Infrastructure/ConstructorSelection.cs",
+      "**/Infrastructure/KeyedServiceHelpers.cs"
     ],
     "thresholds": {
       "high": 80,

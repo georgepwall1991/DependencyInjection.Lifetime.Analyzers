@@ -25,9 +25,14 @@ internal static class ImplementationAssignability
             return true;
         }
 
-        // Runtime Type.IsAssignableFrom treats T as assignable to Nullable<T>.
-        return service.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
-            service.TypeArguments.Length == 1 &&
-            SymbolEqualityComparer.Default.Equals(service.TypeArguments[0], implementation);
+        // Runtime Type.IsAssignableFrom treats T as assignable to Nullable<T>. A closed
+        // Nullable<T> always has exactly one type argument; unbound generics are rejected
+        // before this helper is called.
+        if (service.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T)
+        {
+            return false;
+        }
+
+        return SymbolEqualityComparer.Default.Equals(service.TypeArguments[0], implementation);
     }
 }
