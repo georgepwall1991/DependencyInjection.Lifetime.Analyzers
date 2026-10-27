@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-10-27
+
+### Added
+
+- **`di-scan`**: a .NET tool that builds any solution with the analyzers injected, reports `ruleId path:line:column` with surrounding source, and writes SARIF, Markdown, and HTML. Supports SARIF and text baselines, `--fail-on`, rule/path filters, and GitHub annotations.
+- **Package project**: the analyzer package now ships the four starter `.editorconfig` profiles and one documentation page per rule, generated from the README and analyzer descriptors.
+- **Pinned scan corpus**: 12 public repositories pinned by commit SHA, with a regression harness that fails on new, missing, or changed findings and on build-result drift.
+- **Test-code suppression**: a diagnostic suppressor using the HttpClient analyzer conventions (project names, directories, type/namespace names, base types, and test attributes).
+- **Validation gates**: repository invariants, sample diagnostics, analyzer-package consumption, scanner-tool consumption, and a bounded mutation gate at 80%.
+- **Showcase**: `samples/DependencyInjection.Showcase` demonstrates the six priority failure modes with bad and safe shapes.
+
+### Fixed
+
+- DI001 now recognizes the canonical conditional async-dispose shape and scopes stored in a field and disposed by the owning type's `Dispose`/`DisposeAsync`.
+- DI006 now skips custom, stateless `IServiceProvider` initializers (null-object providers) while still reporting stateful custom providers and framework providers.
+- DI015 now skips type parameters and closed generics containing them, and treats any registered `DbContextOptions<TContext>` as satisfying a non-generic `DbContextOptions` dependency.
+
+### Changed
+
+- Test code is suppressed by the analyzer package instead of producing findings in test projects.
+- The pinned corpus excludes documentation snippets and benchmark-only composition from production baselines; the exclusions are recorded in the manifest and baseline headers.
+
 ## [3.7.8] - 2026-08-12
 
 ### Fixed
