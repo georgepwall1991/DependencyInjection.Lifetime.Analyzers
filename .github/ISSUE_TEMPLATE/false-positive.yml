@@ -1,0 +1,65 @@
+name: False positive
+description: A rule reported a finding that is not a real lifetime or activation bug
+title: "[FP] "
+labels:
+  - false-positive
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A minimal repro and the exact rule output are the fastest path to a fix.
+  - type: input
+    id: rule_id
+    attributes:
+      label: Rule ID
+      description: Which rule fired (for example `DI003`)?
+      placeholder: DI00X
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package or scanner version
+      description: The analyzer package version or `di-scan --version`.
+      placeholder: 3.9.3
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest registrations, constructors, and scope usage that reproduce the finding.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Why this is a false positive
+      description: Explain the lifetime, ownership, or custom API shape the rule should recognize.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Scanner or build output
+      description: Paste the `ruleId path:line:column` line, or attach a SARIF/HTML report.
+      render: text
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where it reproduced
+      multiple: true
+      options:
+        - Visual Studio
+        - Rider
+        - dotnet build / CI
+        - di-scan
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: The code uses Microsoft.Extensions.DependencyInjection, not a custom API that only reuses DI names.
+          required: true
+        - label: I removed or described any test-code suppression involved.

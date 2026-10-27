@@ -37,6 +37,24 @@ The manifest records per-repository excludes and their reason. Current excludes:
 
 There are no wholly excluded repositories at this commit.
 
+## Cross-project composition
+
+The analyzer runs per compilation, so DI015 cannot see a registration added by a downstream
+project. A library that expects `IUser` from the web project, or a feature module that expects a
+service registered by a referenced management project, can report a missing dependency even though
+the application registers it.
+
+This is a known boundary, not a rule bug. Current mitigations:
+
+- Run the scanner against the composition-root project or a solution target that includes the
+  registration.
+- Lower or suppress DI015 in library projects with `.editorconfig`.
+- Record the partial target in `corpus.json` notes, as the IdentityServer, JT CleanArchitecture, and
+  Elsa entries do.
+
+A solution-wide composition index is the next architectural step if cross-project precision becomes
+the dominant source of noise.
+
 ## Triage history
 
 The corpus is not just a scoreboard; each drift review either fixed a rule or recorded why the
@@ -63,6 +81,8 @@ Known intentional baseline noise:
   documented false positive; the scope's owner is outside the analyzed method.
 - **DI032 async-only singleton disposables** are warnings for apps that dispose the provider
   synchronously; a host that calls `DisposeAsync` is safe.
+
+For the narrative version, read [How we found 471 DI lifetime findings across 14 public repositories](../blog/scanning-14-repositories.md).
 
 ## Run it
 

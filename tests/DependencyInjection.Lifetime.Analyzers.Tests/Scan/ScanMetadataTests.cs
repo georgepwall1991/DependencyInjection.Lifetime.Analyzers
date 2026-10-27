@@ -79,6 +79,25 @@ public sealed class ScanMetadataTests
     }
 
     [Fact]
+    public void ScannerFixableRules_MatchTheShippedCodeFixProviders()
+    {
+        var codeFixRoot = Path.Combine(
+            RepoRoot,
+            "src",
+            "DependencyInjection.Lifetime.Analyzers",
+            "CodeFixes"
+        );
+        var providerRules = Directory
+            .GetFiles(codeFixRoot, "*CodeFixProvider.cs")
+            .Select(file => Path.GetFileName(file).Split('_')[0])
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(providerRules, ScanFixer.FixableRules.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void GlobalConfig_SetsEveryRuleToDefault()
     {
         var config = ScanTargets.GlobalConfig();

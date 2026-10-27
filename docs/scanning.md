@@ -30,6 +30,8 @@ dotnet build src/DependencyInjection.Lifetime.Analyzers.Scan/DependencyInjection
 dotnet src/DependencyInjection.Lifetime.Analyzers.Scan/bin/Release/net8.0/DependencyInjection.Lifetime.Analyzers.Scan.dll MyApp.slnx
 ```
 
+![DI Scan HTML report showing DI003, DI006, DI009, DI016, DI019, and DI012b findings with source context](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/di-scan-report.png)
+
 ## What the output contains
 
 - The rule ID, severity, title, and count for every rule that fired.
@@ -49,6 +51,21 @@ type and namespace names, test base types, and test attributes.
 
 ```bash
 di-scan ./MyApp.slnx --rules DI003 --findings all --context 4 --html di003.html
+```
+
+### Apply the safe code fixes first
+
+```bash
+di-scan ./MyApp.slnx --fix --rules DI003,DI005,DI019
+```
+
+`--fix` runs `dotnet format` with the analyzers injected, then scans what remains. Review the diff
+before committing.
+
+### Write a baseline
+
+```bash
+di-scan ./MyApp.slnx --update-baseline di.baseline
 ```
 
 ### Fail CI only on new findings

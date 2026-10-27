@@ -1,0 +1,54 @@
+name: False negative
+description: A real lifetime or activation bug was not reported
+title: "[FN] "
+labels:
+  - false-negative
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The strongest reports show the runtime failure and the smallest source shape that should be provable at compile time.
+  - type: input
+    id: rule_id
+    attributes:
+      label: Expected rule ID
+      description: Which rule should have fired, or which production failure occurred?
+      placeholder: DI00X
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package or scanner version
+      placeholder: 3.9.3
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest registrations, constructors, and resolution path that demonstrates the bug.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Production failure
+      description: What fails at runtime, and under which scope, host, or concurrency conditions?
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Current output
+      description: Paste the relevant `di-scan` or build output, including the absence of the expected rule.
+      render: text
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: The case is provable from registrations, constructors, or scope usage in the compilation.
+          required: true
+        - label: I checked that the code is not test code or a partial cross-project composition root.

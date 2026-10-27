@@ -71,7 +71,10 @@ dotnet tool install -g DependencyInjection.Lifetime.Analyzers.Scan
 di-scan MyApp.slnx --fail-on warning --sarif di.sarif
 ```
 
-Use `--baseline` to fail only on new findings. See the [scanner guide](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/) for output formats, CI examples, and baselines.
+Use `--fix` to apply the safe code fixes, `--update-baseline` to adopt existing debt, and
+`--baseline` to fail only on new findings. See the [scanner guide](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/) for output formats, CI examples, and baselines.
+
+![DI Scan HTML report showing DI003, DI006, DI009, DI016, DI019, and DI012b findings with source context](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/di-scan-report.png)
 
 ## Starter profiles
 
@@ -93,9 +96,9 @@ The package ships four `.editorconfig` profiles under `profiles/`:
 
 ## Proof, not just a rule list
 
-- **3,128 tests**
+- **3,133 tests**
 - **14 pinned public repositories** and **471 findings** in the scan regression corpus
-- **95.10%** mutation score on the shared test-code suppression helper, with an 80% gate
+- **Mutation gates at 80%** for the test-code suppressor (95.10%) and shared resolution helpers (80.00%)
 - Precision fixes driven by real repositories, including MassTransit, Elsa, IdentityServer, Polly, and dotnet-podcasts
 
 The corpus and triage notes are in [docs/scan-regression.md](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md).

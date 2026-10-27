@@ -21,6 +21,7 @@
     "ignore-methods": [
       "ConfigureGeneratedCodeAnalysis",
       "EnableConcurrentExecution"
-    ]
+    ],
+    "test-case-filter": "FullyQualifiedName!~Tests.Scan"
   }
 }

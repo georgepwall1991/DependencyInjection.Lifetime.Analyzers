@@ -10,6 +10,12 @@ jobs:
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - stryker-config.json
+          - stryker-config.helpers.json
 
     steps:
       - name: Checkout
@@ -26,12 +32,12 @@ jobs:
         run: dotnet restore
 
       - name: Run the 80% mutation gate
-        run: pwsh ./scripts/Invoke-MutationTests.ps1
+        run: pwsh ./scripts/Invoke-MutationTests.ps1 -ConfigFile ${{ matrix.config }}
 
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-report
+          name: mutation-report-${{ strategy.job-index }}
           path: StrykerOutput
           retention-days: 7

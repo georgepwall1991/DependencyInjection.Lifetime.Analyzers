@@ -175,5 +175,10 @@ Write-Host 'Checking scanner documentation...'
 Assert-Contains 'src/DependencyInjection.Lifetime.Analyzers.Scan/README.md' 'di-scan' 'The scanner README does not document the di-scan command.'
 Assert-Contains 'docs/scanning.md' 'Invoke-ScanRegression\.ps1' 'docs/scanning.md does not document the scan regression harness.'
 Assert-Contains 'docs/scan-regression.md' 'tests/scan-corpus/corpus\.json' 'docs/scan-regression.md does not document the corpus manifest.'
+Assert-Contains 'docs/upgrading.md' '3\.10\.0' 'docs/upgrading.md does not document the 3.10.0 scanner changes.'
+Assert-Contains 'docs/blog/scanning-14-repositories.md' '471' 'The engineering note does not include the corpus finding count.'
+Assert-True (Test-Path -LiteralPath (Get-RepositoryPath 'stryker-config.helpers.json')) 'The shared-helper mutation shard config is missing.'
+Assert-True (Test-Path -LiteralPath (Get-RepositoryPath '.github/ISSUE_TEMPLATE/false-positive.yml')) 'The false-positive issue form is missing.'
+Assert-True (Test-Path -LiteralPath (Get-RepositoryPath '.github/ISSUE_TEMPLATE/false-negative.yml')) 'The false-negative issue form is missing.'
 
 Write-Host "Repository validation passed: $($diagnosticIds.Count) rules, $($repositories.Count) pinned repositories."

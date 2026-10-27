@@ -23,6 +23,7 @@ const siteStaticAssets = [
   { source: "assets/flow-ide-diagnostics.svg", target: "assets/flow-ide-diagnostics.svg" },
   { source: "assets/flow-before-after-fix.svg", target: "assets/flow-before-after-fix.svg" },
   { source: "assets/flow-ci-analyzer-loop.svg", target: "assets/flow-ci-analyzer-loop.svg" },
+  { source: "assets/di-scan-report.png", target: "assets/di-scan-report.png" },
   { source: "icon.svg", target: "icon.svg" },
   { source: "icon.png", target: "icon.png" },
 ];
@@ -32,6 +33,8 @@ const paths = {
   changelog: path.join(repoRoot, "CHANGELOG.md"),
   adoption: path.join(repoRoot, "docs", "ADOPTION.md"),
   rules: path.join(repoRoot, "docs", "RULES.md"),
+  blog: path.join(repoRoot, "docs", "blog", "scanning-14-repositories.md"),
+  upgrading: path.join(repoRoot, "docs", "upgrading.md"),
   csproj: path.join(repoRoot, "src", "DependencyInjection.Lifetime.Analyzers", "DependencyInjection.Lifetime.Analyzers.csproj"),
 };
 
@@ -774,6 +777,8 @@ async function generateSite(outputDir) {
   await writeOutput(outputDir, "rules/index.html", renderRulesIndexPage(site));
   await writeOutput(outputDir, "problems/index.html", renderProblemsIndexPage(site));
   await writeOutput(outputDir, "scanner/index.html", renderScannerPage(site));
+  await writeOutput(outputDir, "blog/index.html", renderBlogPage(site));
+  await writeOutput(outputDir, "upgrading/index.html", renderUpgradingPage(site));
   await writeOutput(outputDir, "compare/index.html", renderComparePage(site));
   await writeOutput(outputDir, "adoption/index.html", renderAdoptionPage(site));
   await writeOutput(outputDir, "releases/latest/index.html", renderLatestReleasePage(site));
@@ -847,6 +852,8 @@ async function verifyGeneratedSite(outputDir, site) {
     "index.html",
     "404.html",
     "scanner/index.html",
+    "blog/index.html",
+    "upgrading/index.html",
     "rules/index.html",
     ...site.rules.map((rule) => `rules/${rule.slug}/index.html`),
   ];
@@ -955,11 +962,13 @@ async function generateReleaseNotes({ version, outputDir }) {
 }
 
 async function loadMetadata() {
-  const [readme, changelog, adoption, rulesDoc, csproj] = await Promise.all([
+  const [readme, changelog, adoption, rulesDoc, blog, upgrading, csproj] = await Promise.all([
     readText(paths.readme),
     readText(paths.changelog),
     readText(paths.adoption),
     readText(paths.rules),
+    readText(paths.blog),
+    readText(paths.upgrading),
     readText(paths.csproj),
   ]);
 
@@ -981,6 +990,8 @@ async function loadMetadata() {
     readme,
     adoption,
     rulesDoc,
+    blog,
+    upgrading,
     rules,
     changelog: parsedChangelog,
   };
@@ -1020,6 +1031,8 @@ function buildSiteModel(metadata) {
       { label: "Rules", path: "/rules/" },
       { label: "Problems", path: "/problems/" },
       { label: "Scanner", path: "/scanner/" },
+      { label: "Blog", path: "/blog/" },
+      { label: "Upgrading", path: "/upgrading/" },
       { label: "Compare", path: "/compare/" },
       { label: "Adoption", path: "/adoption/" },
       { label: "Latest Release", path: "/releases/latest/" },
@@ -1759,6 +1772,72 @@ function renderProblemPage(site, page) {
   });
 }
 
+function renderUpgradingPage(site) {
+  const content = `
+    <section class="page-intro">
+      <p class="eyebrow">Upgrading</p>
+      <h1>Move to 3.9 without guessing why findings changed</h1>
+      <p class="lede">Diagnostic IDs and default severities are stable. Releases can still remove findings when a rule is narrowed to avoid a proven false positive.</p>
+    </section>
+    <section class="card prose">
+      ${renderMarkdown(site.upgrading)}
+    </section>
+  `;
+
+  return renderPage(site, {
+    pagePath: "/upgrading/",
+    title: `Upgrading | ${site.packageId}`,
+    description: "Behavior changes from 3.7 and 3.8 to 3.9: test-code suppression, DI001/DI006/DI015/DI019 narrowing, pinning a previous version, and regenerating scanner baselines.",
+    content,
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "TechArticle",
+      headline: "Upgrading DependencyInjection.Lifetime.Analyzers to 3.9",
+      description: "Behavior changes, version pinning, rule suppression, and scanner baseline regeneration.",
+      author: { "@type": "Person", name: "George Wall" },
+      publisher: { "@type": "Organization", name: site.packageId },
+      mainEntityOfPage: `${site.baseUrl}/upgrading/`,
+    },
+    breadcrumbs: [{ label: "Upgrading", path: "/upgrading/" }],
+  });
+}
+
+function renderBlogPage(site) {
+  const content = `
+    <section class="page-intro">
+      <p class="eyebrow">Engineering note</p>
+      <h1>How we found 471 DI lifetime findings across 14 public repositories</h1>
+      <p class="lede">Toy snippets miss the shapes that fail in production. A pinned public corpus and a scanner make every rule change prove itself on real registrations, factories, open generics, and scope wrappers.</p>
+    </section>
+    <section class="card prose">
+      ${renderMarkdown(site.blog)}
+    </section>
+  `;
+
+  return renderPage(site, {
+    pagePath: "/blog/",
+    title: `How we found 471 DI lifetime findings across 14 public repositories | ${site.packageId}`,
+    description: "A real-repository DI analyzer validation loop: 14 pinned public repositories, 471 findings, scanner-driven triage, and the precision fixes it produced.",
+    content,
+    structuredData: {
+      "@context": "https://schema.org",
+      "@type": "TechArticle",
+      headline: "How we found 471 DI lifetime findings across 14 public repositories",
+      description: "A real-repository DI analyzer validation loop: 14 pinned public repositories, 471 findings, scanner-driven triage, and the precision fixes it produced.",
+      author: {
+        "@type": "Person",
+        name: "George Wall",
+      },
+      publisher: {
+        "@type": "Organization",
+        name: site.packageId,
+      },
+      mainEntityOfPage: `${site.baseUrl}/blog/`,
+    },
+    breadcrumbs: [{ label: "Blog", path: "/blog/" }],
+  });
+}
+
 function renderScannerPage(site) {
   const scannerHref = siteHref(site, "/scanner/");
   const rulesHref = siteHref(site, "/rules/");
@@ -1774,6 +1853,11 @@ function renderScannerPage(site) {
         <a class="button button-secondary" href="${rulesHref}">Browse ${site.rules.length} rules</a>
       </div>
     </section>
+
+    <figure class="card">
+      <img src="${site.baseUrl}/assets/di-scan-report.png" alt="DI Scan HTML report showing DI003, DI006, DI009, DI016, DI019, and DI012b findings with source context" style="display:block;width:100%;height:auto;border-radius:8px">
+      <figcaption class="meta">The self-contained HTML report groups findings by rule and shows the source around every hit.</figcaption>
+    </figure>
 
     <section class="grid two-up">
       <article class="card">
@@ -1818,14 +1902,14 @@ function renderScannerPage(site) {
       <article class="card">
         <p class="eyebrow">Baselines</p>
         <h2>Fail only on new findings</h2>
-        <p>Generate a baseline once, commit it, and let CI fail only when a new finding appears. SARIF baselines match by fingerprint, so a finding that moves down a file stays known. Text baselines match by rule and exact location.</p>
+        <p>Generate a baseline once, commit it, and let CI fail only when a new finding appears. SARIF baselines match by fingerprint, so a finding that moves down a file stays known. Text baselines match by rule and exact location. Use <code>--update-baseline di.baseline</code> to write one.</p>
         <pre><code>di-scan ./MyApp.slnx --fail-on warning --sarif di.sarif
 di-scan ./MyApp.slnx --fail-on warning --baseline di.sarif --sarif di-new.sarif</code></pre>
       </article>
       <article class="card">
         <p class="eyebrow">CI</p>
         <h2>Review what the build would miss</h2>
-        <p>Use the scanner before adding the package, compare two analyzer releases, or keep a scheduled precision check on a pinned public corpus. In GitHub Actions it also writes the job summary and annotates the most severe findings.</p>
+        <p>Apply the safe code fixes with <code>--fix</code> before reviewing the rest. Use the scanner before adding the package, compare two analyzer releases, or keep a scheduled precision check on a pinned public corpus. In GitHub Actions it also writes the job summary and annotates the most severe findings.</p>
         <pre><code>dnx ${SCANNER_PACKAGE_ID} -- ./MyApp.slnx \
   --fail-on warning --sarif di.sarif --summary di.md</code></pre>
       </article>
@@ -1996,6 +2080,8 @@ function renderNotFoundPage(site) {
         <article class="card"><h2><a href="${siteHref(site, "/rules/")}">Rule index</a></h2><p>All rule landing pages.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/problems/")}">Problem guides</a></h2><p>Start from a real failure mode.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/scanner/")}">di-scan</a></h2><p>Scan an existing repository without editing it.</p></article>
+        <article class="card"><h2><a href="${siteHref(site, "/blog/")}">Engineering note</a></h2><p>How the pinned corpus found 471 DI findings.</p></article>
+        <article class="card"><h2><a href="${siteHref(site, "/upgrading/")}">Upgrading</a></h2><p>Behavior changes from 3.7/3.8 to 3.9.</p></article>
         <article class="card"><h2><a href="${siteHref(site, "/adoption/")}">Adoption guide</a></h2><p>Rollout and severity guidance.</p></article>
       </section>
     `,
@@ -2008,6 +2094,8 @@ function renderSitemap(site) {
     { path: "/rules/", priority: "0.9" },
     { path: "/problems/", priority: "0.9" },
     { path: "/scanner/", priority: "0.9" },
+    { path: "/blog/", priority: "0.7" },
+    { path: "/upgrading/", priority: "0.7" },
     { path: "/compare/", priority: "0.6" },
     { path: "/adoption/", priority: "0.7" },
     { path: "/releases/latest/", priority: "0.6" },
@@ -2056,7 +2144,7 @@ function buildSearchIndex(site) {
       kind: "Problem guide",
       description: toMetaDescription(page.description),
     })),
-    ...["/rules/", "/problems/", "/scanner/", "/compare/", "/adoption/", "/releases/latest/"].map((pagePath) => ({
+    ...["/rules/", "/problems/", "/scanner/", "/blog/", "/upgrading/", "/compare/", "/adoption/", "/releases/latest/"].map((pagePath) => ({
       title: site.navigation.find((item) => item.path === pagePath)?.label ?? pagePath,
       path: pagePath,
       kind: "Guide",
@@ -2087,6 +2175,14 @@ function renderLlmsTxt(site) {
 
 Version ${site.version}. Install: \`dotnet add package ${site.packageId} --version ${site.version}\`
 (reference it with \`PrivateAssets="all"\`).
+
+## Upgrading
+
+- [Upgrading to 3.9](${site.baseUrl}/upgrading/): behavior changes, version pinning, suppression, and baseline regeneration.
+
+## Blog
+
+- [How we found 471 DI lifetime findings across 14 public repositories](${site.baseUrl}/blog/): the pinned corpus, scanner triage, and the precision fixes it produced.
 
 ## Scanner
 

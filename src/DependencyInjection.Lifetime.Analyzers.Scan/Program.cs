@@ -86,6 +86,21 @@ namespace DependencyInjection.Lifetime.Analyzers.Scan
                 return ScanFailed;
             }
 
+            var fixFailed = false;
+            if (options.Fix)
+            {
+                var rules = ScanFixer.SelectRules(options);
+                if (rules.Count == 0)
+                {
+                    error.WriteLine(
+                        "None of the rules selected by --rules and --skip-rules has a code fix, so --fix has nothing to apply."
+                    );
+                    return UsageError;
+                }
+
+                fixFailed = !Fix(options, rules, analyzerAssemblyPath, version, output, error);
+            }
+
             output.WriteLine(
                 $"Building {Path.GetFullPath(options.Target)} with DI Scan {version}..."
             );
@@ -130,6 +145,17 @@ namespace DependencyInjection.Lifetime.Analyzers.Scan
             if (baseline is not null)
                 report = report.ApplyBaseline(baseline);
 
+            if (options.UpdateBaselinePath is not null)
+            {
+                var baselinePath = Path.GetFullPath(options.UpdateBaselinePath);
+                var baselineDirectory = Path.GetDirectoryName(baselinePath);
+                if (!string.IsNullOrEmpty(baselineDirectory))
+                    Directory.CreateDirectory(baselineDirectory);
+                using (var writer = new StreamWriter(baselinePath))
+                    report.WriteTextBaseline(writer, version);
+                output.WriteLine($"Baseline written: {DisplayPath(baselinePath)}");
+            }
+
             var sarifPath = Path.GetFullPath(options.SarifPath);
             var sarifDirectory = Path.GetDirectoryName(sarifPath);
             if (!string.IsNullOrEmpty(sarifDirectory))
@@ -173,10 +199,15 @@ namespace DependencyInjection.Lifetime.Analyzers.Scan
 
             WriteGitHubOutput(options, report, output, error, environment);
 
-            if (result.BuildExitCode != 0)
+            if (result.BuildExitCode != 0 || fixFailed)
                 return ScanFailed;
 
-            var failing = options.FailOn is null ? 0 : report.CountAtLeast(options.FailOn);
+            // Updating a baseline is an explicit adoption action; it succeeds unless the build or a
+            // fix failed, so the command can be scripted without a second pass.
+            var failing =
+                options.UpdateBaselinePath is not null || options.FailOn is null
+                    ? 0
+                    : report.CountAtLeast(options.FailOn);
             if (failing > 0)
             {
                 error.WriteLine(
@@ -187,6 +218,72 @@ namespace DependencyInjection.Lifetime.Analyzers.Scan
 
             return Success;
         }
+
+        /// <summary>
+        /// Applies the code fixes and lists the files they changed. Returns false when dotnet format
+        /// failed; the fixes it applied before failing stay, and the scan that follows reports what
+        /// is left either way.
+        /// </summary>
+        private static bool Fix(
+            ScanOptions options,
+            IReadOnlyList<string> rules,
+            string analyzerAssemblyPath,
+            string version,
+            TextWriter output,
+            TextWriter error
+        )
+        {
+            var target = Path.GetFullPath(options.Target);
+            var rootDirectory = Directory.Exists(target) ? target : Path.GetDirectoryName(target)!;
+            var reportRoot = Scanner.FindRepositoryRoot(rootDirectory) ?? rootDirectory;
+
+            output.WriteLine($"Fixing {target} with DI Scan {version} (dotnet format)...");
+            var result = ScanFixer.Run(
+                options,
+                rules,
+                analyzerAssemblyPath,
+                reportRoot,
+                options.Verbose ? output.WriteLine : null
+            );
+
+            if (result.ChangedFiles.Count == 0)
+            {
+                output.WriteLine("No finding had a fix to apply.");
+            }
+            else
+            {
+                output.WriteLine(
+                    $"Applied fixes to {result.ChangedFiles.Count} file{(result.ChangedFiles.Count == 1 ? "" : "s")}. Review them with 'git diff' before you commit:"
+                );
+                foreach (var file in result.ChangedFiles.Take(MaxFixedFilesListed))
+                    output.WriteLine("  " + file);
+                if (result.ChangedFiles.Count > MaxFixedFilesListed)
+                    output.WriteLine(
+                        $"  ...and {result.ChangedFiles.Count - MaxFixedFilesListed} more."
+                    );
+            }
+
+            if (result.RestoredFiles > 0)
+                output.WriteLine(
+                    $"Put back {result.RestoredFiles} file{(result.RestoredFiles == 1 ? "" : "s")} that --exclude leaves out."
+                );
+
+            output.WriteLine();
+            if (result.ExitCode == 0)
+                return true;
+
+            if (!options.Verbose)
+                error.WriteLine(
+                    BuildErrorExcerpt(result.Output)
+                        .Replace("dotnet build", "dotnet format", StringComparison.Ordinal)
+                );
+            error.WriteLine(
+                $"dotnet format failed (exit code {result.ExitCode}), so some fixes may not have been applied."
+            );
+            return false;
+        }
+
+        private const int MaxFixedFilesListed = 20;
 
         /// <summary>
         /// Writes the Markdown report to <c>--summary</c>, and in GitHub Actions also appends it to the job summary and

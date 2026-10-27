@@ -212,3 +212,39 @@ jobs:
           name: docs-site
           path: ./artifacts/site
           retention-days: 7
+
+  cross-platform:
+    name: cross-platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test scanner paths
+        run: dotnet test tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj --no-build --configuration Release --filter "FullyQualifiedName~Tests.Scan"
+
+      - name: Validate package and tool paths
+        run: |
+          pwsh ./scripts/Validate-Package.ps1
+          pwsh ./scripts/Validate-ScannerConsumption.ps1

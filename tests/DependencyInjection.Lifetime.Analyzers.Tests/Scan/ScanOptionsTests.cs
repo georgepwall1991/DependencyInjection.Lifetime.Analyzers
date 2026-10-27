@@ -62,6 +62,35 @@ public sealed class ScanOptionsTests
     }
 
     [Fact]
+    public void FixAndUpdateBaseline_AreParsed()
+    {
+        Assert.True(
+            ScanOptions.TryParse(
+                ["src/App.slnx", "--fix", "--update-baseline", "di.baseline"],
+                out var options,
+                out var error
+            ),
+            error
+        );
+
+        Assert.True(options.Fix);
+        Assert.Equal("di.baseline", options.UpdateBaselinePath);
+    }
+
+    [Fact]
+    public void BaselineAndUpdateBaseline_CannotBeCombined()
+    {
+        Assert.False(
+            ScanOptions.TryParse(
+                ["--baseline", "old.sarif", "--update-baseline", "new.txt"],
+                out _,
+                out var error
+            )
+        );
+        Assert.Contains("Pass one", error);
+    }
+
+    [Fact]
     public void Filters_AccumulateAndNormalizeRuleIds()
     {
         Assert.True(

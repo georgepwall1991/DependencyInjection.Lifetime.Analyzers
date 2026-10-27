@@ -248,6 +248,24 @@ internal sealed class ScanReport
     }
 
     /// <summary>
+    /// Writes the current findings as a text baseline that <c>--baseline</c> reads back. One finding
+    /// per line, sorted ordinally, with comment headers that explain where it came from.
+    /// </summary>
+    public void WriteTextBaseline(TextWriter writer, string toolVersion)
+    {
+        writer.WriteLine("# di-scan text baseline");
+        writer.WriteLine($"# tool: di-scan {toolVersion}");
+        writer.WriteLine("# regenerate: di-scan <path> --update-baseline <this-file>");
+        foreach (var finding in Findings.OrderBy(finding => finding.Path, StringComparer.Ordinal)
+                     .ThenBy(finding => finding.Line)
+                     .ThenBy(finding => finding.Column)
+                     .ThenBy(finding => finding.RuleId, StringComparer.Ordinal))
+        {
+            writer.WriteLine($"{finding.RuleId} {Location(finding)}");
+        }
+    }
+
+    /// <summary>
     /// Lists where each rule reported, up to <paramref name="perRule"/> findings a rule, with the message and the
     /// surrounding source, so the terminal report can be acted on without opening the SARIF file.
     /// </summary>

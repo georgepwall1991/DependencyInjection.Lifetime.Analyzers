@@ -174,6 +174,30 @@ public sealed class ScanReportTests
     }
 
     [Fact]
+    public void TextBaseline_RoundTripsThroughTheParser()
+    {
+        using var root = new TemporaryDirectory();
+        File.WriteAllText(Path.Combine(root.Path, "Program.cs"), "one\ntwo\n");
+        var report = new ScanReport(
+            root.Path,
+            [new Finding("DI003", "Warning", "captive", "Program.cs", 2, 5)],
+            new Dictionary<string, RuleInfo>()
+        );
+        var writer = new StringWriter();
+
+        report.WriteTextBaseline(writer, "3.9.3");
+        var baseline = ScanBaseline.Parse(writer.ToString());
+
+        Assert.Equal(1, baseline.Count);
+        Assert.True(
+            baseline.Contains(
+                new Finding("DI003", "Warning", "captive", "Program.cs", 2, 5),
+                "unused"
+            )
+        );
+    }
+
+    [Fact]
     public void HtmlReport_IncludesFindingAndSurroundingSource()
     {
         using var root = new TemporaryDirectory();

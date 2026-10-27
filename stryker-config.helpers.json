@@ -1,0 +1,27 @@
+{
+  "stryker-config": {
+    "project": "src/DependencyInjection.Lifetime.Analyzers/DependencyInjection.Lifetime.Analyzers.csproj",
+    "test-projects": [
+      "tests/DependencyInjection.Lifetime.Analyzers.Tests/DependencyInjection.Lifetime.Analyzers.Tests.csproj"
+    ],
+    "mutate": [
+      "**/Infrastructure/ImplementationAssignability.cs"
+    ],
+    "thresholds": {
+      "high": 80,
+      "low": 80,
+      "break": 80
+    },
+    "concurrency": 2,
+    "reporters": [
+      "html",
+      "json",
+      "cleartext"
+    ],
+    "ignore-methods": [
+      "ConfigureGeneratedCodeAnalysis",
+      "EnableConcurrentExecution"
+    ],
+    "test-case-filter": "FullyQualifiedName!~Tests.Scan"
+  }
+}

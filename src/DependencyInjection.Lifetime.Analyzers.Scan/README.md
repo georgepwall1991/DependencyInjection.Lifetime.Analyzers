@@ -34,6 +34,8 @@ and [corpus triage notes](https://github.com/georgepwall1991/DependencyInjection
 - Fail CI only on new findings with SARIF or text baselines.
 - Compare analyzer releases on the same pinned public corpus.
 
+![DI Scan HTML report showing DI003, DI006, DI009, DI016, DI019, and DI012b findings with source context](https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/di-scan-report.png)
+
 ## Options
 
 | Option | Meaning |
@@ -48,6 +50,8 @@ and [corpus triage notes](https://github.com/georgepwall1991/DependencyInjection
 | `--exclude <glob>` | Leave out findings in matching files, such as `tests/**`. Repeatable. |
 | `--fail-on <level>` | Exit with code 1 when a finding is at least this severe: `error`, `warning`, or `info`. Defaults to `none`. |
 | `--baseline <file>` | A SARIF report or text baseline from an earlier scan. Only findings it does not have are listed and count for `--fail-on`. |
+| `--update-baseline <file>` | Write the current findings as a text baseline and exit successfully unless the build or a fix failed. |
+| `--fix` | Apply the rules' code fixes with `dotnet format` before scanning. Edits source files; review the diff. |
 | `--html <file>` | Also write a self-contained HTML report with code around each finding. |
 | `--summary <file>` | Also write the report as Markdown. |
 | `--no-github` | In GitHub Actions, skip the job summary and pull request annotations. |

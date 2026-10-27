@@ -6,3 +6,9 @@ contact_links:
   - name: Full rule reference
     url: https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/rules/
     about: Review rule coverage and intended analyzer behavior before opening an issue.
+  - name: Scanner guide
+    url: https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/scanner/
+    about: Install di-scan, generate a baseline, or attach an HTML/SARIF report.
+  - name: Scan regression corpus
+    url: https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/blob/main/docs/scan-regression.md
+    about: See the pinned public repositories and the current triage policy.

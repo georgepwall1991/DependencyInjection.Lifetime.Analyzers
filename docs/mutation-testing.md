@@ -20,12 +20,27 @@ The runner restores the pinned `dotnet-stryker` tool from `.config/dotnet-tools.
 | 2 | 87.39% | Convention matrix for paths, assemblies, types, namespaces, attributes, and `IsDiRule` |
 | 3 | 92.23% | Removed redundant assembly/namespace arms and added `TryGetSuppression` tests |
 | 4 | 95.10% | Split equivalent guards and added a generic-namespace fallback test |
+| 5 | 80.00% | Added the shared-resolution-helper shard (`ImplementationAssignability`, `ConstructorSelection`, `KeyedServiceHelpers`) |
 
-The remaining survivors are equivalent mutants: the `getInnermostNodeForTie` flag for token-sized
+The helper shard sits exactly at the 80% break threshold, so it is the first place to add mutant-killer tests before broadening the mutation surface further.
+
+The remaining suppressor survivors are equivalent mutants: the `getInnermostNodeForTie` flag for token-sized
 locations, and the `"test"`/`"acceptance"` fast-path strings where `IndexOf("")` has the same
 observable result as the real substring. The two no-coverage mutants are inside
 `ReportSuppressions`, whose behavior is covered end-to-end by
 `Scanner_SuppressesFindingsInTestProjects` in the scanner test suite.
+
+## Shards
+
+The gate runs as two independent shards in `.github/workflows/mutation.yml`:
+
+| Shard | Config | Surface |
+| --- | --- | --- |
+| Suppression | `stryker-config.json` | `TestCodeSuppressor` |
+| Shared resolution helpers | `stryker-config.helpers.json` | `ImplementationAssignability`, `ConstructorSelection`, `KeyedServiceHelpers` |
+
+Both shards keep the same 80% break threshold. Running them separately avoids one 26,000-mutant
+run that never finishes while still covering the shared helpers the rules depend on.
 
 ## Why this scope
 

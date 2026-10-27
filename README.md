@@ -83,6 +83,13 @@ dotnet_diagnostic.DI011.severity = suggestion
 
 By default, runtime-failure and leak-oriented rules stay at `Warning` or `Error`, while broader design-smell rules such as `DI007`, `DI010`, `DI011`, and `DI012` default to `Info` to reduce noise. For a rollout checklist, see [docs/ADOPTION.md](docs/ADOPTION.md).
 
+## Upgrading
+
+Moving from 3.7 or 3.8? Read [docs/upgrading.md](docs/upgrading.md) for the behavior changes that can
+remove findings: test-code suppression, DI001/DI006/DI015 narrowing, and the DI019 scope-wrapper fix.
+The page also covers pinning the previous version, suppressing one rule, and regenerating a scanner
+baseline after a reviewed change.
+
 ## Scan before you install
 
 `di-scan` builds any .NET solution with these analyzers injected, without editing its project files:
@@ -92,8 +99,13 @@ dnx DependencyInjection.Lifetime.Analyzers.Scan -- MyApp.slnx --fail-on warning
 ```
 
 It prints `ruleId path:line:column`, the surrounding source, severity, and a link to the rule page,
-and writes SARIF, Markdown, and HTML for triage. Use `--baseline` to fail only on new findings.
+and writes SARIF, Markdown, and HTML for triage. Use `--fix` to apply the safe code fixes,
+`--update-baseline` to adopt existing debt, and `--baseline` to fail only on new findings.
 See [docs/scanning.md](docs/scanning.md) for the full option set and CI examples, or install the tool package from [NuGet](https://www.nuget.org/packages/DependencyInjection.Lifetime.Analyzers.Scan).
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/main/assets/di-scan-report.png" width="900" alt="DI Scan HTML report showing DI003, DI006, DI009, DI016, DI019, and DI012b findings with source context">
+</p>
 
 The package ships four starter profiles under `profiles/`: `default`, `brownfield-adoption`,
 `strict-ci`, and `library-author`. Every rule also has a standalone page under
@@ -141,11 +153,12 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 ## Quality and proof
 
 - **38 shipped rules** with code fixes for the safe, unambiguous cases.
-- **3,128 tests** across analyzer behavior, code fixes, scanner behavior, packaging, and sample contracts.
+- **3,133 tests** across analyzer behavior, code fixes, scanner behavior, packaging, and sample contracts.
 - **14 pinned public repositories** and **471 findings** in the scan regression corpus, including ASP.NET Core apps, framework libraries, workers, open generics, keyed services, and alternate containers.
-- **95.10% mutation score** on the shared test-code suppression helper, with an **80% break threshold**.
+- **Mutation gates at 80%** for the test-code suppressor (95.10%) and the shared resolution helpers (80.00%).
 - Precision fixes driven by real repositories, including MassTransit, Elsa, IdentityServer, Polly, and dotnet-podcasts.
 - The corpus and triage notes are in [docs/scan-regression.md](docs/scan-regression.md); the mutation gate is documented in [docs/mutation-testing.md](docs/mutation-testing.md).
+- Read [How we found 471 DI lifetime findings across 14 public repositories](https://georgepwall1991.github.io/DependencyInjection.Lifetime.Analyzers/blog/) for the validation loop and the shapes it changed.
 
 ## Compatibility
 
@@ -167,6 +180,7 @@ Product-flow diagrams from the real SampleApp build (`DI001`, `DI003`, `DI014`, 
 - [The problem](#the-problem)
 - [What it catches](#what-it-catches)
 - [Install](#install)
+- [Upgrading](#upgrading)
 - [Scan before you install](#scan-before-you-install)
 - [See it work](#see-it-work)
 - [30-second path](#30-second-path)
@@ -1819,6 +1833,13 @@ dotnet_diagnostic.DI007.severity = none
 
 - `.NET Standard 2.0` consumer compatibility.
 - `Microsoft.Extensions.DependencyInjection`.
+
+## Reporting false positives and negatives
+
+Use the dedicated [false-positive](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/issues/new?template=false-positive.yml)
+or [false-negative](https://github.com/georgepwall1991/DependencyInjection.Lifetime.Analyzers/issues/new?template=false-negative.yml)
+form. Include the rule ID, package or scanner version, the smallest repro, and the expected lifetime
+or activation result. The [scan regression corpus](docs/scan-regression.md) shows the triage policy.
 
 ## Known Limitations
 

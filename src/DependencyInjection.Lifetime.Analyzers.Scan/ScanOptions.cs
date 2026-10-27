@@ -60,6 +60,15 @@ internal sealed record ScanOptions
     /// <summary>Skip the job summary and annotations the scan adds when it runs in GitHub Actions.</summary>
     public bool NoGitHub { get; init; }
 
+    /// <summary>Apply the rules' code fixes with <c>dotnet format</c> before scanning.</summary>
+    public bool Fix { get; init; }
+
+    /// <summary>
+    /// Where to write the current findings as a text baseline. The scan still writes SARIF, HTML, and
+    /// Markdown, but exits successfully unless the build or a fix failed.
+    /// </summary>
+    public string? UpdateBaselinePath { get; init; }
+
     public bool Verbose { get; init; }
 
     public bool ShowHelp { get; init; }
@@ -91,6 +100,11 @@ internal sealed record ScanOptions
               --baseline <file>      A SARIF report or text baseline from an earlier scan. Only findings
                                      it does not have are listed and count for --fail-on; the new SARIF
                                      report marks each finding new or unchanged.
+              --update-baseline <file>
+                                     Write the current findings as a text baseline. Implies a successful
+                                     scan unless the build or a fix failed.
+              --fix                  Apply the rules' code fixes with dotnet format before scanning.
+                                     Edits your source files: commit or stash first, and review the diff.
               --html <file>          Also write the report as one HTML page, with the code around each finding.
               --summary <file>       Also write the report as Markdown, for a pull request comment or a wiki.
               --no-github            In GitHub Actions, skip the job summary and the pull request annotations.
@@ -129,6 +143,14 @@ internal sealed record ScanOptions
                     break;
                 case "--no-restore":
                     options = options with { NoRestore = true };
+                    break;
+                case "--fix":
+                    options = options with { Fix = true };
+                    break;
+                case "--update-baseline":
+                    if (!TryTakeValue(args, ref i, out var updateBaselinePath, out error))
+                        return false;
+                    options = options with { UpdateBaselinePath = updateBaselinePath };
                     break;
                 case "-o" or "--sarif":
                     if (!TryTakeValue(args, ref i, out var sarif, out error))
@@ -262,6 +284,12 @@ internal sealed record ScanOptions
 
         if (target is not null)
             options = options with { Target = target };
+
+        if (options.BaselinePath is not null && options.UpdateBaselinePath is not null)
+        {
+            error = "--baseline reads an existing baseline; --update-baseline writes a new one. Pass one.";
+            return false;
+        }
 
         return true;
     }

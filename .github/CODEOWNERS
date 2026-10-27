@@ -1,0 +1,9 @@
+* @georgepwall1991
+
+/src/DependencyInjection.Lifetime.Analyzers/Rules/ @georgepwall1991
+/src/DependencyInjection.Lifetime.Analyzers/Infrastructure/ @georgepwall1991
+/src/DependencyInjection.Lifetime.Analyzers.Scan/ @georgepwall1991
+/src/DependencyInjection.Lifetime.Analyzers.Package/ @georgepwall1991
+/tests/scan-corpus/ @georgepwall1991
+/docs/rules/ @georgepwall1991
+/.github/workflows/ @georgepwall1991
