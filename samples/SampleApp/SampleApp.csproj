@@ -13,7 +13,7 @@
          stubs used by DI028/DI029 it cannot be demonstrated package-free. -->
     <!-- 8.0.1, not 8.0.0: the .0 release carries advisory GHSA-qj66-m88j-hmgj, which the
          CI-parity build correctly rejects. -->
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>
